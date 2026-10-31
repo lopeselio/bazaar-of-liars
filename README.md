@@ -15,7 +15,11 @@ Players never see a wallet or pay gas.
 
 ## Status
 
-Day 1. The deterministic rules engine and secret commitments are done, with a terminal haggle and a balance simulator. There's no LLM, no contract and no web UI yet. The design is in [DESIGN.md](./DESIGN.md).
+Day 1. Done so far:
+- the deterministic rules engine and secret commitments, with a terminal haggle and a balance simulator;
+- the NEAR AI Cloud attestation verifier, plus chat-signature verification (unit-tested; it hasn't been run against live replies yet).
+
+There are no LLM merchant replies, no contract and no web UI yet. The design is in [DESIGN.md](./DESIGN.md).
 
 ## Try it
 
@@ -24,6 +28,12 @@ You need Node 22 or later and pnpm.
 1. Run `pnpm install`, then `pnpm test`. You should see 9 tests pass, including a 3,000-haggle fuzz test showing a merchant never deals below its secret floor.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer (e.g. `40`), or claim a competitor's price (`40 saw 35`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor.
+4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
+   - **Intel TDX:** the quote's signature chains to Intel (checked with dcap-qvl against Intel's PCS), the TEE isn't in debug mode, and the container manifest matches `mr_config_id`.
+   - **Signing key:** the key that will sign merchant replies, plus our nonce, is bound into the TDX report data.
+   - **NVIDIA GPUs:** NVIDIA's NRAS verdict and each GPU's report, with every JWT verified against NVIDIA's JWKS.
+
+   You should see `✓ VERIFIED — trusted signers: 0x…`. Attestation is free and needs no credits. Use `--offline` to skip the Intel and NVIDIA network calls, or `--json out.json` to save the full bundle.
 
 ## Repo layout (planned)
 

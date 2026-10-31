@@ -7,6 +7,7 @@
     "test": "pnpm -r test",
     "haggle": "pnpm --filter @bazaar/core haggle",
     "sim": "pnpm --filter @bazaar/core sim",
-    "check:nearai": "node --env-file=.env scripts/check-nearai.mjs"
+    "check:nearai": "node --env-file=.env scripts/check-nearai.mjs",
+    "verify:model": "pnpm --filter @bazaar/verify verify:model"
   }
 }
