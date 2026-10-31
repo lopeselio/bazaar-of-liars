@@ -6,6 +6,7 @@
   "scripts": {
     "test": "pnpm -r test",
     "haggle": "pnpm --filter @bazaar/core haggle",
-    "sim": "pnpm --filter @bazaar/core sim"
+    "sim": "pnpm --filter @bazaar/core sim",
+    "check:nearai": "node --env-file=.env scripts/check-nearai.mjs"
   }
 }
