@@ -15,11 +15,15 @@ Players never see a wallet or pay gas.
 
 ## Status
 
-Day 1. The design is in [DESIGN.md](./DESIGN.md). Code is not in the repo yet.
+Day 1. The deterministic rules engine and secret commitments are done, with a terminal haggle and a balance simulator. There's no LLM, no contract and no web UI yet. The design is in [DESIGN.md](./DESIGN.md).
 
 ## Try it
 
-_The steps will be added as features land. Each one will take the form "run X, see Y"._
+You need Node 22 or later and pnpm.
+
+1. Run `pnpm install`, then `pnpm test`. You should see 9 tests pass, including a 3,000-haggle fuzz test showing a merchant never deals below its secret floor.
+2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer (e.g. `40`), or claim a competitor's price (`40 saw 35`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
+3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor.
 
 ## Repo layout (planned)
 
