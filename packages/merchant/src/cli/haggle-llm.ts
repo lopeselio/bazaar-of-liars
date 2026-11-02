@@ -19,7 +19,7 @@ if (!key || !model) {
   console.error("✗ Set NEARAI_API_KEY and NEARAI_MODEL in .env");
   process.exit(1);
 }
-const merchant = MERCHANTS.find((m) => m.id === process.argv[2]) ?? MERCHANTS[randomInt(MERCHANTS.length)];
+const merchant = MERCHANTS.find((m) => m.id === process.argv.slice(2).find((a) => a !== "--")) ?? MERCHANTS[randomInt(MERCHANTS.length)];
 const session = new HaggleSession(new NearAiClient(key), nearAiAttestor(key), model, merchant, randomInt(2 ** 31));
 
 process.stdout.write(`Attesting ${model}… `);
@@ -44,6 +44,8 @@ for await (const raw of rl) {
   const r = await session.turn(text);
   if (r.text) console.log(`${merchant.name}: ${r.text}   \x1b[2m(${Date.now() - t0}ms)\x1b[0m`);
   else console.log("You walk away from the stall.");
+  if (r.decision?.action === "accept") console.log(`🤝 Deal at ${r.decision.price} coins.`);
+  if (r.decision?.action === "walk") console.log(`${merchant.name} has had enough and turns away.`);
   if (session.status !== "open") break;
   process.stdout.write("you> ");
 }

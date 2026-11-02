@@ -25,7 +25,7 @@ import {
 } from "@bazaar/core";
 import { newNonce, verifyModelReport, fetchModelAttestation, type ModelVerification, type AttestationReport, type ChatSignature } from "@bazaar/verify";
 import type { ChatRequest, SignedCall } from "./nearai.js";
-import { extractionRequest, parseMove, present, speechRequest, toPlayerMove, type Line, type Move } from "./prompts.js";
+import { extractionRequest, parseMove, present, quickMove, speechRequest, toPlayerMove, type Line, type Move } from "./prompts.js";
 import type { ProofBundle, TurnRecord } from "./bundle.js";
 
 export interface LlmClient {
@@ -105,10 +105,15 @@ export class HaggleSession {
     if (this.status !== "open") throw new Error(`haggle is ${this.status}`);
     const askBefore = this.state.ask;
 
-    // 1. Understand the player (no secret in this request).
-    const ex = await this.llm.complete(extractionRequest(this.model, playerText, askBefore));
-    this.sign(ex.call);
-    const move = parseMove(ex.content, playerText);
+    // 1. Understand the player: locally if unambiguous, else via the model (no secret in that request).
+    let move = quickMove(playerText);
+    let extraction: SignedCall | null = null;
+    if (!move) {
+      const ex = await this.llm.complete(extractionRequest(this.model, playerText, askBefore));
+      this.sign(ex.call);
+      extraction = ex.call;
+      move = parseMove(ex.content, playerText);
+    }
 
     // 2. The rules engine decides. The LLM has no say.
     let decision: MerchantReply | null;
@@ -120,7 +125,7 @@ export class HaggleSession {
     else decision = holdReply(this.state);
 
     this.lines.push({ speaker: "player", text: playerText });
-    const record: TurnRecord = { playerText, askBefore, extraction: ex.call, move, decision, speech: null, display: "" };
+    const record: TurnRecord = { playerText, askBefore, extraction, move, decision, speech: null, display: "" };
 
     // 3. The merchant voices the decision (secret + decision are in the signed request).
     if (decision) {

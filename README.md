@@ -35,7 +35,7 @@ You need Node 22 or later and pnpm.
    - **NVIDIA GPUs:** NVIDIA's NRAS verdict and each GPU's report, with every JWT verified against NVIDIA's JWKS.
 
    You should see `✓ VERIFIED — trusted signers: 0x…`. Attestation is free and needs no credits. Use `--offline` to skip the Intel and NVIDIA network calls, or `--json out.json` to save the full bundle.
-5. **No API key needed:** run `pnpm verify:haggle examples/sample-haggle.json`. This replays a real recorded haggle with Old Farrukh and checks 67 things, including:
+5. **No API key needed:** run `pnpm verify:haggle examples/sample-haggle.json`. This replays a real recorded haggle with Tobin of the Lamps and checks 46 things, including:
    - the revealed secret matches the commitment;
    - every model call is TEE-signed by an attested key;
    - a full rules-engine replay reproduces every decision;
@@ -43,7 +43,7 @@ You need Node 22 or later and pnpm.
    - the deal is at or above the floor.
 
    You should see `✓ FAIR PLAY VERIFIED`. Edit any number in the file and run it again to see the checks fail.
-6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Replies take about 1.5 s. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
+6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
 ## Repo layout (planned)
 

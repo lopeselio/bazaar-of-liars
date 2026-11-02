@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { Wallet } from "ethers";
 import { MERCHANTS } from "@bazaar/core";
 import { sha256Hex, type ChatSignature } from "@bazaar/verify";
-import { HaggleSession, verifyBundle, parseMove, present, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
+import { HaggleSession, verifyBundle, parseMove, present, quickMove, wordsToNumber, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
 
 const MODEL = "test/model";
 const tee = Wallet.createRandom();
@@ -136,7 +136,65 @@ describe("the floor never reaches the model", () => {
       if (!t.speech) continue;
       const sys = JSON.parse(t.speech.requestBody).messages[0].content as string;
       const lines = sys.split("\n").filter((l) => !l.startsWith("Personality:") && !l.startsWith("HAGGLE:"));
-      expect(lines.join("\n")).not.toMatch(new RegExp(`(?<![\\d.])${b.reveal.secret.floor}(?![\\d.])`));
+      expect(lines.join("\n")).not.toMatch(new RegExp(`(?<!\\d)(?<!\\d\\.)${b.reveal.secret.floor}(?!\\d)(?!\\.\\d)`));
     }
+  });
+});
+
+describe("local fast path + number words", () => {
+  it("parses unambiguous messages locally", () => {
+    expect(quickMove("55")).toEqual({ kind: "offer", price: 55 });
+    expect(quickMove("That rug looks faded. I'll give you 55.")).toEqual({ kind: "offer", price: 55 });
+    expect(quickMove("take")).toEqual({ kind: "accept" });
+    expect(quickMove("Deal!")).toEqual({ kind: "accept" });
+    expect(quickMove("I'm walking away")).toEqual({ kind: "leave" });
+  });
+
+  it("defers ambiguous messages to the model", () => {
+    expect(quickMove("The stall by the well sells it for 40")).toBeNull();
+    expect(quickMove("I would never pay 80")).toBeNull();
+    expect(quickMove("50 now, or 60 tomorrow")).toBeNull();
+    expect(quickMove("what a lovely pattern")).toBeNull();
+  });
+
+  it("converts number words", () => {
+    expect(wordsToNumber("eighty-four")).toBe(84);
+    expect(wordsToNumber("a hundred and five")).toBe(105);
+    expect(wordsToNumber("Fifty five")).toBe(55);
+  });
+
+  it("keeps spelled-out numbers only when they are the offer or the engine's price", () => {
+    const d = { action: "counter" as const, price: 84, tell: "relaxed" as const };
+    expect(present("Fifty-five? No. Eighty-four.", d, 55)).toBe("55? No. 84.");
+    expect(present("Seventy, not a coin less.", d, 55)).toBe("…, not a coin less. [84 coins]");
+  });
+
+  it("a fast-path haggle still verifies", async () => {
+    const b = await playScript(["I'll give you 10", "12", "take"]);
+    expect(b.turns.every((t) => t.extraction === null)).toBe(true);
+    expect((await verifyBundle(b, opts)).filter((c) => !c.ok)).toEqual([]);
+  });
+});
+
+describe("claims and competitor prices", () => {
+  it("frames a bare {CLAIM} as a minimum", () => {
+    const d = { action: "counter" as const, price: 66, tell: "irritated" as const, statedFloor: 64 };
+    expect(present("You insult me! {CLAIM}. {PRICE}.", d)).toBe("You insult me! Not below 64. 66.");
+    expect(present("Not below {CLAIM}, so {PRICE}.", d)).toBe("Not below 64, so 66.");
+  });
+
+  it("a competitor claim without an offer counts as an offer at that price", () => {
+    expect(parseMove('{"intent":"talk","price":null,"competitorPrice":60}', "they sell it for 60")).toEqual({
+      kind: "offer",
+      price: 60,
+      competitorPrice: 60,
+    });
+  });
+});
+
+describe("walk-away lines", () => {
+  it("never show a price", () => {
+    const walk = { action: "walk" as const, price: 58, tell: "irritated" as const };
+    expect(present("*snorts* {OFFER}? 58. Take it or leave it. Begone, {PRICE}!", walk, 32)).toBe("*snorts* 32? …. Take it or leave it. Begone, …!");
   });
 });

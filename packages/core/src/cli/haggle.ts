@@ -36,7 +36,7 @@ function line(reply: MerchantReply, name: string, pickIdx: number): string {
 }
 
 const merchant =
-  MERCHANTS.find((m) => m.id === process.argv[2]) ?? MERCHANTS[randomInt(MERCHANTS.length)];
+  MERCHANTS.find((m) => m.id === process.argv.slice(2).find((a) => a !== "--")) ?? MERCHANTS[randomInt(MERCHANTS.length)];
 const good = GOODS[merchant.goodId];
 const rng = mulberry32(randomInt(2 ** 31));
 const secret = rollSecret(rng, merchant, good);

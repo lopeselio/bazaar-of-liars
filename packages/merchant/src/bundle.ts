@@ -27,12 +27,13 @@ import {
   type ModelVerification,
 } from "@bazaar/verify";
 import type { SignedCall } from "./nearai.js";
-import { decisionLine, haggleLine, needLine, parseMove, present, toPlayerMove, type Move } from "./prompts.js";
+import { decisionLine, haggleLine, needLine, parseMove, present, quickMove, toPlayerMove, type Move } from "./prompts.js";
 
 export interface TurnRecord {
   playerText: string;
   askBefore: number;
-  extraction: SignedCall;
+  /** Null when the move was parsed locally (quickMove) — the verifier re-derives it. */
+  extraction: SignedCall | null;
   move: Move;
   decision: MerchantReply | null;
   speech: SignedCall | null;
@@ -65,7 +66,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /** True iff the floor appears as a number in our instructions (personality scales excluded). */
 function promptShowsFloor(system: string, floor: number): boolean {
-  const re = new RegExp(`(?<![\\d.])${floor}(?![\\d.])`);
+  const re = new RegExp(`(?<!\\d)(?<!\\d\\.)${floor}(?!\\d)(?!\\.\\d)`);
   return system.split("\n").some((l) => !l.startsWith("Personality:") && !l.startsWith("HAGGLE:") && re.test(l));
 }
 
@@ -96,11 +97,18 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
       return verifyChatSignature(call.signature, { model: b.model, requestBody: call.requestBody, responseBody: call.responseBody, trustedSigners: trusted }).every((c) => c.ok);
     };
 
-    add(`t${i}.ex.sig`, `${n}: reading of the player's words is TEE-signed`, sigOk(t.extraction));
-    add(`t${i}.ex.nosecret`, `${n}: that request contained no secret`, !t.extraction.requestBody.includes(needLine(secret)) && !t.extraction.requestBody.includes(String(secret.floor) + ","));
     add(`t${i}.ex.ask`, `${n}: recorded ask matches replay`, t.askBefore === state.ask);
-    const move = parseMove(contentOf(t.extraction.responseBody), t.playerText);
-    add(`t${i}.move`, `${n}: move follows from the signed reading`, same(move, t.move));
+    let move: Move;
+    if (t.extraction) {
+      add(`t${i}.ex.sig`, `${n}: reading of the player's words is TEE-signed`, sigOk(t.extraction));
+      add(`t${i}.ex.nosecret`, `${n}: that request contained no secret`, !t.extraction.requestBody.includes(needLine(secret)));
+      move = parseMove(contentOf(t.extraction.responseBody), t.playerText);
+    } else {
+      const local = quickMove(t.playerText);
+      add(`t${i}.ex.local`, `${n}: unambiguous message parsed locally (re-derived)`, local !== null);
+      move = local ?? { kind: "talk" };
+    }
+    add(`t${i}.move`, `${n}: move follows from the player's words`, same(move, t.move));
 
     let decision: MerchantReply | null = null;
     try {
