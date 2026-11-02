@@ -23,15 +23,29 @@ When an NPC's AI can lie, players can't tell a clever bluff from the developer r
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{floor, need, personality_seed}` and a salt. It posts `commitment = sha256(secret || salt)` to the `bazaar` contract **before the player's first message**.
-2. **Haggle.** Every merchant reply is a NEAR AI Cloud completion (`cloud-api.near.ai/v1`, OpenAI-compatible) from a TEE-hosted model. The request body contains the committed secret. For each reply we store:
-   - `request_hash` and `response_hash` (SHA-256 of the exact bytes);
-   - the `/v1/signature/{chat_id}` result, `signature_kind = provider_tee`, which signs `MODEL_ID:request_hash:response_hash`;
-   - a model attestation report fetched with a nonce **before** the completion.
-3. **Rules engine.** The LLM only *proposes* a counteroffer and writes the dialogue. A deterministic engine (`packages/core/rules.ts`) decides accept or reject, and it never accepts below `floor`. The LLM cannot be talked into a bad deal, because it doesn't control acceptance.
-4. **Settle and reveal.** On accept, the server calls `bazaar.settle(deal, secret, salt)`. The contract checks `sha256(secret || salt) == commitment` and `price >= floor`, then moves the goods (NEP-245) and the coin. The secret becomes public onchain.
-5. **Verify.** Anyone can recheck a finished haggle: the reveal card links to the commitment transaction, the settle transaction and a transcript bundle that a script (`pnpm verify <haggle-id>`) checks offline.
+2. **Attest first.** Before the first completion, the server fetches the model's TEE attestation with a fresh nonce and verifies it: Intel TDX via dcap-qvl, NVIDIA via NRAS with JWKS-verified JWTs, and the signing key bound in the report data. If any check fails, the haggle refuses to start.
+3. **Each player turn makes two signed NEAR AI Cloud completions.** We use a TEE-hosted model, non-streaming, with `x-no-aliasing`, which gives `signature_kind = provider_tee` signed over `MODEL:sha256(request):sha256(response)`.
+   - **Read:** turns the player's words into a move (offer, competitor claim, accept, leave or talk). This request contains no secret.
+   - **Speak:** voices the decision. The request carries `HAGGLE: <commitment>`, `NEED: <need>` and `DECISION: {action, tell, bluff}`. **It contains no numbers and never the floor.** The model writes `{PRICE}`, `{CLAIM}` and `{OFFER}` placeholders, and a deterministic `present()` function fills in the engine's numbers. Any other number the model writes, in digits or words, is blanked out. So the model can't state a wrong price or leak the floor, because it never knew it.
+4. **Rules engine.** A deterministic engine (`packages/core/rules.ts`) makes every decision: counter, final, accept or walk. It never goes below `floor`. The LLM can't be talked into a bad deal because it doesn't make decisions (a prompt-injection attempt was tested live and the merchant stayed in character).
+5. **Settle and reveal.** On accept, the server calls `bazaar.settle(deal, secret, salt)`. The contract checks `sha256(secret || salt) == commitment` and `price >= floor`, then moves the goods (NEP-245) and the coin. The secret becomes public onchain. *(The contract isn't built yet.)*
+6. **Verify.** The player gets a **proof bundle** containing the commitment, the reveal, the attestation, and every signed request and response. `pnpm verify:haggle <bundle>` checks it with no API key:
+   - the commitment matches the reveal;
+   - the attestation's quote bindings hold;
+   - every call is signed by an attested TEE key;
+   - a **full rules replay** reproduces every decision;
+   - every speech request was bound to this haggle and decision, and never showed the floor;
+   - the displayed text is exactly `present(signed text)`;
+   - the deal is at or above the floor.
 
-**What this proves:** the secret didn't change mid-haggle, the deal respected it, and every merchant line came from the model given *that* secret (the request hash includes it).
+**Privacy (a Privacy track requirement):** the server keeps haggle state in memory only and stores nothing after a haggle ends. The bundle goes to the player.
+
+**What this proves:**
+- the secret didn't change mid-haggle;
+- every decision came from the rules engine, not the LLM;
+- the deal respected the floor;
+- every merchant line came from an attested TEE model, for this haggle and this decision;
+- the model never saw the floor.
 
 **What it doesn't prove, and the README must say so:** the game server *could* see the secret during the haggle. Closing that gap means running the server in a TEE (for example NEAR's Shade Agents or OutLayer). That's a stretch goal, not a promise.
 

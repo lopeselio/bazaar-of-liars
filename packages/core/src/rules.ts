@@ -137,6 +137,20 @@ export function respond(state: HaggleState, move: PlayerMove): MerchantReply {
   });
 }
 
+/**
+ * Player chatted without naming a price. The merchant restates its position.
+ * Doesn't consume a round or change state, so talking is free but never moves the price.
+ */
+export function holdReply(state: HaggleState): MerchantReply {
+  if (state.status !== "open") throw new Error(`haggle is ${state.status}`);
+  return {
+    action: state.finalGiven ? "final" : "counter",
+    price: state.ask,
+    tell: tellFor(state),
+    statedFloor: state.finalGiven ? undefined : statedFloorFor(state),
+  };
+}
+
 /** Player explicitly takes the merchant's current ask. */
 export function acceptAsk(state: HaggleState): MerchantReply {
   return respond(state, { price: state.ask });

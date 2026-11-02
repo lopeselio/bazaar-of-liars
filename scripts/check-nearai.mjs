@@ -27,6 +27,7 @@ const chat = await fetch(`${base}/chat/completions`, {
     model: wanted,
     messages: [{ role: "user", content: "Reply with exactly: the bazaar is open" }],
     max_tokens: 20,
+    chat_template_kwargs: { enable_thinking: false },
   }),
 });
 if (!chat.ok) {
