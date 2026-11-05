@@ -1,6 +1,8 @@
 /**
  * Independently verify a haggle proof bundle. Needs no API key.
- *   pnpm verify:haggle haggles/<id>.json [--online]
+ *   pnpm verify:haggle haggles/<id>.json [--online] [--no-chain]
+ * --online   re-check the attestation with Intel + NVIDIA
+ * --no-chain skip the onchain checks (they need network, but no key)
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -14,7 +16,7 @@ if (!file) {
 // Paths are relative to where the user ran pnpm (INIT_CWD), not this package.
 const path = resolve(process.env.INIT_CWD ?? process.cwd(), file);
 const bundle = JSON.parse(readFileSync(path, "utf8")) as ProofBundle;
-const checks = await verifyBundle(bundle, { online: process.argv.includes("--online") });
+const checks = await verifyBundle(bundle, { online: process.argv.includes("--online"), chain: process.argv.includes("--no-chain") ? false : undefined });
 
 console.log(`Haggle ${bundle.haggleId} with ${bundle.merchant.name} (${bundle.model})\n`);
 for (const c of checks) console.log(`  ${c.ok ? "✓" : "✗"} ${c.label}${c.detail ? `  (${c.detail})` : ""}`);

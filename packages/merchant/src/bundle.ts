@@ -27,6 +27,7 @@ import {
   type ModelVerification,
 } from "@bazaar/verify";
 import type { SignedCall } from "./nearai.js";
+import { nearReader, type ChainReader, type ChainRecord } from "./chain.js";
 import { decisionLine, haggleLine, needLine, parseMove, present, quickMove, toPlayerMove, type Move } from "./prompts.js";
 
 export interface TurnRecord {
@@ -50,6 +51,8 @@ export interface ProofBundle {
   reveal: { secret: MerchantSecret; salt: string };
   attestation: { nonce: string; report: AttestationReport; verification: ModelVerification };
   turns: TurnRecord[];
+  /** Present when the haggle was committed to and settled by the bazaar contract. */
+  chain?: ChainRecord;
   outcome: { status: string; dealPrice: number | null; leftOnTable: number | null };
 }
 
@@ -58,6 +61,8 @@ export interface BundleVerifyOptions {
   online?: boolean;
   /** Test hook: supply trusted signers instead of re-verifying the attestation report. */
   trustedSignersOverride?: string[];
+  /** How to read the chain for bundles with a `chain` record. `false` skips onchain checks. */
+  chain?: ChainReader | false;
 }
 
 const contentOf = (responseBody: string) => JSON.parse(responseBody).choices?.[0]?.message?.content ?? "";
@@ -137,5 +142,64 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
   const status = left ? "left" : state.status;
   add("outcome", "Outcome matches the replay", status === b.outcome.status && (state.dealPrice ?? null) === b.outcome.dealPrice);
   if (state.dealPrice !== undefined) add("floor", `Deal price ${state.dealPrice} is at or above the secret floor ${secret.floor}`, state.dealPrice >= secret.floor);
+
+  // 5. Onchain: the commitment was posted before the first reply, and the contract settled the same reveal.
+  if (b.chain && opts.chain !== false) await verifyOnchain(b, b.chain, opts.chain ?? nearReader, add);
   return checks;
+}
+
+const sameSecret = (a: MerchantSecret, b: MerchantSecret) =>
+  (["merchantId", "goodId", "floor", "need", "seed", "listPrice"] as const).every((k) => a[k] === b[k]);
+
+/** NEAR AI's `created` (unix seconds) is inside the TEE-signed response body. */
+const createdOf = (responseBody: string): number | undefined => {
+  const c = JSON.parse(responseBody).created;
+  return typeof c === "number" ? c : undefined;
+};
+
+async function verifyOnchain(b: ProofBundle, c: ChainRecord, reader: ChainReader, add: (id: string, label: string, ok: boolean, detail?: string) => void) {
+  let h;
+  try {
+    h = await reader.getHaggle(c.network, c.contractId, b.haggleId);
+  } catch (e) {
+    add("chain.read", `Read haggle from ${c.contractId} (${c.network})`, false, (e as Error).message);
+    return;
+  }
+  add(
+    "chain.commit",
+    `Commitment is onchain in ${c.contractId}, for this merchant and good`,
+    !!h && h.commitment === b.commitment && h.merchant_id === b.merchant.id && h.good_id === b.reveal.secret.goodId,
+    h ? undefined : "haggle not found onchain",
+  );
+  if (!h) return;
+
+  // Ordering: the commitment's block is no later than the first TEE-signed merchant reply.
+  const firstReply = b.turns.flatMap((t) => [t.extraction, t.speech]).find((x) => x !== null);
+  try {
+    const tx = await reader.txInfo(c.network, c.openTx, c.serverId);
+    add("chain.opener", "Commitment was posted by the game server to the contract", tx.signerId === c.serverId && tx.receiverId === c.contractId);
+    const created = firstReply ? createdOf(firstReply.responseBody) : undefined;
+    if (created !== undefined)
+      add(
+        "chain.order",
+        "Commitment was onchain before the merchant's first signed reply",
+        tx.blockTimeMs <= (created + 1) * 1000,
+        `block ${new Date(tx.blockTimeMs).toISOString()} vs reply ${new Date(created * 1000).toISOString()}`,
+      );
+  } catch (e) {
+    add("chain.opener", "Read the commitment transaction", false, (e as Error).message);
+  }
+
+  const expected = b.outcome.status === "deal" ? "deal" : "no_deal";
+  add(
+    "chain.settle",
+    expected === "deal" ? `Contract settled the deal at ${b.outcome.dealPrice} after checking the reveal and floor` : "Contract recorded the reveal (no deal)",
+    h.status === expected && (expected === "no_deal" || h.price === b.outcome.dealPrice),
+    h.status === "open" ? `still open onchain${c.closeError ? `: ${c.closeError}` : ""}` : `onchain status: ${h.status}`,
+  );
+  add(
+    "chain.reveal",
+    "The secret revealed onchain is the one in this bundle",
+    !!h.secret && sameSecret(h.secret, b.reveal.secret) && h.salt === b.reveal.salt,
+  );
 }

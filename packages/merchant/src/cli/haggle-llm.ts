@@ -2,16 +2,18 @@
  * Haggle in plain language with a TEE-hosted merchant on NEAR AI Cloud.
  *   pnpm haggle:llm              # random merchant
  *   pnpm haggle:llm -- zaria
+ * With BAZAAR_CONTRACT_ID + SERVER_ACCOUNT_ID in .env, the commitment and the reveal go onchain.
  * Type anything ("40, and the stall next door sells it for 35"). Type "leave" to walk.
  * At the end a proof bundle is written to ./haggles/<id>.json — check it with `pnpm verify:haggle <file>`.
  */
 import { createInterface } from "node:readline/promises";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { MERCHANTS } from "@bazaar/core";
 import { NearAiClient } from "../nearai.js";
 import { HaggleSession, nearAiAttestor } from "../session.js";
 import { verifyBundle } from "../bundle.js";
+import { explorerTx, ledgerFromEnv } from "../chain.js";
 
 const key = process.env.NEARAI_API_KEY;
 const model = process.env.NEARAI_MODEL;
@@ -20,13 +22,19 @@ if (!key || !model) {
   process.exit(1);
 }
 const merchant = MERCHANTS.find((m) => m.id === process.argv.slice(2).find((a) => a !== "--")) ?? MERCHANTS[randomInt(MERCHANTS.length)];
-const session = new HaggleSession(new NearAiClient(key), nearAiAttestor(key), model, merchant, randomInt(2 ** 31));
+const ledger = ledgerFromEnv();
+// Each CLI run is a fresh guest with the contract's starter coins.
+const player = `guest-${randomBytes(4).toString("hex")}`;
+const session = new HaggleSession(new NearAiClient(key), nearAiAttestor(key), model, merchant, randomInt(2 ** 31), ledger ? { ledger, player } : undefined);
 
 process.stdout.write(`Attesting ${model}… `);
-const { commitment, openingAsk, verification } = await session.open();
+if (ledger) process.stdout.write("then committing onchain… ");
+const { commitment, openingAsk, verification, openTx } = await session.open();
 console.log(`✓ TEE verified (${verification.candidates[0].checks.length} checks)`);
 console.log(`\n${merchant.name} sells a ${session.good.name}.`);
 console.log(`Secret committed: ${commitment.slice(0, 16)}…`);
+if (ledger && openTx) console.log(`  onchain (${ledger.contractId}): ${explorerTx(ledger.network, openTx)}`);
+else console.log("  (offchain only: set BAZAAR_CONTRACT_ID and SERVER_ACCOUNT_ID in .env to commit onchain)");
 console.log(`${merchant.name}: "For you, friend, ${openingAsk} coins."\n`);
 
 // Async-iterating buffers lines, so this works both interactively and with piped input.
@@ -52,6 +60,7 @@ for await (const raw of rl) {
 rl.close();
 if (session.status === "open") console.log("\n(input ended — haggle left open)");
 
+const chain = await session.close();
 const bundle = await session.bundle();
 const dir = `${process.env.INIT_CWD ?? process.cwd()}/haggles`;
 mkdirSync(dir, { recursive: true });
@@ -63,6 +72,8 @@ const { secret } = bundle.reveal;
 console.log("\n—— REVEAL ——");
 console.log(`Real floor: ${secret.floor} · Need: ${secret.need.replace("_", " ")}`);
 if (bundle.outcome.dealPrice !== null) console.log(`You paid ${bundle.outcome.dealPrice}. Left on the table: ${bundle.outcome.leftOnTable} coins.`);
+if (chain?.closeTx) console.log(`${bundle.outcome.status === "deal" ? "Revealed + settled" : "Revealed"} onchain: ${explorerTx(chain.network, chain.closeTx)}`);
+if (chain?.closeError) console.log(`✗ Onchain close failed: ${chain.closeError}`);
 const checks = await verifyBundle(bundle);
 const failed = checks.filter((c) => !c.ok);
 console.log(failed.length === 0 ? `✓ Fair play verified (${checks.length} checks)` : `✗ ${failed.length} checks failed: ${failed.map((c) => c.label).join("; ")}`);

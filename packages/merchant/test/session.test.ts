@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { Wallet } from "ethers";
 import { MERCHANTS } from "@bazaar/core";
 import { sha256Hex, type ChatSignature } from "@bazaar/verify";
-import { HaggleSession, verifyBundle, parseMove, present, quickMove, wordsToNumber, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
+import { HaggleSession, verifyBundle, type ChainReader, type Ledger, type OnchainHaggle, parseMove, present, quickMove, wordsToNumber, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
 
 const MODEL = "test/model";
 const tee = Wallet.createRandom();
@@ -34,7 +34,7 @@ function fakeLlm(): LlmClient {
         content = d.action === "walk" ? "*waves you off* Go." : "*shrugs* {PRICE}, friend.";
       }
       const chatId = `chat-${n++}`;
-      const responseBody = JSON.stringify({ id: chatId, choices: [{ message: { content } }] });
+      const responseBody = JSON.stringify({ id: chatId, created: Math.floor(Date.now() / 1000), choices: [{ message: { content } }] });
       const text = `${MODEL}:${sha256Hex(requestBody)}:${sha256Hex(responseBody)}`;
       sigs.set(chatId, { text, signature: await tee.signMessage(text), signing_address: tee.address, signing_algo: "ecdsa", signature_kind: "provider_tee" });
       return { call: { requestBody, responseBody, chatId, signature: null }, content };
@@ -203,5 +203,72 @@ describe("walk-away lines", () => {
   it("never show a price", () => {
     const walk = { action: "walk" as const, price: 58, tell: "irritated" as const };
     expect(present("*snorts* {OFFER}? 58. Take it or leave it. Begone, {PRICE}!", walk, 32)).toBe("*snorts* 32? …. Take it or leave it. Begone, …!");
+  });
+});
+
+/** In-memory stand-in for the bazaar contract + RPC. */
+function fakeChain(opts: { openDelayMs?: number } = {}) {
+  const haggles = new Map<string, OnchainHaggle>();
+  const txs = new Map<string, number>();
+  let n = 0;
+  const ledger: Ledger = {
+    network: "testnet",
+    contractId: "bazaar.test",
+    serverId: "server.test",
+    async open(a) {
+      haggles.set(a.haggleId, { player: a.player, merchant_id: a.merchantId, good_id: a.goodId, commitment: a.commitment, opened_block: 1, status: "open", price: null, secret: null, salt: null });
+      const tx = `tx${n++}`;
+      txs.set(tx, Date.now() + (opts.openDelayMs ?? 0));
+      return tx;
+    },
+    async close(a) {
+      const h = haggles.get(a.haggleId)!;
+      Object.assign(h, { status: a.dealPrice === null ? "no_deal" : "deal", price: a.dealPrice, secret: { ...a.secret }, salt: a.salt });
+      return `tx${n++}`;
+    },
+  };
+  const reader: ChainReader = {
+    async getHaggle(_n, _c, id) {
+      return haggles.get(id) ?? null;
+    },
+    async txInfo(_n, hash) {
+      return { blockTimeMs: txs.get(hash)!, signerId: "server.test", receiverId: "bazaar.test" };
+    },
+  };
+  return { ledger, reader, haggles };
+}
+
+async function playOnchain(lines: string[], chain = fakeChain()) {
+  const s = new HaggleSession(fakeLlm(), fakeAttestor, MODEL, MERCHANTS[2], 1234, { ledger: chain.ledger, player: "guest.test" });
+  await s.open();
+  for (const l of lines) if (s.status === "open") await s.turn(l);
+  await s.close();
+  return { b: await s.bundle(), chain };
+}
+
+describe("onchain commit + settle", () => {
+  it("an onchain haggle verifies against the contract", async () => {
+    const { b, chain } = await playOnchain(["10", "15", "take"]);
+    expect(b.chain?.closeTx).toBeTruthy();
+    const checks = await verifyBundle(b, { ...opts, chain: chain.reader });
+    expect(checks.filter((c) => !c.ok)).toEqual([]);
+    expect(checks.map((c) => c.id)).toEqual(expect.arrayContaining(["chain.commit", "chain.order", "chain.settle", "chain.reveal"]));
+  });
+
+  it("a walk-away is still revealed onchain", async () => {
+    const { b, chain } = await playOnchain(["bye"]);
+    expect(chain.haggles.get(b.haggleId)!.status).toBe("no_deal");
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok)).toEqual([]);
+  });
+
+  it("detects a commitment posted after the merchant started talking", async () => {
+    const { b, chain } = await playOnchain(["10", "take"], fakeChain({ openDelayMs: 60_000 }));
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok).map((c) => c.id)).toContain("chain.order");
+  });
+
+  it("detects a bundle whose reveal differs from the onchain one", async () => {
+    const { b, chain } = await playOnchain(["10", "take"]);
+    chain.haggles.get(b.haggleId)!.secret!.floor -= 1;
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok).map((c) => c.id)).toContain("chain.reveal");
   });
 });

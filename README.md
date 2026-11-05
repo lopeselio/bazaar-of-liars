@@ -19,9 +19,9 @@ Day 1. Done so far:
 - the deterministic rules engine and secret commitments, with a terminal haggle and a balance simulator;
 - the NEAR AI Cloud attestation verifier;
 - LLM-voiced merchants with TEE-signed replies, plus a proof bundle and an independent verifier, all working live;
-- the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), unit-tested but not yet deployed.
+- the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), **live on testnet at [`bazaar-liars.testnet`](https://testnet.nearblocks.io/address/bazaar-liars.testnet)**. Every LLM haggle commits there before the first message and reveals there when it ends.
 
-There's no web UI yet, and the game doesn't call the contract yet. The design is in [DESIGN.md](./DESIGN.md).
+There's no web UI yet. The design is in [DESIGN.md](./DESIGN.md).
 
 ## Try it
 
@@ -36,18 +36,20 @@ You need Node 22 or later and pnpm.
    - **NVIDIA GPUs:** NVIDIA's NRAS verdict and each GPU's report, with every JWT verified against NVIDIA's JWKS.
 
    You should see `✓ VERIFIED — trusted signers: 0x…`. Attestation is free and needs no credits. Use `--offline` to skip the Intel and NVIDIA network calls, or `--json out.json` to save the full bundle.
-5. **No API key needed:** run `pnpm verify:haggle examples/sample-haggle.json`. This replays a real recorded haggle with Tobin of the Lamps and checks 46 things, including:
+5. **No API key needed:** run `pnpm verify:haggle examples/sample-haggle.json`. This replays a real haggle with Tobin of the Lamps, settled on testnet, and checks 41 things, including:
    - the revealed secret matches the commitment;
+   - the commitment is in the `bazaar-liars.testnet` contract, and its block came **before** the merchant's first TEE-signed reply;
+   - the contract settled the deal and revealed the same secret as the bundle;
    - every model call is TEE-signed by an attested key;
    - a full rules-engine replay reproduces every decision;
    - the model was never told the floor;
    - the deal is at or above the floor.
 
-   You should see `✓ FAIR PLAY VERIFIED`. Edit any number in the file and run it again to see the checks fail.
-6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
+   You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
+6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
 7. **Needs Rust:** run `pnpm test:contract`. You should see 15 contract tests pass, including:
-   - the contract's commitment hash matches the TypeScript one byte for byte, and the sample haggle from step 5 verifies onchain;
+   - the contract's commitment hash matches the TypeScript one byte for byte, and the reveal from the step 5 sample verifies against it;
    - a deal below the committed floor is rejected;
    - a reveal with a changed floor or wrong salt is rejected;
    - only the game server can open or close a haggle;

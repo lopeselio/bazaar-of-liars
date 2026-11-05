@@ -27,6 +27,7 @@ import { newNonce, verifyModelReport, fetchModelAttestation, type ModelVerificat
 import type { ChatRequest, SignedCall } from "./nearai.js";
 import { extractionRequest, parseMove, present, quickMove, speechRequest, toPlayerMove, type Line, type Move } from "./prompts.js";
 import type { ProofBundle, TurnRecord } from "./bundle.js";
+import type { ChainRecord, Ledger } from "./chain.js";
 
 export interface LlmClient {
   complete(req: ChatRequest): Promise<{ call: SignedCall; content: string }>;
@@ -63,6 +64,7 @@ export class HaggleSession {
   private pendingSigs: Promise<void>[] = [];
   private left = false;
   readonly openedAt = new Date().toISOString();
+  private chain: ChainRecord | null = null;
 
   constructor(
     private llm: LlmClient,
@@ -70,6 +72,8 @@ export class HaggleSession {
     readonly model: string,
     readonly merchant: Merchant,
     private seed: number,
+    /** Optional: post the commitment and the reveal to the bazaar contract. */
+    private onchain?: { ledger: Ledger; player: string },
   ) {}
 
   get good() {
@@ -83,14 +87,20 @@ export class HaggleSession {
   }
 
   /** Returns the commitment (to post onchain) and the opening line. */
-  async open(): Promise<{ commitment: string; openingAsk: number; verification: ModelVerification }> {
+  async open(): Promise<{ commitment: string; openingAsk: number; verification: ModelVerification; openTx: string | null }> {
     const secret = rollSecret(mulberry32(this.seed), this.merchant, this.good);
     this.state = openHaggle(secret, this.merchant.personality);
     this.commitment = commit(secret, this.salt);
     // Preflight: attest BEFORE the first completion, so the evidence can't be swapped afterwards.
     this.attestation = await this.attestor.attest(this.model);
     if (!this.attestation.verification.ok) throw new Error("model TEE attestation failed — refusing to haggle");
-    return { commitment: this.commitment, openingAsk: this.state.ask, verification: this.attestation.verification };
+    // Commit onchain BEFORE the player's first message. If this fails, the haggle doesn't start.
+    if (this.onchain) {
+      const { ledger, player } = this.onchain;
+      const openTx = await ledger.open({ haggleId: this.id, player, merchantId: this.merchant.id, goodId: this.good.id, commitment: this.commitment });
+      this.chain = { network: ledger.network, contractId: ledger.contractId, serverId: ledger.serverId, player, openTx, closeTx: null };
+    }
+    return { commitment: this.commitment, openingAsk: this.state.ask, verification: this.attestation.verification, openTx: this.chain?.openTx ?? null };
   }
 
   private sign(call: SignedCall) {
@@ -142,7 +152,26 @@ export class HaggleSession {
     return { move, decision, text: record.display, status: this.status };
   }
 
-  /** Reveal + proof. Call after the haggle ends. */
+  /**
+   * Reveal onchain (deal or not). The contract re-checks the commitment and the floor
+   * and only then moves coins and the good. Call once, after the haggle ends.
+   */
+  async close(): Promise<ChainRecord | null> {
+    if (!this.onchain || !this.chain || this.chain.closeTx || this.chain.closeError) return this.chain;
+    try {
+      this.chain.closeTx = await this.onchain.ledger.close({
+        haggleId: this.id,
+        secret: this.state.secret,
+        salt: this.salt,
+        dealPrice: this.state.status === "deal" ? this.state.dealPrice! : null,
+      });
+    } catch (e) {
+      this.chain.closeError = (e as Error).message.slice(0, 300);
+    }
+    return this.chain;
+  }
+
+  /** Reveal + proof. Call after the haggle ends (and after close(), if onchain). */
   async bundle(): Promise<ProofBundle> {
     await Promise.all(this.pendingSigs);
     return {
@@ -155,6 +184,7 @@ export class HaggleSession {
       reveal: { secret: this.state.secret, salt: this.salt },
       attestation: this.attestation,
       turns: this.turns,
+      ...(this.chain ? { chain: this.chain } : {}),
       outcome: {
         status: this.status,
         dealPrice: this.state.dealPrice ?? null,

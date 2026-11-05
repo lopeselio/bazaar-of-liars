@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@bazaar/core": "workspace:*",
-    "@bazaar/verify": "workspace:*"
+    "@bazaar/verify": "workspace:*",
+    "near-kit": "0.20.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

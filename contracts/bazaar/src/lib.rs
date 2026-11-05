@@ -271,12 +271,12 @@ mod tests {
         testing_env!(VMContextBuilder::new().predecessor_account_id(acc(caller)).block_height(block).build());
     }
 
-    /// The same vector `packages/core` produces (see the TS test).
+    /// The reveal from `examples/sample-haggle.json` (a real haggle settled on testnet).
     fn tobin() -> (Secret, String, String) {
         (
-            Secret { merchant_id: "tobin".into(), good_id: "lamp".into(), floor: 21, need: "restocking".into(), seed: 1906725398, list_price: 33 },
-            "85dbce16545337808194316fec345c54".into(),
-            "a2c539e48efd659f6c772727ba3370b03ac407d0ee041e3c2ab35b2b70343078".into(),
+            Secret { merchant_id: "tobin".into(), good_id: "lamp".into(), floor: 24, need: "restocking".into(), seed: 1580479808, list_price: 36 },
+            "dff3510c1dc5c74cf8cd81c2c225ce15".into(),
+            "90e10898085f44c6af024b0e13bbcb18a44a558b9556a01281b8e637e1565868".into(),
         )
     }
 
@@ -307,13 +307,13 @@ mod tests {
         open(&mut c, "h1");
         assert_eq!(c.coins_of(acc("player.testnet")), STARTER_COINS);
         let (s, salt, _) = tobin();
-        c.close_haggle("h1".into(), s.clone(), salt, Some(27));
+        c.close_haggle("h1".into(), s.clone(), salt, Some(32));
         let h = c.get_haggle("h1".into()).unwrap();
         assert_eq!(h.status, Status::Deal);
         assert_eq!(h.secret, Some(s));
-        assert_eq!(c.coins_of(acc("player.testnet")), STARTER_COINS - 27);
+        assert_eq!(c.coins_of(acc("player.testnet")), STARTER_COINS - 32);
         assert_eq!(c.goods_of(acc("player.testnet"), "lamp".into()), 1);
-        assert_eq!(c.earnings_of("tobin".into()), 27);
+        assert_eq!(c.earnings_of("tobin".into()), 32);
         assert_eq!(c.stats().deals, 1);
         assert!(get_logs().iter().any(|l| l.starts_with("EVENT_JSON:") && l.contains("haggle_closed")));
     }
@@ -334,7 +334,7 @@ mod tests {
         let mut c = setup();
         open(&mut c, "h1");
         let (s, salt, _) = tobin();
-        c.close_haggle("h1".into(), s, salt, Some(20));
+        c.close_haggle("h1".into(), s, salt, Some(23));
     }
 
     #[test]
@@ -390,8 +390,8 @@ mod tests {
         let mut c = setup();
         open(&mut c, "h1");
         let (s, salt, _) = tobin();
-        c.close_haggle("h1".into(), s.clone(), salt.clone(), Some(27));
-        c.close_haggle("h1".into(), s, salt, Some(27));
+        c.close_haggle("h1".into(), s.clone(), salt.clone(), Some(32));
+        c.close_haggle("h1".into(), s, salt, Some(32));
     }
 
     #[test]
@@ -444,6 +444,6 @@ mod tests {
         c.expire_haggle("h1".into());
         ctx("server.testnet", 100 + REVEAL_WINDOW_BLOCKS);
         let (s, salt, _) = tobin();
-        c.close_haggle("h1".into(), s, salt, Some(27));
+        c.close_haggle("h1".into(), s, salt, Some(32));
     }
 }
