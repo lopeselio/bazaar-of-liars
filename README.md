@@ -26,15 +26,15 @@ Day 1. Done so far:
 - the deterministic rules engine and secret commitments, with a terminal haggle and a balance simulator;
 - the NEAR AI Cloud attestation verifier;
 - LLM-voiced merchants with TEE-signed replies, plus a proof bundle and an independent verifier, all working live;
-- the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), **live on testnet at [`bazaar-liars.testnet`](https://testnet.nearblocks.io/address/bazaar-liars.testnet)**. Every LLM haggle commits there before the first message and reveals there when it ends.
+- the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), **live on testnet at [`v2.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v2.bazaar-liars.testnet)**. Every LLM haggle commits there before the first message and reveals there when it ends.
 
 - the web game: a Three.js bazaar where you haggle in a chat panel, then get a reveal card and the full fair-play evidence. The design is in [DESIGN.md](./DESIGN.md).
 
 ## Play it
 
-You need Node 22 or later, pnpm, and a NEAR AI Cloud key in `.env` (see step 4 below).
+**Hosted demo: https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/** (testnet, no wallet needed). Open it and you should see a desert bazaar at dusk with three stalls. A merchant's reply can take 5–40 seconds while the TEE model answers.
 
-Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173. You should see a desert bazaar at dusk with three stalls.
+To run it yourself you need Node 22 or later, pnpm, and a NEAR AI Cloud key in `.env`. Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173.
 
 1. Click **Tobin of the Lamps**, then **Buy the Brass Lamp**. The panel shows two steps: *Verifying the merchant's AI enclave (Intel TDX + NVIDIA)*, then *Sealing the merchant's secret on NEAR*. Then you see his asking price and a **🔒 Secret sealed on NEAR** link to the commitment transaction.
 2. Type `This lamp has a dent. I'll give you 18`, then a few higher offers. He answers in character and counters. Watch his hands: polishing means he's at ease, pushing his spectacles up means he's nervous.
@@ -44,7 +44,13 @@ Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173. You should 
 6. Back in the bazaar, click **Old Farrukh**, then **Sell your Brass Lamp**. Now he's buying: he opens low, and his secret is the most he'll pay.
 7. The top bar counts down six haggles to sundown, then shows your day's profit and the **Top traders** board. Your coins, goods and each merchant's memory of you are read from the contract, so they persist between visits.
 
-For a hosted build, run `pnpm build && pnpm start`. The server serves the game on port 8787.
+For a production build, run `pnpm build && pnpm start`. The server serves the game on port 8787.
+
+### Host it
+
+The server keeps each live haggle in memory, so it runs as one always-on container, not serverless functions. The `Dockerfile` serves the game and the API on port 8080; secrets come from the host's environment (`NEARAI_API_KEY`, `SERVER_PRIVATE_KEY`), never from the image. To try it locally, run `docker build -t bazaar-liars .`, then `docker run -p 8080:8080 --env-file .env -v ~/.near-credentials:/home/node/.near-credentials:ro bazaar-liars`, and open http://localhost:8080.
+
+The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, exactly one replica) with both keys stored as Container App secrets. To ship a new version, run `scripts/deploy-azure.sh`. It builds the image in Azure Container Registry, rolls the app and prints the URL.
 
 ## Try the pieces
 

@@ -302,7 +302,8 @@ function serveStatic(url: string, res: ServerResponse): boolean {
 
 createServer(async (req, res) => {
   const url = req.url ?? "/";
-  const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() ?? req.socket.remoteAddress ?? "?";
+  // Behind a hosting proxy the real client is the last X-Forwarded-For hop (the first is client-supplied).
+  const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",").pop()?.trim() || req.socket.remoteAddress || "?";
   try {
     if (req.method === "GET" && url === "/api/merchants")
       return send(res, 200, {
