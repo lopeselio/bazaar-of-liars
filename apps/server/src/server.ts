@@ -3,7 +3,8 @@
  *
  *   GET  /api/merchants                 the stalls
  *   GET  /api/player?id=guest-…         coins + goods, read from the bazaar contract
- *   POST /api/haggle {merchantId,player} attest the model, roll + commit the secret onchain
+ *   GET  /api/leaderboard               richest traders (peak purse), from the contract
+ *   POST /api/haggle {merchantId,player,side} attest the model, roll + commit the secret onchain
  *   POST /api/haggle/:id/turn {text}    one turn; when the haggle ends the response carries the reveal
  *
  * Privacy: haggle state lives in memory only. When a haggle ends it's revealed onchain, the proof
@@ -14,12 +15,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { GOODS, MERCHANTS } from "@bazaar/core";
+import { GOODS, MERCHANTS, type Side } from "@bazaar/core";
 import {
   HaggleSession,
   NearAiClient,
-  bluffs,
+  claims,
   explorerTx,
+  readLeaderboard,
+  readMemory,
   ledgerFromEnv,
   nearAiAttestor,
   readPlayer,
@@ -118,15 +121,40 @@ async function finish(id: string, l: Live) {
   const chain = await l.session.close();
   const bundle = await l.session.bundle();
   const checks = await verifyBundle(bundle);
-  const bluffList = bundle.turns.flatMap((t, i) =>
-    t.decision && bluffs(t.decision) ? [{ turn: i + 1, claimed: t.decision.statedFloor!, said: t.display }] : [],
+  const secret = bundle.reveal.secret;
+  // Every claim, whether it was true, and whether the player called it.
+  const claimList: { turn: number; claimed: number; truth: boolean; said: string; called?: "caught" | "honest" }[] = [];
+  const calls: { turn: number; result: "caught" | "honest" }[] = [];
+  bundle.turns.forEach((t, i) => {
+    const d = t.decision;
+    if (d?.call) {
+      calls.push({ turn: i + 1, result: d.call });
+      const target = claimList.at(-1);
+      if (target && !target.called) target.called = d.call;
+    }
+    if (d && claims(d)) {
+      // A merchant restating the same live claim isn't a new claim.
+      const prev = claimList.at(-1);
+      if (!(prev && !prev.called && prev.claimed === d.statedFloor)) {
+        claimList.push({ turn: i + 1, claimed: d.statedFloor!, truth: d.statedFloor === secret.floor, said: t.display });
+      }
+    }
+  });
+  // What each tell meant: how far the merchant really was from its limit.
+  const tells = bundle.turns.flatMap((t, i) =>
+    t.decision && t.decision.action !== "accept" && t.decision.action !== "walk"
+      ? [{ turn: i + 1, tell: t.decision.tell, gap: Math.abs(t.decision.price - secret.floor) }]
+      : [],
   );
   return {
     status: bundle.outcome.status,
     dealPrice: bundle.outcome.dealPrice,
     leftOnTable: bundle.outcome.leftOnTable,
-    secret: { floor: bundle.reveal.secret.floor, need: bundle.reveal.secret.need, listPrice: bundle.reveal.secret.listPrice },
-    bluffs: bluffList,
+    side: secret.side,
+    secret: { floor: secret.floor, need: secret.need, listPrice: secret.listPrice, grudge: secret.grudge, loyalty: secret.loyalty },
+    claims: claimList,
+    calls,
+    tells,
     chain: chain && {
       contractId: chain.contractId,
       network: chain.network,
@@ -152,6 +180,7 @@ setInterval(() => {
 async function openHaggle(body: Record<string, unknown>, ip: string) {
   const merchant = MERCHANTS.find((m) => m.id === body.merchantId);
   const player = String(body.player ?? "");
+  const side: Side = body.side === "buy" ? "buy" : "sell";
   if (!merchant) throw new HttpError(400, "unknown merchant");
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
   rateLimit(ip);
@@ -161,11 +190,33 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
   if (prev && live.has(prev)) await finish(prev, live.get(prev)!);
 
   const me = await playerView(player);
-  if (me.coins <= 0) throw new HttpError(402, "Your purse is empty.");
+  const goodId = side === "sell" ? merchant.goodId : merchant.buysGoodId;
+  if (side === "sell" && me.coins <= 0) throw new HttpError(402, "Your purse is empty.");
+  if (side === "buy" && !(me.goods[goodId] > 0)) throw new HttpError(400, `You have no ${GOODS[goodId].name} to sell.`);
+  const memory = ledger ? await readMemory(ledger.network, ledger.contractId, player, merchant.id) : { lowballs: 0, deals: 0 };
 
   const t0 = Date.now();
-  const session = new HaggleSession(llm, attestor, MODEL!, merchant, randomInt(2 ** 31), ledger ? { ledger, player } : undefined);
-  const opened = await session.open();
+  const session = new HaggleSession(
+    llm,
+    attestor,
+    MODEL!,
+    merchant,
+    randomInt(2 ** 31),
+    ledger ? { ledger, player } : undefined,
+    side,
+    memory,
+  );
+  let opened;
+  try {
+    opened = await session.open();
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes("attestation failed")) {
+      console.warn(msg);
+      throw new HttpError(503, "The merchant's AI enclave failed verification, so this haggle won't start. Try again in a moment.");
+    }
+    throw e;
+  }
   live.set(session.id, { session, player, budget: me.coins, lastActive: Date.now(), busy: false, turns: 0 });
   activeByPlayer.set(player, session.id);
 
@@ -173,7 +224,9 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
   return {
     haggleId: session.id,
     merchant: { id: merchant.id, name: merchant.name },
+    side,
     good: session.good,
+    memory: { lowballs: memory.lowballs, deals: memory.deals, grudge: session.grudge, loyalty: session.loyalty },
     commitment: opened.commitment,
     openingAsk: opened.openingAsk,
     budget: me.coins,
@@ -211,6 +264,8 @@ async function turn(id: string, body: Record<string, unknown>) {
       status: r.status,
       ask: l.session.status === "open" || l.session.status === "deal" ? l.session.ask : null,
       refused: r.refused ?? null,
+      claim: l.session.claim ?? null,
+      call: r.decision?.call ?? null,
       ms: Date.now() - t0,
     };
     if (r.refused) l.turns--;
@@ -251,7 +306,7 @@ createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url === "/api/merchants")
       return send(res, 200, {
-        merchants: MERCHANTS.map((m) => ({ id: m.id, name: m.name, good: GOODS[m.goodId] })),
+        merchants: MERCHANTS.map((m) => ({ id: m.id, name: m.name, good: GOODS[m.goodId], buys: GOODS[m.buysGoodId] })),
         model: MODEL,
         onchain: ledger ? { network: ledger.network, contractId: ledger.contractId } : null,
       });
@@ -260,6 +315,8 @@ createServer(async (req, res) => {
       if (!PLAYER_RE.test(id)) throw new HttpError(400, "bad player id");
       return send(res, 200, await playerView(id));
     }
+    if (req.method === "GET" && url === "/api/leaderboard")
+      return send(res, 200, { leaders: ledger ? await readLeaderboard(ledger.network, ledger.contractId) : [] });
     if (req.method === "POST" && url === "/api/haggle") return send(res, 200, await openHaggle(await readJson(req), ip));
     const m = url.match(/^\/api\/haggle\/([0-9a-f-]{36})\/turn$/);
     if (req.method === "POST" && m) return send(res, 200, await turn(m[1], await readJson(req)));

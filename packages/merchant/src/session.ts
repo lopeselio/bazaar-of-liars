@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import {
   GOODS,
   acceptAsk,
+  callBluff,
   commit,
   holdReply,
   leftOnTable,
@@ -22,6 +23,8 @@ import {
   type HaggleState,
   type Merchant,
   type MerchantReply,
+  type PlayerMemory,
+  type Side,
 } from "@bazaar/core";
 import { newNonce, verifyModelReport, fetchModelAttestation, type ModelVerification, type AttestationReport, type ChatSignature } from "@bazaar/verify";
 import type { ChatRequest, SignedCall } from "./nearai.js";
@@ -76,10 +79,24 @@ export class HaggleSession {
     private seed: number,
     /** Optional: post the commitment and the reveal to the bazaar contract. */
     private onchain?: { ledger: Ledger; player: string },
+    /** "sell": the merchant sells to the player. "buy": the merchant buys from the player. */
+    readonly side: Side = "sell",
+    /** What this merchant remembers about the player (must match the contract's record). */
+    private memory: PlayerMemory = { lowballs: 0, deals: 0 },
   ) {}
 
   get good() {
-    return GOODS[this.merchant.goodId];
+    return GOODS[this.side === "sell" ? this.merchant.goodId : this.merchant.buysGoodId];
+  }
+  /** The merchant's live claimed limit, if any: what the player could call a bluff. */
+  get claim(): number | undefined {
+    return this.state.status === "open" ? this.state.claim : undefined;
+  }
+  get grudge() {
+    return this.state.secret.grudge;
+  }
+  get loyalty() {
+    return this.state.secret.loyalty;
   }
   get ask() {
     return this.state.ask;
@@ -90,16 +107,38 @@ export class HaggleSession {
 
   /** Returns the commitment (to post onchain) and the opening line. */
   async open(): Promise<{ commitment: string; openingAsk: number; verification: ModelVerification; openTx: string | null }> {
-    const secret = rollSecret(mulberry32(this.seed), this.merchant, this.good);
+    const secret = rollSecret(mulberry32(this.seed), this.merchant, this.good, this.side, this.memory);
     this.state = openHaggle(secret, this.merchant.personality);
     this.commitment = commit(secret, this.salt);
     // Preflight: attest BEFORE the first completion, so the evidence can't be swapped afterwards.
-    this.attestation = await this.attestor.attest(this.model);
-    if (!this.attestation.verification.ok) throw new Error("model TEE attestation failed — refusing to haggle");
+    // Intel PCS / NVIDIA NRAS are network calls and occasionally flake, so one retry with a
+    // fresh nonce. Each attempt is a full verification; a failure is never ignored.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        this.attestation = await this.attestor.attest(this.model);
+      } catch (e) {
+        if (attempt >= 2) throw new Error(`model TEE attestation failed — refusing to haggle (${(e as Error).message})`);
+        continue;
+      }
+      if (this.attestation.verification.ok) break;
+      if (attempt >= 2) {
+        const failed = this.attestation.verification.candidates.flatMap((c) => c.checks.filter((x) => !x.ok && x.required).map((x) => x.label));
+        throw new Error(`model TEE attestation failed — refusing to haggle (${[...new Set(failed)].slice(0, 3).join("; ")})`);
+      }
+    }
     // Commit onchain BEFORE the player's first message. If this fails, the haggle doesn't start.
     if (this.onchain) {
       const { ledger, player } = this.onchain;
-      const openTx = await ledger.open({ haggleId: this.id, player, merchantId: this.merchant.id, goodId: this.good.id, commitment: this.commitment });
+      const openTx = await ledger.open({
+        haggleId: this.id,
+        player,
+        side: this.side,
+        merchantId: this.merchant.id,
+        goodId: this.good.id,
+        grudge: secret.grudge,
+        loyalty: secret.loyalty,
+        commitment: this.commitment,
+      });
       this.chain = { network: ledger.network, contractId: ledger.contractId, serverId: ledger.serverId, player, openTx, closeTx: null };
     }
     return { commitment: this.commitment, openingAsk: this.state.ask, verification: this.attestation.verification, openTx: this.chain?.openTx ?? null };
@@ -125,13 +164,14 @@ export class HaggleSession {
     let move = quickMove(playerText);
     let extraction: SignedCall | null = null;
     if (!move) {
-      const ex = await this.llm.complete(extractionRequest(this.model, playerText, askBefore));
+      const ex = await this.llm.complete(extractionRequest(this.model, playerText, askBefore, this.side));
       this.sign(ex.call);
       extraction = ex.call;
       move = parseMove(ex.content, playerText);
     }
 
-    if (budget !== undefined) {
+    // Only a player who is buying spends coins.
+    if (budget !== undefined && this.side === "sell") {
       const price = move.kind === "offer" ? move.price : move.kind === "accept" ? askBefore : undefined;
       if (price !== undefined && price > budget) {
         return { move, decision: null, text: "", status: this.status, refused: { reason: "budget", budget, price } };
@@ -144,6 +184,7 @@ export class HaggleSession {
       this.left = true;
       decision = null;
     } else if (move.kind === "accept") decision = acceptAsk(this.state);
+    else if (move.kind === "call") decision = callBluff(this.state);
     else if (move.kind === "offer") decision = respond(this.state, toPlayerMove(move));
     else decision = holdReply(this.state);
 
@@ -158,7 +199,7 @@ export class HaggleSession {
       );
       this.sign(sp.call);
       record.speech = sp.call;
-      record.display = present(sp.content, decision, offer);
+      record.display = present(sp.content, decision, offer, this.side);
       this.lines.push({ speaker: "merchant", text: sp.content });
     }
     this.turns.push(record);
@@ -177,6 +218,7 @@ export class HaggleSession {
         secret: this.state.secret,
         salt: this.salt,
         dealPrice: this.state.status === "deal" ? this.state.dealPrice! : null,
+        lowballed: this.state.lowballed,
       });
     } catch (e) {
       this.chain.closeError = (e as Error).message.slice(0, 300);

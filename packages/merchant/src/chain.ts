@@ -34,8 +34,17 @@ export interface Ledger {
   readonly network: Network;
   readonly contractId: string;
   readonly serverId: string;
-  open(a: { haggleId: string; player: string; merchantId: string; goodId: string; commitment: string }): Promise<string>;
-  close(a: { haggleId: string; secret: MerchantSecret; salt: string; dealPrice: number | null }): Promise<string>;
+  open(a: {
+    haggleId: string;
+    player: string;
+    side: "sell" | "buy";
+    merchantId: string;
+    goodId: string;
+    grudge: number;
+    loyalty: number;
+    commitment: string;
+  }): Promise<string>;
+  close(a: { haggleId: string; secret: MerchantSecret; salt: string; dealPrice: number | null; lowballed: boolean }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -61,8 +70,18 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     contractId: cfg.contractId,
     serverId: cfg.serverId,
     open: (a) =>
-      call("open_haggle", { haggle_id: a.haggleId, player: a.player, merchant_id: a.merchantId, good_id: a.goodId, commitment: a.commitment }),
-    close: (a) => call("close_haggle", { haggle_id: a.haggleId, secret: a.secret, salt: a.salt, deal_price: a.dealPrice }, "FINAL"),
+      call("open_haggle", {
+        haggle_id: a.haggleId,
+        player: a.player,
+        side: a.side,
+        merchant_id: a.merchantId,
+        good_id: a.goodId,
+        grudge: a.grudge,
+        loyalty: a.loyalty,
+        commitment: a.commitment,
+      }),
+    close: (a) =>
+      call("close_haggle", { haggle_id: a.haggleId, secret: a.secret, salt: a.salt, deal_price: a.dealPrice, lowballed: a.lowballed }, "FINAL"),
   };
 }
 
@@ -81,6 +100,9 @@ export function ledgerFromEnv(env = process.env): Ledger | null {
 
 export interface OnchainHaggle {
   player: string;
+  side: "sell" | "buy";
+  grudge: number;
+  loyalty: number;
   merchant_id: string;
   good_id: string;
   commitment: string;
@@ -140,4 +162,20 @@ export async function readPlayer(network: Network, contractId: string, player: s
   // Optimistic finality: the UI should reflect a deal the moment it executes.
   const st = await near.view<PlayerState>(contractId, "player_state", { player, good_ids: goodIds }, { finality: "optimistic" });
   return st ?? { known: false, coins: 0, goods: goodIds.map(() => 0) };
+}
+
+export interface Memory {
+  lowballs: number;
+  deals: number;
+}
+
+/** What a merchant remembers about a player, from the contract. */
+export async function readMemory(network: Network, contractId: string, player: string, merchantId: string): Promise<Memory> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<Memory>(contractId, "memory_of", { player, merchant_id: merchantId }, { finality: "optimistic" })) ?? { lowballs: 0, deals: 0 };
+}
+
+export async function readLeaderboard(network: Network, contractId: string): Promise<{ player: string; peak: number }[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<{ player: string; peak: number }[]>(contractId, "leaderboard", {}, { finality: "optimistic" })) ?? [];
 }

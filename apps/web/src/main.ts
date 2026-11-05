@@ -1,6 +1,6 @@
 import "./style.css";
 import { Bazaar, type StallLook } from "./scene";
-import { api, type Check, type Ending, type MerchantInfo, type Opened, type Tell, type TurnOut } from "./api";
+import { api, type Check, type Ending, type MerchantInfo, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "./api";
 
 // ---------- looks (original designs, one per merchant) ----------
 
@@ -10,13 +10,14 @@ const LOOKS: Record<string, StallLook> = {
   tobin: { id: "tobin", cloth: "#2e6e6a", cloth2: "#e9d9b0", robe: "#7a5a2e", skin: "#d9a982", hat: "cap", good: "lamp" },
 };
 const GOOD_ICON: Record<string, string> = { rug: "🧶", saffron: "🌶️", lamp: "🪔" };
-const TELL_TEXT: Record<Tell, string> = { relaxed: "At ease", firm: "Arms folded", nervous: "Fidgeting", irritated: "Losing patience" };
-const NEED_TEXT: Record<string, string> = {
-  rent_due: "Rent due tonight",
-  restocking: "Cash to restock",
-  comfortable: "In no hurry",
-  hoarding: "Loved this piece",
+const TELL_TEXT: Record<Tell, string> = { relaxed: "at ease", firm: "firm", nervous: "fidgeting", irritated: "losing patience" };
+const NEED_TEXT: Record<Side, Record<string, string>> = {
+  sell: { rent_due: "Rent due tonight", restocking: "Cash to restock", comfortable: "In no hurry", hoarding: "Loved this piece" },
+  buy: { rent_due: "A customer waiting", restocking: "Empty shelf", comfortable: "Could do without", hoarding: "A collector" },
 };
+const HAGGLES_PER_DAY = 6;
+/** "Old Farrukh" → "Farrukh", "Zaria the Spice-Seller" → "Zaria". */
+const shortName = (name: string) => name.replace(/^Old /, "").split(" ")[0];
 
 // ---------- tiny DOM helpers ----------
 
@@ -62,16 +63,20 @@ function playerId() {
   return id;
 }
 const PLAYER = playerId();
+let me: PlayerView | null = null;
+let merchants: MerchantInfo[] = [];
+const goodValue = (id: string) => merchants.flatMap((m) => [m.good, m.buys]).find((g) => g.id === id)?.baseValue ?? 0;
+const worth = (p: PlayerView) => p.coins + Object.entries(p.goods).reduce((s, [g, n]) => s + n * goodValue(g), 0);
 
 async function refreshPurse(bump = false) {
   try {
-    const p = await api.player(PLAYER);
-    $("coins").textContent = String(p.coins);
-    $("goods").innerHTML = Object.entries(p.goods)
+    me = await api.player(PLAYER);
+    $("coins").textContent = String(me.coins);
+    $("goods").innerHTML = Object.entries(me.goods)
       .filter(([, n]) => n > 0)
       .map(([g, n]) => `<span title="${esc(g)}">${GOOD_ICON[g] ?? "•"} ${n}</span>`)
       .join("");
-    $("purse").title = p.onchain ? `Read from ${p.contractId} (${p.network}) · ${p.id}` : "Offchain demo balance";
+    $("purse").title = me.onchain ? `Read from ${me.contractId} (${me.network}) · ${me.id}` : "Offchain demo balance";
     if (bump) {
       $("purse").classList.remove("bump");
       void $("purse").offsetWidth;
@@ -80,13 +85,61 @@ async function refreshPurse(bump = false) {
   } catch {
     /* the purse can wait */
   }
+  return me;
+}
+
+// ---------- market day (a session goal; balances themselves live onchain) ----------
+
+interface Day {
+  n: number;
+  left: number;
+  startWorth: number | null;
+}
+function loadDay(): Day {
+  try {
+    const d = JSON.parse(store.get("bazaar.day") ?? "");
+    if (typeof d.n === "number" && typeof d.left === "number") return d;
+  } catch {
+    /* new player */
+  }
+  return { n: 1, left: HAGGLES_PER_DAY, startWorth: null };
+}
+let day = loadDay();
+const saveDay = () => store.set("bazaar.day", JSON.stringify(day));
+function renderDay() {
+  $("day").innerHTML = `Day <b>${day.n}</b> · ${day.left} haggle${day.left === 1 ? "" : "s"} before sundown`;
+}
+
+async function leaderboardHtml() {
+  try {
+    const { leaders } = await api.leaderboard();
+    return leaders
+      .filter((l) => l.peak > 200)
+      .map((l) => `<li class="${l.player === PLAYER ? "me" : ""}">${l.player === PLAYER ? "You" : esc(l.player.slice(0, 12))}<span>${l.peak}</span></li>`)
+      .join("");
+  } catch {
+    return "";
+  }
+}
+
+async function sundown() {
+  const p = await refreshPurse();
+  const end = p ? worth(p) : 0;
+  const start = day.startWorth ?? end;
+  const profit = end - start;
+  $("s-title").textContent = profit > 0 ? `A good day: +${profit} coins` : profit < 0 ? `A hard day: ${profit} coins` : "You broke even";
+  $("s-eyebrow").textContent = `Sundown · day ${day.n}`;
+  $("s-facts").innerHTML = `
+    <div><span>Started at</span><strong>${start}</strong></div>
+    <div><span>Ended at</span><strong>${end}</strong></div>
+    <div><span>Purse</span><strong>${p?.coins ?? "–"}</strong></div>`;
+  $("s-leaders").innerHTML = await leaderboardHtml();
+  $("sundown").hidden = false;
 }
 
 // ---------- state ----------
 
-let merchants: MerchantInfo[] = [];
-let current: { m: MerchantInfo; opened: Opened | null; ending: Ending | null; busy: boolean } | null = null;
-
+let current: { m: MerchantInfo; side: Side | null; opened: Opened | null; ending: Ending | null; busy: boolean } | null = null;
 const canvas = $<HTMLCanvasElement>("scene");
 let bazaar: Bazaar;
 
@@ -100,7 +153,7 @@ function buildLabels() {
     el.className = "label";
     el.type = "button";
     el.id = `label-${m.id}`;
-    el.innerHTML = `<strong>${esc(m.name)}</strong><span>${esc(m.good.name)}</span>`;
+    el.innerHTML = `<strong>${esc(m.name)}</strong><span>Sells ${esc(m.good.name)} · buys ${esc(m.buys.name)}</span>`;
     el.addEventListener("click", () => pick(m.id));
     el.addEventListener("mouseenter", () => el.classList.add("hot"));
     el.addEventListener("mouseleave", () => el.classList.remove("hot"));
@@ -113,10 +166,10 @@ function buildLabels() {
 const log = $("p-log");
 const input = $<HTMLInputElement>("p-input");
 
-function addMsg(who: "merchant" | "player", text: string, meta?: string) {
+function addMsg(who: "merchant" | "player", text: string) {
   const el = document.createElement("div");
   el.className = `msg ${who}`;
-  el.innerHTML = (who === "merchant" ? speech(text) : esc(text)) + (meta ? `<span class="meta">${esc(meta)}</span>` : "");
+  el.innerHTML = who === "merchant" ? speech(text) : esc(text);
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
 }
@@ -142,70 +195,112 @@ function setAsk(n: number | null) {
   const el = $("p-ask");
   const prev = Number(el.textContent);
   el.textContent = n === null ? "–" : String(n);
-  if (n !== null && prev && n < prev) {
+  const better = current?.side === "buy" ? n !== null && prev && n > prev : n !== null && prev && n < prev;
+  if (better) {
     el.classList.remove("drop");
     void el.offsetWidth;
     el.classList.add("drop");
   }
   $("q-take").textContent = n === null ? "Take it" : `Take it (${n})`;
 }
-function setTell(t: Tell) {
-  $("p-tell").dataset.tell = t;
-  $("p-tell-text").textContent = TELL_TEXT[t];
-  if (current) bazaar.setTell(current.m.id, t);
+function setClaim(claim: number | null) {
+  $("q-call").hidden = claim === null;
+  $("q-call").textContent = claim === null ? "Call the bluff" : `Call the bluff (${current?.side === "buy" ? "not above" : "not below"} ${claim}?)`;
 }
 function setEnabled(on: boolean) {
   input.disabled = !on;
-  $<HTMLButtonElement>("p-send").disabled = !on;
-  $<HTMLButtonElement>("q-take").disabled = !on;
-  $<HTMLButtonElement>("q-leave").disabled = !on;
+  for (const id of ["p-send", "q-take", "q-leave", "q-call"]) $<HTMLButtonElement>(id).disabled = !on;
   if (on && matchMedia("(pointer: fine)").matches) input.focus();
 }
-
 function steps(items: { label: string; state: "todo" | "doing" | "done" | "fail" }[]) {
   $("p-steps").innerHTML = items.map((s) => `<li class="${s.state}"><span class="st"></span><span>${s.label}</span></li>`).join("");
 }
 
-async function pick(id: string) {
+/** Click a stall: walk up and choose to buy or sell. */
+function pick(id: string) {
   if (current) return;
   const m = merchants.find((x) => x.id === id);
   if (!m) return;
-  current = { m, opened: null, ending: null, busy: true };
+  current = { m, side: null, opened: null, ending: null, busy: false };
   document.body.classList.add("focused");
   bazaar.focus(id);
   bazaar.setTell(id, "relaxed");
 
   $("p-name").textContent = m.name;
-  $("p-good").textContent = m.good.name;
+  $("p-good").textContent = `Sells ${m.good.name} · buys ${m.buys.name}`;
   $("p-seal").innerHTML = "";
+  $("p-steps").innerHTML = "";
+  $("p-memory").innerHTML = "";
+  $("p-ask-label").textContent = "Asking";
+  document.querySelector<HTMLElement>(".ask-row")!.hidden = true;
   log.innerHTML = "";
   setAsk(null);
-  setTell("relaxed");
+  setClaim(null);
   setEnabled(false);
   $("panel").hidden = false;
+
+  if (day.left <= 0) {
+    leaveStall();
+    void sundown();
+    return;
+  }
+  const owned = me?.goods[m.buys.id] ?? 0;
+  const coins = me?.coins ?? 0;
+  $("p-choose").innerHTML = `
+    <button type="button" id="c-buy" ${coins <= 0 ? "disabled" : ""}>
+      <strong>Buy the ${esc(m.good.name)}</strong>
+      <span>${coins > 0 ? `You have ${coins} coins. Worth about ${m.good.baseValue}.` : "Your purse is empty."}</span>
+    </button>
+    <button type="button" id="c-sell" ${owned ? "" : "disabled"}>
+      <strong>Sell your ${esc(m.buys.name)}</strong>
+      <span>${owned ? `You have ${owned}. Worth about ${m.buys.baseValue}. ${esc(shortName(m.name))} might want it badly.` : `You don't have one. Buy one from another stall.`}</span>
+    </button>`;
+  $("c-buy").addEventListener("click", () => start("sell"));
+  $("c-sell").addEventListener("click", () => start("buy"));
+  ($("c-buy") as HTMLButtonElement).disabled || $("c-buy").focus();
+}
+
+/** side is the MERCHANT's side: "sell" = you buy from them, "buy" = you sell to them. */
+async function start(side: Side) {
+  if (!current || current.side) return;
+  const { m } = current;
+  current.side = side;
+  current.busy = true;
+  $("p-choose").innerHTML = "";
+  document.querySelector<HTMLElement>(".ask-row")!.hidden = false;
+  $("p-ask-label").textContent = side === "sell" ? "Asking" : "Offering you";
+  $("p-good").textContent = side === "sell" ? `Selling ${m.good.name}` : `Buying your ${m.buys.name}`;
 
   const s = [
     { label: "Verifying the merchant's AI enclave <span class='mono'>(Intel TDX + NVIDIA)</span>", state: "doing" as const },
     { label: "Sealing the merchant's secret on NEAR", state: "todo" as const },
   ];
   steps(s);
-  // The server does both in one call; advance the second step when the first is plausibly done.
   const t = setTimeout(() => steps([{ ...s[0], state: "done" }, { ...s[1], state: "doing" }]), 4500);
   try {
-    const opened = await api.open(id, PLAYER);
+    const opened = await api.open(m.id, PLAYER, side);
     clearTimeout(t);
-    if (!current || current.m.id !== id) return;
+    if (!current || current.m.id !== m.id) return;
     current.opened = opened;
+    if (day.startWorth === null && me) {
+      day.startWorth = worth(me);
+      saveDay();
+    }
     steps([
       { ...s[0], state: "done" },
       { ...s[1], state: "done" },
     ]);
     setTimeout(() => ($("p-steps").innerHTML = ""), 1400);
     renderSeal();
+    renderMemory(opened);
     setAsk(opened.openingAsk);
-    addMsg("merchant", `*spreads the ${m.good.name.toLowerCase().replace(/ \(.*\)/, "")} across the counter* For you, friend, ${opened.openingAsk} coins.`);
-    bazaar.talk(id);
-    addSys(`You have <b>${opened.budget}</b> coins. Make an offer, or talk them down.`);
+    const thing = opened.good.name.toLowerCase().replace(/ \(.*\)/, "");
+    addMsg(
+      "merchant",
+      side === "sell" ? `*spreads the ${thing} across the counter* For you, friend, ${opened.openingAsk} coins.` : `*looks your ${thing} over* Hmm. I could give you ${opened.openingAsk} for it.`,
+    );
+    bazaar.talk(m.id);
+    addSys(side === "sell" ? `You have <b>${opened.budget}</b> coins. Make an offer, or talk them down.` : "Name your price, or talk them up.");
     current.busy = false;
     setEnabled(true);
     void refreshPurse();
@@ -216,6 +311,19 @@ async function pick(id: string) {
     addSys(`<button class="chip" id="retry" type="button">Back to the bazaar</button>`);
     $("retry").addEventListener("click", leaveStall);
   }
+}
+
+function renderMemory(o: Opened) {
+  const el = $("p-memory");
+  const first = shortName(o.merchant.name);
+  el.className = "memory";
+  if (o.memory.grudge > 0) {
+    el.classList.add("grudge");
+    el.innerHTML = `${esc(first)} remembers you lowballed them <b>${o.memory.lowballs}×</b>. Prices are worse.`;
+  } else if (o.memory.loyalty > 0) {
+    el.classList.add("loyal");
+    el.innerHTML = `${esc(first)} remembers <b>${o.memory.deals} deal${o.memory.deals > 1 ? "s" : ""}</b> with you. A friend's price.`;
+  } else el.innerHTML = "";
 }
 
 function renderSeal() {
@@ -247,6 +355,7 @@ async function say(text: string) {
     return;
   }
   typing(false);
+  const first = shortName(m.name);
   if (r.refused) {
     addSys(`You only have <b>${r.refused.budget}</b> coins. You can't offer ${r.refused.price}.`, "bad");
   } else {
@@ -254,16 +363,23 @@ async function say(text: string) {
       addMsg("merchant", r.text);
       bazaar.talk(m.id, Math.min(3200, 900 + r.text.length * 25));
     }
-    if (r.tell) setTell(r.tell);
+    if (r.tell) bazaar.setTell(m.id, r.tell);
     if (r.ask !== null) setAsk(r.ask);
+    if (r.call === "caught") addSys(`Caught! ${esc(first)} was bluffing, and the price collapses.`, "caught");
+    if (r.call === "honest") addSys(`${esc(first)} was telling the truth, and is offended.`, "honest");
     if (r.action === "final") addSys("That's their final price.");
     if (r.action === "accept") addSys(`🤝 Deal at <b>${r.price}</b> coins`, "deal");
     if (r.action === "walk") addSys(`${esc(m.name)} has had enough and turns away.`, "bad");
     if (r.action === "left") addSys("You walk away from the stall.");
   }
+  setClaim(r.claim);
   if (r.end) {
     current.ending = r.end;
+    setClaim(null);
     addSys("Revealing the secret onchain…");
+    day.left = Math.max(0, day.left - 1);
+    saveDay();
+    renderDay();
     setTimeout(() => showReveal(r.end!), 900);
     void refreshPurse(true);
     return;
@@ -277,8 +393,10 @@ function leaveStall() {
   $("reveal").hidden = true;
   document.body.classList.remove("focused");
   if (current) bazaar.setTell(current.m.id, "relaxed");
+  const ended = !!current?.ending;
   current = null;
   bazaar.overview();
+  if (ended && day.left === 0) void sundown();
 }
 
 // ---------- reveal ----------
@@ -288,21 +406,42 @@ function showReveal(e: Ending) {
   const card = $("r-card");
   card.classList.remove("flipped");
   $("reveal").hidden = false;
-
+  const first = shortName(m.name);
+  const buying = e.side === "sell"; // the player was buying
   const deal = e.status === "deal";
-  $("r-title").textContent = deal ? `You bought the ${m.good.name}` : e.status === "walked" ? `${m.name} sent you away` : "You walked away";
+  const goodName = buying ? m.good.name : m.buys.name;
+
+  $("r-title").textContent = deal ? (buying ? `You bought the ${goodName}` : `You sold the ${goodName}`) : e.status === "walked" ? `${m.name} sent you away` : "You walked away";
+  $("r-floor-label").textContent = buying ? "Real floor" : "Real ceiling";
   $("r-floor").textContent = `${e.secret.floor}`;
-  $("r-need").textContent = NEED_TEXT[e.secret.need] ?? e.secret.need;
-  $("r-paid-label").textContent = deal ? "You paid" : "Asked at first";
+  $("r-need").textContent = NEED_TEXT[e.side][e.secret.need] ?? e.secret.need;
+  $("r-paid-label").textContent = deal ? (buying ? "You paid" : "You got") : buying ? "Asked at first" : "Offered at first";
   $("r-paid").textContent = deal ? `${e.dealPrice}` : `${e.secret.listPrice}`;
   $("r-verdict").innerHTML = deal
     ? e.leftOnTable === 0
-      ? "Perfect. You paid exactly the floor. Nobody haggles better."
-      : `${esc(m.name)} would have gone down to <b>${e.secret.floor}</b>. You left <b>${e.leftOnTable}</b> coins on the table.`
-    : `They'd have sold for <b>${e.secret.floor}</b>. Now you know.`;
-  $("r-bluffs").innerHTML = e.bluffs
-    .map((b) => `<li>Turn ${b.turn}: claimed nothing below <b>${b.claimed}</b>. The real floor was ${e.secret.floor}. <b>A bluff of ${b.claimed - e.secret.floor}.</b></li>`)
+      ? "Perfect. You hit their exact limit. Nobody haggles better."
+      : buying
+        ? `${esc(first)} would have gone down to <b>${e.secret.floor}</b>. You left <b>${e.leftOnTable}</b> coins on the table.`
+        : `${esc(first)} would have paid up to <b>${e.secret.floor}</b>. You left <b>${e.leftOnTable}</b> coins on the table.`
+    : buying
+      ? `They'd have sold for <b>${e.secret.floor}</b>. Now you know.`
+      : `They'd have paid up to <b>${e.secret.floor}</b>. Now you know.`;
+
+  $("r-bluffs").innerHTML = e.claims
+    .map((c) => {
+      const callResult = c.called;
+      const tag = callResult === "caught" ? '<span class="tag">you caught it</span>' : callResult === "honest" ? '<span class="tag">you called it, wrongly</span>' : "";
+      const lim = buying ? "nothing below" : "nothing above";
+      return c.truth
+        ? `<li class="truth">Turn ${c.turn}: "${lim} ${c.claimed}". <b>The truth.</b>${tag}</li>`
+        : `<li>Turn ${c.turn}: "${lim} ${c.claimed}". The real limit was ${e.secret.floor}. <b>A bluff of ${Math.abs(c.claimed - e.secret.floor)}.</b>${tag}</li>`;
+    })
     .join("");
+  $("r-tells").innerHTML = e.tells.length
+    ? `<h4>What ${esc(first)}'s tells meant</h4><ol>${e.tells
+        .map((t) => `<li>Turn ${t.turn} · ${TELL_TEXT[t.tell]} · <b>${t.gap}</b> from the limit</li>`)
+        .join("")}</ol>`
+    : "";
 
   const failed = e.checks.filter((c) => !c.ok).length;
   const badge = $("r-badge");
@@ -348,7 +487,7 @@ function openVerify() {
     </section>
     <section>
       <h3>2 · The secret was sealed on NEAR first</h3>
-      <p class="sub">The merchant's floor and need were hashed and posted to the contract before you spoke. When the haggle ended, the contract checked the reveal against that hash and the floor, and only then moved coins.</p>
+      <p class="sub">The merchant's limit, need and memory of you were hashed and posted to the contract before you spoke. The contract checked that memory against its own records. When the haggle ended, it checked the reveal against the hash and the limit, and only then moved coins and goods.</p>
       <dl class="kv">
         <dt>Commitment</dt><dd class="mono">${esc(o.commitment)}</dd>
         <dt>Sealed</dt><dd>${link(o.openTxUrl, o.openTx ? short(o.openTx) : "")}</dd>
@@ -361,7 +500,7 @@ function openVerify() {
       <h3>3 · Every reply was replayed</h3>
       <p class="sub">${
         e
-          ? "Each merchant line is checked: signed by the enclave's key, made for this haggle and the rules engine's decision, never shown the floor, and displayed exactly as signed."
+          ? "Each merchant line is checked: signed by the enclave's key, made for this haggle and the rules engine's decision, never shown the limit, and displayed exactly as signed. Every claim and every called bluff is replayed too."
           : "These checks run when the haggle ends."
       }</p>
       ${replay.length ? checkList(replay) : ""}
@@ -389,6 +528,7 @@ $("p-form").addEventListener("submit", (ev) => {
 });
 $("q-take").addEventListener("click", () => void say("take"));
 $("q-leave").addEventListener("click", () => void say("leave"));
+$("q-call").addEventListener("click", () => void say("You're lying!"));
 $("p-close").addEventListener("click", () => {
   if (current?.opened && !current.ending && !current.busy) void say("leave");
   else if (!current?.busy || !current?.opened) leaveStall();
@@ -398,6 +538,18 @@ $("r-download").addEventListener("click", downloadProof);
 $("r-badge").addEventListener("click", openVerify);
 $("v-close").addEventListener("click", () => ($("verify").hidden = true));
 $("how").addEventListener("click", () => ($("intro").hidden = false));
+$("traders").addEventListener("click", async () => {
+  $("b-leaders").innerHTML = await leaderboardHtml();
+  $("board").hidden = false;
+});
+$("b-close").addEventListener("click", () => ($("board").hidden = true));
+$("s-next").addEventListener("click", async () => {
+  const p = await refreshPurse();
+  day = { n: day.n + 1, left: HAGGLES_PER_DAY, startWorth: p ? worth(p) : null };
+  saveDay();
+  renderDay();
+  $("sundown").hidden = true;
+});
 $("enter").addEventListener("click", () => {
   $("intro").hidden = true;
   store.set("bazaar.seenIntro", "1");
@@ -405,6 +557,7 @@ $("enter").addEventListener("click", () => {
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$("verify").hidden) $("verify").hidden = true;
+  else if (!$("board").hidden) $("board").hidden = true;
   else if (!$("intro").hidden) $("intro").hidden = true;
 });
 
@@ -436,6 +589,12 @@ async function boot() {
     }
   };
   if (!store.get("bazaar.seenIntro")) $("intro").hidden = false;
-  void refreshPurse();
+  renderDay();
+  await refreshPurse();
+  if (day.startWorth === null && me?.known) {
+    day.startWorth = worth(me);
+    saveDay();
+  }
+  if (day.left <= 0) void sundown();
 }
 void boot();

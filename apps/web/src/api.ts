@@ -8,7 +8,9 @@ export interface MerchantInfo {
   id: string;
   name: string;
   good: Good;
+  buys: Good;
 }
+export type Side = "sell" | "buy";
 export interface Check {
   id: string;
   label: string;
@@ -31,7 +33,9 @@ export interface PlayerView {
 export interface Opened {
   haggleId: string;
   merchant: { id: string; name: string };
+  side: Side;
   good: Good;
+  memory: { lowballs: number; deals: number; grudge: number; loyalty: number };
   commitment: string;
   openingAsk: number;
   budget: number;
@@ -43,10 +47,13 @@ export interface Opened {
 
 export interface Ending {
   status: "deal" | "walked" | "left" | "open";
+  side: Side;
   dealPrice: number | null;
   leftOnTable: number | null;
-  secret: { floor: number; need: string; listPrice: number };
-  bluffs: { turn: number; claimed: number; said: string }[];
+  secret: { floor: number; need: string; listPrice: number; grudge: number; loyalty: number };
+  claims: { turn: number; claimed: number; truth: boolean; said: string; called?: "caught" | "honest" }[];
+  calls: { turn: number; result: "caught" | "honest" }[];
+  tells: { turn: number; tell: Tell; gap: number }[];
   chain: {
     contractId: string;
     network: string;
@@ -68,6 +75,8 @@ export interface TurnOut {
   status: string;
   ask: number | null;
   refused: { reason: "budget"; budget: number; price: number } | null;
+  claim: number | null;
+  call: "caught" | "honest" | null;
   ms: number;
   end?: Ending;
 }
@@ -86,6 +95,7 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
 export const api = {
   merchants: () => call<{ merchants: MerchantInfo[]; model: string; onchain: { network: string; contractId: string } | null }>("/api/merchants"),
   player: (id: string) => call<PlayerView>(`/api/player?id=${encodeURIComponent(id)}`),
-  open: (merchantId: string, player: string) => call<Opened>("/api/haggle", { merchantId, player }),
+  open: (merchantId: string, player: string, side: Side) => call<Opened>("/api/haggle", { merchantId, player, side }),
+  leaderboard: () => call<{ leaders: { player: string; peak: number }[] }>("/api/leaderboard"),
   turn: (haggleId: string, text: string) => call<TurnOut>(`/api/haggle/${haggleId}/turn`, { text }),
 };

@@ -2,14 +2,15 @@
  * Play a haggle in the terminal (no LLM yet — dialogue is templated).
  *   pnpm haggle               # random merchant
  *   pnpm haggle -- zaria      # pick a merchant
- * Input: a number to offer, "45 saw 40" to claim a competitor price, "take" to accept the ask, "quit".
+ * Input: a number to offer, "45 saw 40" to claim a competitor price, "liar" to call a claimed
+ * minimum, "take" to accept the ask, "quit".
  */
 import { createInterface } from "node:readline/promises";
 import { randomInt } from "node:crypto";
 import { GOODS, MERCHANTS } from "../catalog.js";
 import { mulberry32 } from "../rng.js";
 import { commit, newSalt, rollSecret, verifyCommitment } from "../secrets.js";
-import { acceptAsk, leftOnTable, openHaggle, respond } from "../rules.js";
+import { acceptAsk, callBluff, leftOnTable, openHaggle, respond } from "../rules.js";
 import type { MerchantReply, Tell } from "../types.js";
 
 const TELL_LINES: Record<Tell, string[]> = {
@@ -27,10 +28,11 @@ function line(reply: MerchantReply, name: string, pickIdx: number): string {
     case "walk":
       return `${name} ${body}. "Enough. Find another stall."`;
     case "final":
-      return `${name} ${body}. "${reply.price}. My final price. Take it or leave it."`;
+      return `${name} ${body}. "${reply.price}. My final price. Take it or leave it."${reply.call === "honest" ? " (it was the truth, and they're offended)" : ""}`;
     default: {
       const lie = reply.statedFloor ? ` I cannot go below ${reply.statedFloor}, truly.` : "";
-      return `${name} ${body}. "${reply.price}.${lie}"`;
+      const call = reply.call === "caught" ? " (caught bluffing!)" : "";
+      return `${name} ${body}. "${reply.price}.${lie}"${call}`;
     }
   }
 }
@@ -55,10 +57,12 @@ while (state.status === "open") {
   let reply: MerchantReply;
   if (raw === "take") {
     reply = acceptAsk(state);
+  } else if (raw === "liar") {
+    reply = callBluff(state);
   } else {
     const m = raw.match(/^(\d+)(?:\s+saw\s+(\d+))?$/);
     if (!m) {
-      console.log('  (enter a number, "45 saw 40", "take", or "quit")');
+      console.log('  (enter a number, "45 saw 40", "liar", "take", or "quit")');
       continue;
     }
     reply = respond(state, {

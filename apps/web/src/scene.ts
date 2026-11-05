@@ -26,6 +26,7 @@ interface Merchant {
   mouth: THREE.Mesh;
   tell: Tell;
   talkUntil: number;
+  style: string;
 }
 
 interface Stall {
@@ -271,7 +272,7 @@ function buildMerchant(look: StallLook): Merchant {
       head.add(lens);
     }
   }
-  return { root, body, head, armL, armR, browL, browR, mouth, tell: "relaxed", talkUntil: 0 };
+  return { root, body, head, armL, armR, browL, browR, mouth, tell: "relaxed", talkUntil: 0, style: look.id };
 }
 
 // ---------- stall ----------
@@ -736,50 +737,95 @@ function findRoot(o: THREE.Object3D, stalls: Stall[]) {
 
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
-function animateMerchant(m: Merchant, t: number, dt: number, now: number) {
-  const k = Math.min(1, dt * 5);
-  let lean = 0,
-    sway = 0,
-    jitter = 0,
-    armIn = 0,
-    browTilt = 0,
-    browLift = 0,
-    glance = 0;
-  switch (m.tell) {
-    case "relaxed":
-      sway = Math.sin(t * 1.1) * 0.035;
-      browLift = 0.004;
+interface Pose {
+  aLx: number;
+  aLz: number;
+  aRx: number;
+  aRz: number;
+  lean: number;
+  sway: number;
+  jitter: number;
+  glance: number;
+  browTilt: number;
+  browLift: number;
+  headTilt: number;
+}
+
+const REST: Pose = { aLx: 0, aLz: -0.12, aRx: 0, aRz: 0.12, lean: 0, sway: 0, jitter: 0, glance: 0, browTilt: 0, browLift: 0, headTilt: 0 };
+const CROSSED = { aLx: -1.25, aLz: 0.75, aRx: -1.25, aRz: -0.75 };
+/** A periodic gesture: 1 during the first `dur` seconds of every `every` seconds. */
+const pulse = (t: number, every: number, dur: number) => ((t % every) < dur ? 1 : 0);
+
+/**
+ * Each merchant leaks each tell differently (matching the stage directions the model is told
+ * to use), so reading a merchant is a skill you learn per merchant, not a label in the UI.
+ */
+function poseFor(style: string, tell: Tell, t: number): Pose {
+  const p: Pose = { ...REST };
+  switch (`${style}:${tell}`) {
+    // Old Farrukh: the beard and the rugs.
+    case "farrukh:relaxed": // strokes beard slowly
+      if (pulse(t, 5, 2.2)) Object.assign(p, { aRx: -2.0, aRz: -0.45 + Math.sin(t * 3) * 0.08 });
+      p.sway = Math.sin(t * 1.1) * 0.03;
       break;
-    case "firm":
-      armIn = 1;
-      lean = -0.05;
-      browTilt = 0.12;
+    case "farrukh:firm": // palms flat on the counter
+      Object.assign(p, { aLx: -1.35, aLz: 0.05, aRx: -1.35, aRz: -0.05, lean: 0.06, browTilt: 0.12 });
       break;
-    case "nervous":
-      jitter = Math.sin(t * 19) * 0.008 + Math.sin(t * 31) * 0.004;
-      glance = Math.sin(t * 0.9) > 0.6 ? 0.5 : Math.sin(t * 0.9) < -0.7 ? -0.4 : 0;
-      browLift = 0.018;
-      browTilt = -0.25;
+    case "farrukh:nervous": // smoothing the same corner of a rug
+      Object.assign(p, { aRx: -1.15, aRz: -0.2 + Math.sin(t * 4) * 0.25, browLift: 0.015, glance: Math.sin(t * 0.8) > 0.7 ? 0.4 : 0 });
       break;
-    case "irritated":
-      lean = 0.13;
-      browTilt = 0.45;
-      armIn = 0.5;
+    case "farrukh:irritated": // tugs at the beard, hard
+      Object.assign(p, { aRx: -2.1 + Math.abs(Math.sin(t * 7)) * 0.25, aRz: -0.4, lean: 0.12, browTilt: 0.45 });
       break;
+    // Zaria: saffron, jars and rings.
+    case "zaria:relaxed": // sifts threads through her fingers
+      Object.assign(p, { aLx: -1.0 + Math.sin(t * 2.2) * 0.08, aLz: 0.15, sway: Math.sin(t * 1.3) * 0.03 });
+      break;
+    case "zaria:firm": // snaps a jar lid shut
+      Object.assign(p, CROSSED, { browTilt: 0.15, lean: -0.04 });
+      break;
+    case "zaria:nervous": // drums her rings against a jar
+      Object.assign(p, { aRx: -1.1 + Math.sin(t * 15) * 0.07, aRz: -0.1, browLift: 0.018, browTilt: -0.25, jitter: Math.sin(t * 19) * 0.006 });
+      break;
+    case "zaria:irritated": // stops sifting, eyes narrowed
+      Object.assign(p, CROSSED, { lean: 0.14, browTilt: 0.5, headTilt: 0.12 });
+      break;
+    // Tobin: lamps, cloth and spectacles.
+    case "tobin:relaxed": // polishes a lamp, humming
+      Object.assign(p, { aRx: -1.0, aRz: -0.15 + Math.sin(t * 5) * 0.18, sway: Math.sin(t * 1.0) * 0.035, headTilt: Math.sin(t * 0.9) * 0.05 });
+      break;
+    case "tobin:firm": // puts the cloth down: arms still at the sides
+      Object.assign(p, { browTilt: 0.1, lean: -0.03 });
+      break;
+    case "tobin:nervous": // pushes spectacles up the nose, twice
+      if (pulse(t, 2.4, 0.5) || pulse(t + 0.7, 2.4, 0.4)) Object.assign(p, { aRx: -2.55, aRz: -0.55 });
+      Object.assign(p, { browLift: 0.02, glance: Math.sin(t * 1.1) > 0.6 ? -0.35 : 0 });
+      break;
+    case "tobin:irritated": // snuffs out the little lamp
+      Object.assign(p, CROSSED, { lean: 0.1, browTilt: 0.4 });
+      break;
+    default:
+      p.sway = Math.sin(t * 1.1) * 0.03;
   }
-  m.body.rotation.x = lerp(m.body.rotation.x, lean, k);
-  m.body.rotation.z = lerp(m.body.rotation.z, sway, k);
-  m.body.position.x = jitter;
+  return p;
+}
+
+function animateMerchant(m: Merchant, t: number, dt: number, now: number) {
+  const k = Math.min(1, dt * 6);
+  const p = poseFor(m.style, m.tell, t);
+  m.body.rotation.x = lerp(m.body.rotation.x, p.lean, k);
+  m.body.rotation.z = lerp(m.body.rotation.z, p.sway, k);
+  m.body.position.x = p.jitter;
   m.body.position.y = Math.sin(t * 1.8) * 0.008;
-  m.head.rotation.y = lerp(m.head.rotation.y, glance, Math.min(1, dt * 3));
-  // Arms: hang at the sides, or cross in front.
-  m.armL.rotation.x = lerp(m.armL.rotation.x, -armIn * 1.25, k);
-  m.armR.rotation.x = lerp(m.armR.rotation.x, -armIn * 1.25, k);
-  m.armL.rotation.z = lerp(m.armL.rotation.z, armIn ? 0.75 : -0.12, k);
-  m.armR.rotation.z = lerp(m.armR.rotation.z, armIn ? -0.75 : 0.12, k);
-  m.browL.rotation.z = lerp(m.browL.rotation.z, -browTilt, k);
-  m.browR.rotation.z = lerp(m.browR.rotation.z, browTilt, k);
-  m.browL.position.y = m.browR.position.y = lerp(m.browL.position.y, 0.085 + browLift, k);
+  m.head.rotation.y = lerp(m.head.rotation.y, p.glance, Math.min(1, dt * 3));
+  m.head.rotation.z = lerp(m.head.rotation.z, p.headTilt, k);
+  m.armL.rotation.x = lerp(m.armL.rotation.x, p.aLx, k);
+  m.armL.rotation.z = lerp(m.armL.rotation.z, p.aLz, k);
+  m.armR.rotation.x = lerp(m.armR.rotation.x, p.aRx, k);
+  m.armR.rotation.z = lerp(m.armR.rotation.z, p.aRz, k);
+  m.browL.rotation.z = lerp(m.browL.rotation.z, -p.browTilt, k);
+  m.browR.rotation.z = lerp(m.browR.rotation.z, p.browTilt, k);
+  m.browL.position.y = m.browR.position.y = lerp(m.browL.position.y, 0.085 + p.browLift, k);
   // Talking: mouth flaps + a little head bob.
   const talking = now < m.talkUntil;
   m.mouth.scale.y = talking ? 1 + Math.abs(Math.sin(t * 16)) * 3.5 : lerp(m.mouth.scale.y, 1, k);

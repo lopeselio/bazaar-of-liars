@@ -11,6 +11,7 @@
  */
 import {
   acceptAsk,
+  callBluff,
   holdReply,
   openHaggle,
   respond,
@@ -119,6 +120,7 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
     try {
       if (move.kind === "leave") left = true;
       else if (move.kind === "accept") decision = acceptAsk(state);
+      else if (move.kind === "call") decision = callBluff(state);
       else if (move.kind === "offer") decision = respond(state, toPlayerMove(move));
       else decision = holdReply(state);
     } catch (e) {
@@ -128,20 +130,28 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
     add(`t${i}.decision`, `${n}: decision was made by the rules engine (replay matches)`, same(decision, t.decision));
 
     if (decision) {
-      if (decision.price < secret.floor) add(`t${i}.floor`, `${n}: price is at or above the floor`, false);
+      const beyond = secret.side === "buy" ? decision.price > secret.floor : decision.price < secret.floor;
+      if (beyond) add(`t${i}.floor`, `${n}: price respects the merchant's secret limit`, false);
       const sys = t.speech ? systemOf(t.speech.requestBody) : "";
       add(`t${i}.sp.sig`, `${n}: merchant's line is TEE-signed`, sigOk(t.speech));
       add(`t${i}.sp.bound`, `${n}: the signed request was for this haggle, its committed need and this decision`, sys.includes(haggleLine(b.commitment)) && sys.includes(needLine(secret)) && sys.includes(decisionLine(decision)));
       add(`t${i}.sp.nofloor`, `${n}: the model was never told the floor`, !promptShowsFloor(sys, secret.floor));
       const offer = move.kind === "offer" ? move.price : undefined;
-      add(`t${i}.sp.display`, `${n}: shown text = signed text with only the engine's numbers filled in`, t.speech !== null && present(contentOf(t.speech.responseBody), decision, offer) === t.display);
+      add(`t${i}.sp.display`, `${n}: shown text = signed text with only the engine's numbers filled in`, t.speech !== null && present(contentOf(t.speech.responseBody), decision, offer, secret.side) === t.display);
     }
   });
 
   // 4. Outcome
   const status = left ? "left" : state.status;
   add("outcome", "Outcome matches the replay", status === b.outcome.status && (state.dealPrice ?? null) === b.outcome.dealPrice);
-  if (state.dealPrice !== undefined) add("floor", `Deal price ${state.dealPrice} is at or above the secret floor ${secret.floor}`, state.dealPrice >= secret.floor);
+  if (state.dealPrice !== undefined)
+    add(
+      "floor",
+      secret.side === "buy"
+        ? `Deal price ${state.dealPrice} is at or below the merchant's secret ceiling ${secret.floor}`
+        : `Deal price ${state.dealPrice} is at or above the secret floor ${secret.floor}`,
+      secret.side === "buy" ? state.dealPrice <= secret.floor : state.dealPrice >= secret.floor,
+    );
 
   // 5. Onchain: the commitment was posted before the first reply, and the contract settled the same reveal.
   if (b.chain && opts.chain !== false) await verifyOnchain(b, b.chain, opts.chain ?? nearReader, add);
@@ -149,7 +159,7 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
 }
 
 const sameSecret = (a: MerchantSecret, b: MerchantSecret) =>
-  (["merchantId", "goodId", "floor", "need", "seed", "listPrice"] as const).every((k) => a[k] === b[k]);
+  (["side", "merchantId", "goodId", "floor", "need", "seed", "listPrice", "grudge", "loyalty"] as const).every((k) => a[k] === b[k]);
 
 /** NEAR AI's `created` (unix seconds) is inside the TEE-signed response body. */
 const createdOf = (responseBody: string): number | undefined => {
@@ -167,8 +177,14 @@ async function verifyOnchain(b: ProofBundle, c: ChainRecord, reader: ChainReader
   }
   add(
     "chain.commit",
-    `Commitment is onchain in ${c.contractId}, for this merchant and good`,
-    !!h && h.commitment === b.commitment && h.merchant_id === b.merchant.id && h.good_id === b.reveal.secret.goodId,
+    `Commitment is onchain in ${c.contractId}, for this merchant, good, side and the merchant's onchain memory of you`,
+    !!h &&
+      h.commitment === b.commitment &&
+      h.merchant_id === b.merchant.id &&
+      h.good_id === b.reveal.secret.goodId &&
+      h.side === b.reveal.secret.side &&
+      h.grudge === b.reveal.secret.grudge &&
+      h.loyalty === b.reveal.secret.loyalty,
     h ? undefined : "haggle not found onchain",
   );
   if (!h) return;

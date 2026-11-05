@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { Wallet } from "ethers";
-import { MERCHANTS } from "@bazaar/core";
+import { MERCHANTS, type PlayerMemory, type Side } from "@bazaar/core";
 import { sha256Hex, type ChatSignature } from "@bazaar/verify";
 import { HaggleSession, verifyBundle, type ChainReader, type Ledger, type OnchainHaggle, parseMove, present, quickMove, wordsToNumber, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
 
@@ -55,8 +55,8 @@ const fakeAttestor: Attestor = {
   },
 };
 
-async function playScript(lines: string[], seed = 1234) {
-  const s = new HaggleSession(fakeLlm(), fakeAttestor, MODEL, MERCHANTS[2], seed);
+async function playScript(lines: string[], seed = 1234, side: Side = "sell", merchant = MERCHANTS[2], memory?: PlayerMemory) {
+  const s = new HaggleSession(fakeLlm(), fakeAttestor, MODEL, merchant, seed, undefined, side, memory);
   await s.open();
   for (const l of lines) if (s.status === "open") await s.turn(l);
   return s.bundle();
@@ -119,8 +119,8 @@ describe("parsing and presentation", () => {
   it("only the engine's numbers (and the player's offer) reach the player", () => {
     const d = { action: "counter" as const, price: 30, tell: "relaxed" as const, statedFloor: 25 };
     expect(present("{OFFER}? My floor is 21. {PRICE}, no less than {CLAIM}.", d, 12)).toBe("12? My floor is …. 30, no less than 25.");
-    expect(present("Deal for sixty-two, friend!", d)).toBe("Deal for …, friend! [30 coins]");
-    expect(present("Hmm, no.", d)).toBe("Hmm, no. [30 coins]");
+    expect(present("Deal for sixty-two, friend!", d)).toBe("Deal for …, friend! [30 coins] Not a coin below 25.");
+    expect(present("Hmm, no.", d)).toBe("Hmm, no. [30 coins] Not a coin below 25.");
   });
 
   it("a {CLAIM} outside a bluffing counter is blanked", () => {
@@ -216,7 +216,7 @@ function fakeChain(opts: { openDelayMs?: number } = {}) {
     contractId: "bazaar.test",
     serverId: "server.test",
     async open(a) {
-      haggles.set(a.haggleId, { player: a.player, merchant_id: a.merchantId, good_id: a.goodId, commitment: a.commitment, opened_block: 1, status: "open", price: null, secret: null, salt: null });
+      haggles.set(a.haggleId, { player: a.player, side: a.side, grudge: a.grudge, loyalty: a.loyalty, merchant_id: a.merchantId, good_id: a.goodId, commitment: a.commitment, opened_block: 1, status: "open", price: null, secret: null, salt: null });
       const tx = `tx${n++}`;
       txs.set(tx, Date.now() + (opts.openDelayMs ?? 0));
       return tx;
@@ -283,5 +283,71 @@ describe("budget", () => {
     const b = await s.bundle();
     expect(b.turns).toHaveLength(1);
     expect((await verifyBundle(b, opts)).filter((c) => !c.ok)).toEqual([]);
+  });
+});
+
+describe("bluff-calling, selling to merchants, memory", () => {
+  it("'you're lying' is parsed locally as a call", () => {
+    expect(quickMove("You're lying!")).toEqual({ kind: "call" });
+    expect(quickMove("liar")).toEqual({ kind: "call" });
+    expect(quickMove("I'm not bluffing")).toBeNull();
+  });
+
+  it("a haggle with a called bluff verifies end to end", async () => {
+    // Farrukh bluffs a lot; find a seed where a claim appears, then call it.
+    for (let seed = 1; seed < 400; seed++) {
+      const s = new HaggleSession(fakeLlm(), fakeAttestor, MODEL, MERCHANTS[0], seed);
+      await s.open();
+      for (let i = 0; i < 6 && s.status === "open" && s.claim === undefined; i++) await s.turn(String(30 + i * 4));
+      if (s.claim === undefined || s.status !== "open") continue;
+      const r = await s.turn("You're lying!");
+      expect(r.decision?.call).toMatch(/caught|honest/);
+      if (s.status === "open") await s.turn("take");
+      const b = await s.bundle();
+      expect((await verifyBundle(b, opts)).filter((c) => !c.ok)).toEqual([]);
+      // The model is told THAT it makes a claim, never whether the claim is true.
+      for (const t of b.turns) {
+        const line = (JSON.parse(t.speech?.requestBody ?? '{"messages":[{"content":""}]}').messages[0].content as string).split("\n").find((l) => l.startsWith("DECISION:"));
+        if (line) expect(Object.keys(JSON.parse(line.slice(10))).sort()).toEqual(expect.arrayContaining(["action", "claim", "tell"]));
+        if (line) expect(line).not.toMatch(/truth|lie|floor|ceiling/);
+      }
+      return;
+    }
+    throw new Error("no claim found");
+  });
+
+  it("selling a good to a merchant verifies end to end, and never pays above the ceiling", async () => {
+    const b = await playScript(["I want 60 for it", "55", "take"], 99, "buy", MERCHANTS[1]);
+    expect(b.reveal.secret.side).toBe("buy");
+    if (b.outcome.dealPrice !== null) expect(b.outcome.dealPrice).toBeLessThanOrEqual(b.reveal.secret.floor);
+    expect((await verifyBundle(b, opts)).filter((c) => !c.ok)).toEqual([]);
+  });
+
+  it("memory is committed and replayed", async () => {
+    const b = await playScript(["10", "take"], 1234, "sell", MERCHANTS[2], { lowballs: 2, deals: 1 });
+    expect(b.reveal.secret.grudge).toBe(2);
+    expect(b.reveal.secret.loyalty).toBe(1);
+    expect((await verifyBundle(b, opts)).filter((c) => !c.ok)).toEqual([]);
+    const tampered = structuredClone(b);
+    tampered.reveal.secret.grudge = 0;
+    expect((await verifyBundle(tampered, opts)).filter((c) => !c.ok).map((c) => c.id)).toContain("commitment");
+  });
+
+  it("frames a buying merchant's claim as a maximum", () => {
+    const d = { action: "counter" as const, price: 40, tell: "relaxed" as const, statedFloor: 45 };
+    expect(present("{PRICE}. {CLAIM}.", d, undefined, "buy")).toBe("40. Not above 45.");
+    expect(present("I can pay no more than {CLAIM}.", d, undefined, "buy")).toBe("I can pay no more than 45. [40 coins]");
+  });
+});
+
+describe("claim presentation", () => {
+  const d = { action: "counter" as const, price: 86, tell: "firm" as const, statedFloor: 57 };
+  it("doesn't double-frame a claim the model already framed", () => {
+    expect(present("{PRICE}. {CLAIM} is my absolute limit.", d)).toBe("86. 57 is my absolute limit.");
+    expect(present("{CLAIM} is the lowest I go. {PRICE}.", d)).toBe("57 is the lowest I go. 86.");
+  });
+  it("always shows a claim the player could call", () => {
+    expect(present("*sighs* {PRICE}.", d)).toBe("*sighs* 86. Not a coin below 57.");
+    expect(present("*sighs* {PRICE}.", { ...d, price: 40, statedFloor: 74 }, undefined, "buy")).toBe("*sighs* 40. I can't pay more than 74.");
   });
 });

@@ -905,3 +905,174 @@ details summary {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- v2: choices, bluff-calling, memory, days, leaderboard ---------- */
+.day {
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+}
+.day:empty {
+  display: none;
+}
+.day b {
+  color: var(--saffron);
+}
+.memory {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+  max-width: 55%;
+}
+.memory b {
+  color: var(--parchment);
+}
+.memory.grudge b {
+  color: var(--crimson);
+}
+.memory.loyal b {
+  color: var(--verified);
+}
+.choose {
+  display: grid;
+  gap: 10px;
+  padding: 4px 18px 12px;
+}
+.choose:empty {
+  display: none;
+}
+.choose button {
+  text-align: left;
+  border: 1px solid var(--line);
+  background: rgba(244, 230, 204, 0.05);
+  border-radius: 14px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.choose button:hover:not(:disabled) {
+  border-color: var(--saffron);
+  background: rgba(232, 163, 61, 0.08);
+}
+.choose button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.choose strong {
+  display: block;
+  font-family: var(--display);
+  font-size: 18px;
+}
+.choose span {
+  font-size: 13px;
+  color: var(--muted);
+}
+.chip.call {
+  border-color: rgba(196, 82, 59, 0.6);
+  color: #ffb3a3;
+  animation: beckon 1.6s ease-in-out infinite;
+}
+.chip.call:hover:not(:disabled) {
+  border-color: var(--crimson);
+  background: rgba(196, 82, 59, 0.18);
+}
+@keyframes beckon {
+  50% {
+    box-shadow: 0 0 0 4px rgba(196, 82, 59, 0.15);
+  }
+}
+.sys.caught {
+  color: var(--verified);
+  font-weight: 600;
+}
+.sys.honest {
+  color: var(--crimson);
+  font-weight: 600;
+}
+.bluffs li.truth {
+  border-left-color: var(--verified);
+}
+.bluffs li.truth b {
+  color: var(--verified);
+}
+.bluffs .tag {
+  display: inline-block;
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 7px;
+  margin-left: 4px;
+  color: var(--muted);
+}
+.tells {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+.tells:empty {
+  display: none;
+}
+.tells h4 {
+  margin: 0 0 6px;
+  font: 600 11px var(--body);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tells ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tells li {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px 9px;
+}
+.tells li b {
+  font-variant-numeric: tabular-nums;
+}
+.sundown .facts {
+  margin: 14px 0 18px;
+}
+.lb-title {
+  font: 600 14px var(--body);
+  margin: 0 0 8px;
+}
+.lb-title span {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+.leaders {
+  margin: 0 0 18px;
+  padding-left: 22px;
+  display: grid;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.leaders li.me {
+  color: var(--saffron);
+  font-weight: 600;
+}
+.leaders li span {
+  float: right;
+}
+.leaders:empty::before {
+  content: "No one has beaten the starting purse yet. Be the first.";
+  color: var(--muted);
+  font-size: 13px;
+  margin-left: -22px;
+}
+#board .intro-card,
+.sundown {
+  width: min(460px, 100%);
+}
+@media (max-width: 760px) {
+  #traders,
+  .day {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+}
