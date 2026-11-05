@@ -25,6 +25,8 @@ export interface ChatRequest {
   chat_template_kwargs: { enable_thinking: false };
 }
 
+class RetryableError extends Error {}
+
 export class NearAiClient {
   constructor(private apiKey: string) {}
 
@@ -32,13 +34,33 @@ export class NearAiClient {
     return { Authorization: `Bearer ${this.apiKey}`, "Accept-Encoding": "identity", ...extra };
   }
 
-  async complete(req: ChatRequest): Promise<{ call: SignedCall; content: string }> {
+  /**
+   * One retry on a timeout or 5xx. Only the call that succeeds ends up in the bundle, and
+   * each one is signed on its own, so a retry can't weaken the proof.
+   */
+  async complete(req: ChatRequest, timeoutMs = 20_000): Promise<{ call: SignedCall; content: string }> {
+    try {
+      return await this.completeOnce(req, timeoutMs);
+    } catch (e) {
+      if (!(e instanceof RetryableError)) throw e;
+      return await this.completeOnce(req, timeoutMs * 1.5);
+    }
+  }
+
+  private async completeOnce(req: ChatRequest, timeoutMs: number): Promise<{ call: SignedCall; content: string }> {
     const requestBody = JSON.stringify(req);
-    const res = await fetch(`${NEARAI_API}/v1/chat/completions`, {
-      method: "POST",
-      headers: this.headers({ "Content-Type": "application/json", "x-no-aliasing": "true" }),
-      body: requestBody,
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${NEARAI_API}/v1/chat/completions`, {
+        method: "POST",
+        headers: this.headers({ "Content-Type": "application/json", "x-no-aliasing": "true" }),
+        body: requestBody,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      throw new RetryableError(`completion failed: ${(e as Error).message}`);
+    }
+    if (res.status >= 500) throw new RetryableError(`completion HTTP ${res.status}`);
     const responseBody = await res.text();
     if (!res.ok) throw new Error(`completion HTTP ${res.status}: ${responseBody.slice(0, 200)}`);
     const json = JSON.parse(responseBody);

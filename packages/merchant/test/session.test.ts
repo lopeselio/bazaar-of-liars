@@ -272,3 +272,16 @@ describe("onchain commit + settle", () => {
     expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok).map((c) => c.id)).toContain("chain.reveal");
   });
 });
+
+describe("budget", () => {
+  it("refuses an unaffordable offer without recording it", async () => {
+    const s = new HaggleSession(fakeLlm(), fakeAttestor, MODEL, MERCHANTS[2], 1234);
+    await s.open();
+    const r = await s.turn("I'll give you 50", 20);
+    expect(r.refused).toEqual({ reason: "budget", budget: 20, price: 50 });
+    await s.turn("take", 1000);
+    const b = await s.bundle();
+    expect(b.turns).toHaveLength(1);
+    expect((await verifyBundle(b, opts)).filter((c) => !c.ok)).toEqual([]);
+  });
+});

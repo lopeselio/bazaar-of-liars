@@ -127,3 +127,17 @@ export const nearReader: ChainReader = {
     };
   },
 };
+
+export interface PlayerState {
+  known: boolean;
+  coins: number;
+  goods: number[];
+}
+
+/** Keyless read of a player's coins and goods from the contract. */
+export async function readPlayer(network: Network, contractId: string, player: string, goodIds: string[]): Promise<PlayerState> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  // Optimistic finality: the UI should reflect a deal the moment it executes.
+  const st = await near.view<PlayerState>(contractId, "player_state", { player, good_ids: goodIds }, { finality: "optimistic" });
+  return st ?? { known: false, coins: 0, goods: goodIds.map(() => 0) };
+}

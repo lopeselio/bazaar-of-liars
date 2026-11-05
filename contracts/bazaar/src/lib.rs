@@ -78,6 +78,15 @@ pub struct Stats {
     pub unrevealed: u64,
 }
 
+#[near(serializers = [json])]
+pub struct PlayerState {
+    /// False until the player's first haggle (which grants `STARTER_COINS`).
+    pub known: bool,
+    pub coins: u64,
+    /// Count of each requested good, in the order asked.
+    pub goods: Vec<u32>,
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Bazaar {
@@ -248,6 +257,16 @@ impl Bazaar {
         self.goods.get(&format!("{player}#{good_id}")).copied().unwrap_or(0)
     }
 
+    /// Everything the game UI needs about a player in one call. At most 16 goods.
+    pub fn player_state(&self, player: AccountId, good_ids: Vec<String>) -> PlayerState {
+        require!(good_ids.len() <= 16, "at most 16 goods");
+        PlayerState {
+            known: self.coins.contains_key(&player),
+            coins: self.coins_of(player.clone()),
+            goods: good_ids.into_iter().map(|g| self.goods_of(player.clone(), g)).collect(),
+        }
+    }
+
     pub fn earnings_of(&self, merchant_id: String) -> u64 {
         self.earnings.get(&merchant_id).copied().unwrap_or(0)
     }
@@ -316,6 +335,20 @@ mod tests {
         assert_eq!(c.earnings_of("tobin".into()), 32);
         assert_eq!(c.stats().deals, 1);
         assert!(get_logs().iter().any(|l| l.starts_with("EVENT_JSON:") && l.contains("haggle_closed")));
+    }
+
+    #[test]
+    fn player_state_tells_new_from_broke() {
+        let mut c = setup();
+        let p = acc("player.testnet");
+        assert!(!c.player_state(p.clone(), vec!["lamp".into()]).known);
+        open(&mut c, "h1");
+        let (s, salt, _) = tobin();
+        c.close_haggle("h1".into(), s, salt, Some(32));
+        let st = c.player_state(p, vec!["lamp".into(), "rug".into()]);
+        assert!(st.known);
+        assert_eq!(st.coins, STARTER_COINS - 32);
+        assert_eq!(st.goods, vec![1, 0]);
     }
 
     #[test]

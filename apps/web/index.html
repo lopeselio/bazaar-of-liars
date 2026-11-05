@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Bazaar of Liars</title>
+    <meta name="description" content="Haggle with AI merchants who bluff. Every bluff is provably fair: secrets sealed on NEAR, every word signed in a TEE." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='28' fill='%23e8a33d'/><text x='32' y='42' font-size='30' text-anchor='middle' font-family='Georgia' fill='%231a120d'>B</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <canvas id="scene" aria-label="A desert bazaar at dusk with three merchant stalls"></canvas>
+    <div id="labels" aria-hidden="false"></div>
+
+    <header class="hud">
+      <div class="brand">
+        <h1>Bazaar of Liars</h1>
+        <p>Every bluff is provably fair</p>
+      </div>
+      <div class="hud-right">
+        <button class="chip" id="how" type="button">How it's fair</button>
+        <div class="purse" id="purse" title="Your coins and goods, read from the NEAR contract">
+          <span class="coin" aria-hidden="true"></span><strong id="coins">–</strong>
+          <span id="goods" class="goods"></span>
+        </div>
+      </div>
+    </header>
+
+    <section class="intro" id="intro" role="dialog" aria-modal="true" aria-labelledby="intro-title" hidden>
+      <div class="intro-card">
+        <p class="eyebrow">A haggling game</p>
+        <h2 id="intro-title">The merchants lie.<br />The bazaar can't.</h2>
+        <ol>
+          <li><strong>Every merchant has a secret</strong>: the lowest price they'll really take, and what they need. They'll bluff about it.</li>
+          <li><strong>The secret is sealed on NEAR</strong> before you say a word, so it can't change once you start.</li>
+          <li><strong>Every word comes from an AI in a verified enclave</strong> (TEE), and a rules engine, not the AI, decides every price.</li>
+        </ol>
+        <p class="intro-foot">When the haggle ends, the secret is revealed onchain. See how much you left on the table, and catch every bluff.</p>
+        <button class="btn primary" id="enter" type="button">Enter the bazaar</button>
+        <p class="hint">Click a stall to start. You get 200 coins.</p>
+      </div>
+    </section>
+
+    <aside class="panel" id="panel" aria-label="Haggle" hidden>
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow" id="p-good"></p>
+          <h2 id="p-name"></h2>
+        </div>
+        <button class="icon-btn" id="p-close" type="button" aria-label="Walk away">✕</button>
+      </div>
+      <div class="ask-row">
+        <div class="ask"><span>Asking</span><strong id="p-ask">–</strong></div>
+        <div class="tell" id="p-tell" data-tell="relaxed"><span class="dot"></span><span id="p-tell-text">At ease</span></div>
+      </div>
+      <div class="seal" id="p-seal"></div>
+      <ol class="steps" id="p-steps" aria-live="polite"></ol>
+      <div class="log" id="p-log" aria-live="polite"></div>
+      <form class="composer" id="p-form" autocomplete="off">
+        <div class="quick">
+          <button type="button" class="chip" id="q-take">Take it</button>
+          <button type="button" class="chip" id="q-leave">Walk away</button>
+        </div>
+        <div class="input-row">
+          <label class="sr-only" for="p-input">Your offer or reply</label>
+          <input id="p-input" maxlength="300" placeholder="Make an offer, or talk them down…" disabled />
+          <button class="btn primary" id="p-send" type="submit" disabled>Say</button>
+        </div>
+      </form>
+    </aside>
+
+    <section class="reveal" id="reveal" role="dialog" aria-modal="true" aria-labelledby="r-title" hidden>
+      <div class="card" id="r-card">
+        <div class="face front">
+          <div class="wax" aria-hidden="true">✦</div>
+          <p class="eyebrow">Sealed on NEAR</p>
+          <h2>The merchant's secret</h2>
+        </div>
+        <div class="face back">
+          <p class="eyebrow" id="r-eyebrow">The reveal</p>
+          <h2 id="r-title"></h2>
+          <div class="facts">
+            <div><span>Real floor</span><strong id="r-floor"></strong></div>
+            <div><span>Their need</span><strong id="r-need"></strong></div>
+            <div><span id="r-paid-label">You paid</span><strong id="r-paid"></strong></div>
+          </div>
+          <p class="verdict" id="r-verdict"></p>
+          <ul class="bluffs" id="r-bluffs"></ul>
+          <button class="badge" id="r-badge" type="button"></button>
+          <div class="r-actions">
+            <button class="btn" id="r-download" type="button">Download proof</button>
+            <button class="btn primary" id="r-back" type="button">Back to the bazaar</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="drawer" id="verify" role="dialog" aria-modal="true" aria-labelledby="v-title" hidden>
+      <div class="drawer-head">
+        <h2 id="v-title">Fair-play evidence</h2>
+        <button class="icon-btn" id="v-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="drawer-body" id="v-body"></div>
+    </aside>
+
+    <div class="toast" id="toast" role="status" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

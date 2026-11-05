@@ -61,7 +61,7 @@ Players never see wallets or gas:
 ## Architecture
 
 ```
-apps/web        Three.js bazaar scene + chat haggle UI (threejs-game-skills scaffold)
+apps/web        Three.js bazaar scene + chat haggle UI (Vite; primitives + canvas textures, no external assets)
 apps/server     Haggle orchestrator: commit, NEAR AI Cloud calls, signature capture, settle
 packages/core   rules.ts (accept/reject, mood, memory), secrets, commitment hashing — pure, tested
 packages/verify Offline verifier for a haggle transcript bundle (also used by the UI badge)

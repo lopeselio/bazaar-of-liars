@@ -51,6 +51,8 @@ export interface TurnResult {
   decision: MerchantReply | null;
   text: string;
   status: HaggleState["status"] | "left";
+  /** Set when the turn was refused before the merchant heard it (nothing recorded, nothing changed). */
+  refused?: { reason: "budget"; budget: number; price: number };
 }
 
 export class HaggleSession {
@@ -111,7 +113,11 @@ export class HaggleSession {
     );
   }
 
-  async turn(playerText: string): Promise<TurnResult> {
+  /**
+   * @param budget coins the player holds. An offer or acceptance above it is refused before the
+   *   rules engine sees it, so the merchant can never agree a deal the contract would reject.
+   */
+  async turn(playerText: string, budget?: number): Promise<TurnResult> {
     if (this.status !== "open") throw new Error(`haggle is ${this.status}`);
     const askBefore = this.state.ask;
 
@@ -123,6 +129,13 @@ export class HaggleSession {
       this.sign(ex.call);
       extraction = ex.call;
       move = parseMove(ex.content, playerText);
+    }
+
+    if (budget !== undefined) {
+      const price = move.kind === "offer" ? move.price : move.kind === "accept" ? askBefore : undefined;
+      if (price !== undefined && price > budget) {
+        return { move, decision: null, text: "", status: this.status, refused: { reason: "budget", budget, price } };
+      }
     }
 
     // 2. The rules engine decides. The LLM has no say.

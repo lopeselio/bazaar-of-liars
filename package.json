@@ -11,6 +11,9 @@
     "verify:model": "pnpm --filter @bazaar/verify verify:model",
     "haggle:llm": "pnpm --filter @bazaar/merchant haggle:llm",
     "verify:haggle": "pnpm --filter @bazaar/merchant verify:haggle",
-    "test:contract": "cargo test --manifest-path contracts/bazaar/Cargo.toml"
+    "test:contract": "cargo test --manifest-path contracts/bazaar/Cargo.toml",
+    "dev": "pnpm --parallel --filter @bazaar/server --filter @bazaar/web dev",
+    "build": "pnpm --filter @bazaar/web build",
+    "start": "pnpm --filter @bazaar/server start"
   }
 }

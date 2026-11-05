@@ -21,11 +21,23 @@ Day 1. Done so far:
 - LLM-voiced merchants with TEE-signed replies, plus a proof bundle and an independent verifier, all working live;
 - the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), **live on testnet at [`bazaar-liars.testnet`](https://testnet.nearblocks.io/address/bazaar-liars.testnet)**. Every LLM haggle commits there before the first message and reveals there when it ends.
 
-There's no web UI yet. The design is in [DESIGN.md](./DESIGN.md).
+- the web game: a Three.js bazaar where you haggle in a chat panel, then get a reveal card and the full fair-play evidence. The design is in [DESIGN.md](./DESIGN.md).
 
-## Try it
+## Play it
 
-You need Node 22 or later and pnpm.
+You need Node 22 or later, pnpm, and a NEAR AI Cloud key in `.env` (see step 4 below).
+
+Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173. You should see a desert bazaar at dusk with three stalls.
+
+1. Click **Zaria the Spice-Seller**. The panel shows two steps: *Verifying the merchant's AI enclave (Intel TDX + NVIDIA)*, then *Sealing the merchant's secret on NEAR*. Then you see her asking price and a **🔒 Secret sealed on NEAR** link to the commitment transaction.
+2. Type `This saffron looks dull. I'll give you 35`. She answers in character with a counter-offer, and the asking price updates. Her mood chip and body language follow the rules engine's tell: at ease, arms folded, fidgeting, or losing patience.
+3. Click **Take it**, or keep haggling. The reveal card flips to show her real floor, what she needed, how much you left on the table, and every bluff she made, with a **✓ Fair play verified** badge.
+4. Click the badge. The evidence drawer lists the TEE attestation checks, the commitment and reveal transactions on testnet, and every replay check. **Download proof** saves the bundle, which you can check with `pnpm verify:haggle <file>`.
+5. Your coins and goods (top right) are read from the `bazaar-liars.testnet` contract, so they persist between visits.
+
+For a hosted build, run `pnpm build && pnpm start`. The server serves the game on port 8787.
+
+## Try the pieces
 
 1. Run `pnpm install`, then `pnpm test`. You should see 9 core tests pass (42 across the repo), including a 3,000-haggle fuzz test showing a merchant never deals below its secret floor.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer (e.g. `40`), or claim a competitor's price (`40 saw 35`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
@@ -55,11 +67,11 @@ You need Node 22 or later and pnpm.
    - only the game server can open or close a haggle;
    - if the server never reveals, anyone can expire the haggle after about an hour, and it's counted publicly in `stats().unrevealed`.
 
-## Repo layout (planned)
+## Repo layout
 
 ```
-apps/web         Three.js bazaar + chat haggle UI
-apps/server      haggle orchestrator (commit → NEAR AI Cloud → settle)
+apps/web         Three.js bazaar + chat haggle UI (Vite)
+apps/server      haggle API: attest → commit onchain → signed turns → reveal + settle
 packages/core    rules engine, secrets, commitments
 packages/verify  offline fair-play verifier
 contracts/       bazaar contract (Rust, near-sdk)
