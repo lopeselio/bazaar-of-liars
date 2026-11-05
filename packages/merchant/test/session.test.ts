@@ -183,6 +183,13 @@ describe("claims and competitor prices", () => {
     expect(present("Not below {CLAIM}, so {PRICE}.", d)).toBe("Not below 64, so 66.");
   });
 
+  it("a complaint is not a goodbye, even if the model says leave", () => {
+    const leave = '{"intent":"leave","price":null,"competitorPrice":null}';
+    expect(parseMove(leave, "it's too expensive for a Rug")).toEqual({ kind: "talk" });
+    expect(parseMove(leave, "forget it, I'm going elsewhere")).toEqual({ kind: "leave" });
+    expect(parseMove(leave, "bye")).toEqual({ kind: "leave" });
+  });
+
   it("a competitor claim without an offer counts as an offer at that price", () => {
     expect(parseMove('{"intent":"talk","price":null,"competitorPrice":60}', "they sell it for 60")).toEqual({
       kind: "offer",
