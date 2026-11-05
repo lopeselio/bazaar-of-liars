@@ -18,9 +18,10 @@ Players never see a wallet or pay gas.
 Day 1. Done so far:
 - the deterministic rules engine and secret commitments, with a terminal haggle and a balance simulator;
 - the NEAR AI Cloud attestation verifier;
-- LLM-voiced merchants with TEE-signed replies, plus a proof bundle and an independent verifier, all working live.
+- LLM-voiced merchants with TEE-signed replies, plus a proof bundle and an independent verifier, all working live;
+- the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), unit-tested but not yet deployed.
 
-There's no contract and no web UI yet. The design is in [DESIGN.md](./DESIGN.md).
+There's no web UI yet, and the game doesn't call the contract yet. The design is in [DESIGN.md](./DESIGN.md).
 
 ## Try it
 
@@ -44,6 +45,13 @@ You need Node 22 or later and pnpm.
 
    You should see `✓ FAIR PLAY VERIFIED`. Edit any number in the file and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
+
+7. **Needs Rust:** run `pnpm test:contract`. You should see 15 contract tests pass, including:
+   - the contract's commitment hash matches the TypeScript one byte for byte, and the sample haggle from step 5 verifies onchain;
+   - a deal below the committed floor is rejected;
+   - a reveal with a changed floor or wrong salt is rejected;
+   - only the game server can open or close a haggle;
+   - if the server never reveals, anyone can expire the haggle after about an hour, and it's counted publicly in `stats().unrevealed`.
 
 ## Repo layout (planned)
 

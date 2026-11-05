@@ -10,6 +10,7 @@
     "check:nearai": "node --env-file=.env scripts/check-nearai.mjs",
     "verify:model": "pnpm --filter @bazaar/verify verify:model",
     "haggle:llm": "pnpm --filter @bazaar/merchant haggle:llm",
-    "verify:haggle": "pnpm --filter @bazaar/merchant verify:haggle"
+    "verify:haggle": "pnpm --filter @bazaar/merchant verify:haggle",
+    "test:contract": "cargo test --manifest-path contracts/bazaar/Cargo.toml"
   }
 }
