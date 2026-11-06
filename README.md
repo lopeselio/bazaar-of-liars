@@ -35,7 +35,7 @@ The design is in [DESIGN.md](./DESIGN.md).
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   P["Player's browser<br/>Three.js bazaar + chat<br/>guest id, no wallet"]
   subgraph AZ["Azure"]
     ING["Container Apps ingress<br/>HTTPS"]
