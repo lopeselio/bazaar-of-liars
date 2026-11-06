@@ -47,11 +47,27 @@
 //! wholesaler signs for the wage itself (`authorize_spend`), the server calls `pay_wages`, and the
 //! contract checks the player is broke and hasn't worked today. No coins are created.
 //!
+//! ## Goods are NEP-245 multi tokens (v3.5)
+//! Every good (rug, saffron, lamp) is a token of this contract, with `mt_balance_of`, `mt_supply`,
+//! `mt_token`, `mt_transfer` (1 yoctoNEAR), `mt_batch_transfer`, `mt_transfer_call` and the
+//! standard `nep245` mint / burn / transfer events for every movement. Goods in escrow (a haggle in
+//! progress, stock on a player's stall) are held by this contract's own account.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
+use near_sdk::json_types::U128;
 use near_sdk::store::{IterableMap, LookupMap};
-use near_sdk::{AccountId, BorshStorageKey, PanicOnDefault, env, near, require};
+use near_sdk::{AccountId, BorshStorageKey, Gas, PanicOnDefault, PromiseError, PromiseOrValue, env, ext_contract, near, require};
+
+/// NEP-245 receiver interface, for `mt_transfer_call`.
+#[ext_contract(ext_mt_receiver)]
+pub trait MtReceiver {
+    fn mt_on_transfer(&mut self, sender_id: AccountId, previous_owner_ids: Vec<AccountId>, token_ids: Vec<String>, amounts: Vec<U128>, msg: String) -> PromiseOrValue<Vec<U128>>;
+}
+
+const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
+const GAS_FOR_RECEIVER: Gas = Gas::from_tgas(30);
 
 /// Coins a player gets the first time they open a haggle.
 pub const STARTER_COINS: u64 = 200;
@@ -83,6 +99,7 @@ enum StorageKey {
     Cred,
     ServerXp,
     Stalls,
+    Supply,
 }
 
 #[near(serializers = [borsh, json])]
@@ -309,6 +326,44 @@ pub struct Bazaar {
     stalls: IterableMap<String, PlayerStall>,
     /// v3.3: coins burned by licence fees and street commission
     burned: u64,
+    /// v3.5: NEP-245 total supply per good
+    supply: LookupMap<String, u128>,
+}
+
+/// NEP-245 token: goods are fungible within a type, so no single owner.
+#[near(serializers = [json])]
+pub struct MtToken {
+    pub token_id: String,
+    pub owner_id: Option<AccountId>,
+}
+
+/// The v3.3 state layout (unchanged in v3.4), read once by `migrate`.
+#[near(serializers = [borsh])]
+pub struct BazaarV33 {
+    owner: AccountId,
+    server: AccountId,
+    haggles: LookupMap<String, Haggle>,
+    coins: LookupMap<AccountId, u64>,
+    goods: LookupMap<String, u32>,
+    memory: LookupMap<String, Memory>,
+    leaders: Vec<LeaderEntry>,
+    haggle_count: u64,
+    deals: u64,
+    no_deals: u64,
+    unrevealed: u64,
+    agents: LookupMap<String, Agent>,
+    agent_ids: Vec<String>,
+    agent_by_account: LookupMap<AccountId, String>,
+    cost_basis: LookupMap<String, u64>,
+    auths: LookupMap<String, Auth>,
+    investments: LookupMap<String, u64>,
+    orders: IterableMap<String, Order>,
+    income: LookupMap<String, (u64, u64)>,
+    deliveries: u64,
+    cred: LookupMap<AccountId, Cred>,
+    server_xp: LookupMap<AccountId, (u64, u64)>,
+    stalls: IterableMap<String, PlayerStall>,
+    burned: u64,
 }
 
 /// One good on a player's stall.
@@ -342,33 +397,6 @@ pub const STALL_COMMISSION_PCT: u64 = 10;
 pub const MAX_STALL_PRICE: u32 = 500;
 pub const DOCK_WAGE: u64 = 40;
 pub const BROKE_BELOW: u64 = 20;
-
-/// The v3.2 state layout, read once by `migrate`.
-#[near(serializers = [borsh])]
-pub struct BazaarV32 {
-    owner: AccountId,
-    server: AccountId,
-    haggles: LookupMap<String, Haggle>,
-    coins: LookupMap<AccountId, u64>,
-    goods: LookupMap<String, u32>,
-    memory: LookupMap<String, Memory>,
-    leaders: Vec<LeaderEntry>,
-    haggle_count: u64,
-    deals: u64,
-    no_deals: u64,
-    unrevealed: u64,
-    agents: LookupMap<String, Agent>,
-    agent_ids: Vec<String>,
-    agent_by_account: LookupMap<AccountId, String>,
-    cost_basis: LookupMap<String, u64>,
-    auths: LookupMap<String, Auth>,
-    investments: LookupMap<String, u64>,
-    orders: IterableMap<String, Order>,
-    income: LookupMap<String, (u64, u64)>,
-    deliveries: u64,
-    cred: LookupMap<AccountId, Cred>,
-    server_xp: LookupMap<AccountId, (u64, u64)>,
-}
 
 /// A player's street cred.
 #[near(serializers = [borsh, json])]
@@ -430,6 +458,12 @@ fn emit(event: &str, data: near_sdk::serde_json::Value) {
     env::log_str(&format!("EVENT_JSON:{log}"));
 }
 
+/// NEP-245 event (standard "nep245", version "1.0.0").
+fn mt_event(event: &str, data: near_sdk::serde_json::Value) {
+    let log = json!({ "standard": "nep245", "version": "1.0.0", "event": event, "data": [data] });
+    env::log_str(&format!("EVENT_JSON:{log}"));
+}
+
 fn goods_key(account: &AccountId, good: &str) -> String {
     format!("{account}#{good}")
 }
@@ -469,14 +503,23 @@ impl Bazaar {
             server_xp: LookupMap::new(StorageKey::ServerXp),
             stalls: IterableMap::new(StorageKey::Stalls),
             burned: 0,
+            supply: LookupMap::new(StorageKey::Supply),
         }
     }
 
-    /// Owner (the contract account itself): upgrade v3.2 state to v3.3, keeping everything.
+    /// Owner (the contract account itself): upgrade v3.3/v3.4 state to v3.5 (NEP-245 goods).
+    /// `supply` is each good's total across all balances, summed from the state before migrating.
+    /// Refuses while anything is in escrow, so every unit is in someone's balance.
     #[private]
     #[init(ignore_state)]
-    pub fn migrate() -> Self {
-        let old: BazaarV32 = env::state_read().unwrap_or_else(|| env::panic_str("no v3.2 state to migrate"));
+    pub fn migrate(supply: Vec<(String, U128)>) -> Self {
+        let old: BazaarV33 = env::state_read().unwrap_or_else(|| env::panic_str("no v3.3 state to migrate"));
+        require!(old.haggle_count == old.deals + old.no_deals + old.unrevealed, "close every open haggle before migrating");
+        require!(old.stalls.values().all(|st| st.listings.iter().all(|l| l.qty == 0)), "empty every stall before migrating");
+        let mut sup = LookupMap::new(StorageKey::Supply);
+        for (good, n) in supply {
+            sup.insert(good, n.0);
+        }
         Self {
             owner: old.owner,
             server: old.server,
@@ -500,8 +543,9 @@ impl Bazaar {
             deliveries: old.deliveries,
             cred: old.cred,
             server_xp: old.server_xp,
-            stalls: IterableMap::new(StorageKey::Stalls),
-            burned: 0,
+            stalls: old.stalls,
+            burned: old.burned,
+            supply: sup,
         }
     }
 
@@ -567,7 +611,7 @@ impl Bazaar {
         self.set_coins(&account, coins);
         for (good, units, cost) in stock {
             require!(is_id(&good), "good id must be [a-z0-9_-]{1,64}");
-            self.add_goods(&account, &good, i64::from(units));
+            self.mint_goods(&account, &good, units, "opening stock");
             self.cost_basis.insert(goods_key(&account, &good), u64::from(cost) * 100);
         }
         emit("agent_registered", json!({ "id": id, "name": name, "account": account, "kind": kind, "daily_cap": daily_cap, "coins": coins }));
@@ -592,6 +636,117 @@ impl Bazaar {
         require!(next <= a.daily_cap as i64, "over the agent's daily spending cap");
         a.spent_today = next.max(0) as u64;
         self.agents.insert(id.to_string(), a);
+    }
+
+    /// Move goods between balances, with the NEP-245 transfer event.
+    fn move_goods(&mut self, from: &AccountId, to: &AccountId, good: &str, qty: u32, memo: &str) {
+        if qty == 0 {
+            return;
+        }
+        self.add_goods(from, good, -i64::from(qty));
+        self.add_goods(to, good, i64::from(qty));
+        mt_event("mt_transfer", json!({ "old_owner_id": from, "new_owner_id": to, "token_ids": [good], "amounts": [qty.to_string()], "memo": memo }));
+    }
+    fn mint_goods(&mut self, to: &AccountId, good: &str, qty: u32, memo: &str) {
+        self.add_goods(to, good, i64::from(qty));
+        let s = self.supply.get(good).copied().unwrap_or(0);
+        self.supply.insert(good.to_string(), s + u128::from(qty));
+        mt_event("mt_mint", json!({ "owner_id": to, "token_ids": [good], "amounts": [qty.to_string()], "memo": memo }));
+    }
+    fn burn_goods(&mut self, from: &AccountId, good: &str, qty: u32, memo: &str) {
+        self.add_goods(from, good, -i64::from(qty));
+        let s = self.supply.get(good).copied().unwrap_or(0);
+        self.supply.insert(good.to_string(), s.saturating_sub(u128::from(qty)));
+        mt_event("mt_burn", json!({ "owner_id": from, "token_ids": [good], "amounts": [qty.to_string()], "memo": memo }));
+    }
+
+    // ---------- NEP-245: goods as multi tokens ----------
+
+    fn mt_amount(amount: U128) -> u32 {
+        require!(amount.0 > 0 && amount.0 <= u128::from(u32::MAX), "amount must be 1..=4294967295");
+        amount.0 as u32
+    }
+    fn mt_move_batch(&mut self, sender: &AccountId, receiver: &AccountId, token_ids: &[String], amounts: &[U128], approvals_given: bool, memo: Option<String>) {
+        near_sdk::assert_one_yocto();
+        require!(!approvals_given, "approvals are not supported");
+        require!(sender != receiver, "sender and receiver must differ");
+        require!(!token_ids.is_empty() && token_ids.len() == amounts.len(), "token_ids and amounts must match");
+        let memo = memo.unwrap_or_default();
+        for (t, a) in token_ids.iter().zip(amounts) {
+            require!(self.supply.contains_key(t), "unknown token");
+            let qty = Self::mt_amount(*a);
+            self.move_goods(sender, receiver, t, qty, &memo);
+        }
+    }
+
+    #[payable]
+    pub fn mt_transfer(&mut self, receiver_id: AccountId, token_id: String, amount: U128, approval: Option<(AccountId, u64)>, memo: Option<String>) {
+        let sender = env::predecessor_account_id();
+        self.mt_move_batch(&sender, &receiver_id, &[token_id], &[amount], approval.is_some(), memo);
+    }
+
+    #[payable]
+    pub fn mt_batch_transfer(&mut self, receiver_id: AccountId, token_ids: Vec<String>, amounts: Vec<U128>, approvals: Option<Vec<Option<(AccountId, u64)>>>, memo: Option<String>) {
+        let sender = env::predecessor_account_id();
+        let given = approvals.is_some_and(|a| a.iter().any(Option::is_some));
+        self.mt_move_batch(&sender, &receiver_id, &token_ids, &amounts, given, memo);
+    }
+
+    #[payable]
+    pub fn mt_transfer_call(&mut self, receiver_id: AccountId, token_id: String, amount: U128, approval: Option<(AccountId, u64)>, memo: Option<String>, msg: String) -> PromiseOrValue<Vec<U128>> {
+        self.mt_batch_transfer_call(receiver_id, vec![token_id], vec![amount], approval.map(|a| vec![Some(a)]), memo, msg)
+    }
+
+    #[payable]
+    pub fn mt_batch_transfer_call(&mut self, receiver_id: AccountId, token_ids: Vec<String>, amounts: Vec<U128>, approvals: Option<Vec<Option<(AccountId, u64)>>>, memo: Option<String>, msg: String) -> PromiseOrValue<Vec<U128>> {
+        let sender = env::predecessor_account_id();
+        let given = approvals.is_some_and(|a| a.iter().any(Option::is_some));
+        self.mt_move_batch(&sender, &receiver_id, &token_ids, &amounts, given, memo);
+        ext_mt_receiver::ext(receiver_id.clone())
+            .with_static_gas(GAS_FOR_RECEIVER)
+            .mt_on_transfer(sender.clone(), vec![sender.clone(); token_ids.len()], token_ids.clone(), amounts.clone(), msg)
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).mt_resolve_transfer(sender, receiver_id, token_ids, amounts))
+            .into()
+    }
+
+    /// NEP-245 resolve: refund whatever the receiver didn't use (all of it if the call failed).
+    /// Returns the amounts the receiver kept.
+    #[private]
+    pub fn mt_resolve_transfer(&mut self, sender_id: AccountId, receiver_id: AccountId, token_ids: Vec<String>, amounts: Vec<U128>, #[callback_result] unused: Result<Vec<U128>, PromiseError>) -> Vec<U128> {
+        let unused = match unused {
+            Ok(u) if u.len() == amounts.len() => u,
+            _ => amounts.clone(),
+        };
+        token_ids
+            .iter()
+            .zip(amounts.iter().zip(unused))
+            .map(|(t, (sent, back))| {
+                let have = u128::from(self.goods_of(receiver_id.clone(), t.clone()));
+                let refund = back.0.min(sent.0).min(have) as u32;
+                self.move_goods(&receiver_id, &sender_id, t, refund, "refund");
+                U128(sent.0 - u128::from(refund))
+            })
+            .collect()
+    }
+
+    pub fn mt_balance_of(&self, account_id: AccountId, token_id: String) -> U128 {
+        U128(u128::from(self.goods_of(account_id, token_id)))
+    }
+
+    pub fn mt_batch_balance_of(&self, account_id: AccountId, token_ids: Vec<String>) -> Vec<U128> {
+        token_ids.into_iter().map(|t| self.mt_balance_of(account_id.clone(), t)).collect()
+    }
+
+    pub fn mt_supply(&self, token_id: String) -> Option<U128> {
+        self.supply.get(&token_id).map(|s| U128(*s))
+    }
+
+    pub fn mt_batch_supply(&self, token_ids: Vec<String>) -> Vec<Option<U128>> {
+        token_ids.into_iter().map(|t| self.mt_supply(t)).collect()
+    }
+
+    pub fn mt_token(&self, token_ids: Vec<String>) -> Vec<Option<MtToken>> {
+        token_ids.into_iter().map(|t| self.supply.contains_key(&t).then_some(MtToken { token_id: t, owner_id: None })).collect()
     }
 
     fn add_goods(&mut self, account: &AccountId, good: &str, delta: i64) {
@@ -674,7 +829,7 @@ impl Bazaar {
     pub fn consume(&mut self, agent_id: String, good_id: String, qty: u32) {
         self.require_server();
         let a = self.agent(&agent_id);
-        self.add_goods(&a.account, &good_id, -i64::from(qty));
+        self.burn_goods(&a.account, &good_id, qty, "used up");
         emit("consumed", json!({ "agent": agent_id, "good_id": good_id, "qty": qty }));
     }
 
@@ -724,8 +879,7 @@ impl Bazaar {
         require!(self.agent_of(&player).is_none(), "agents don't run deliveries");
         require!(fare <= o.bounty, "fare can't exceed the bounty");
         let customer = self.agent(&o.customer);
-        self.add_goods(&player, &o.good_id, -1);
-        self.add_goods(&customer.account, &o.good_id, 1);
+        self.move_goods(&player, &customer.account, &o.good_id, 1, "delivery");
         self.add_coins(&player, (o.bounty - fare) as i64);
         if fare > 0 {
             let cab = self
@@ -825,7 +979,7 @@ impl Bazaar {
         require!(is_id(&good_id), "good id must be [a-z0-9_-]{1,64}");
         require!((1..=MAX_STALL_PRICE).contains(&price), "price must be 1..=500");
         let mut st = self.my_stall(&player);
-        self.add_goods(&player, &good_id, -i64::from(qty));
+        self.move_goods(&player, &env::current_account_id(), &good_id, qty, "onto a stall");
         match st.listings.iter_mut().find(|l| l.good_id == good_id) {
             Some(l) => {
                 l.qty += qty;
@@ -844,7 +998,7 @@ impl Bazaar {
         let l = st.listings.iter_mut().find(|l| l.good_id == good_id).unwrap_or_else(|| env::panic_str("not on your stall"));
         require!(l.qty >= qty, "not that many on your stall");
         l.qty -= qty;
-        self.add_goods(&player, &good_id, i64::from(qty));
+        self.move_goods(&env::current_account_id(), &player, &good_id, qty, "off a stall");
         self.stalls.insert(st.slot.clone(), st);
     }
 
@@ -885,7 +1039,7 @@ impl Bazaar {
         let held = u64::from(self.goods_of(auth.agent.clone(), good_id.clone()));
         let old = self.cost_basis.get(&key).copied().unwrap_or(0);
         self.cost_basis.insert(key, (old * held + price * 100) / (held + 1));
-        self.add_goods(&auth.agent, &good_id, 1);
+        self.move_goods(&env::current_account_id(), &auth.agent, &good_id, 1, "stall sale");
         emit("stall_sale", json!({ "sale_id": sale_id, "slot": slot, "owner": st.owner, "buyer": agent.id, "good_id": good_id, "price": price, "commission": commission }));
         self.stalls.insert(slot, st);
     }
@@ -895,7 +1049,7 @@ impl Bazaar {
         self.require_server();
         let st = self.my_stall(&player);
         for l in &st.listings {
-            self.add_goods(&player, &l.good_id, i64::from(l.qty));
+            self.move_goods(&env::current_account_id(), &player, &l.good_id, l.qty, "stall closed");
         }
         self.add_coins(&player, st.till as i64);
         self.stalls.remove(&st.slot);
@@ -954,11 +1108,11 @@ impl Bazaar {
                 // The merchant's goods wait here until the deal.
                 let have = self.goods_of(merchant.account.clone(), good_id.clone());
                 require!(have >= qty, "the merchant is sold out");
-                self.add_goods(&merchant.account, &good_id, -i64::from(qty));
+                self.move_goods(&merchant.account, &env::current_account_id(), &good_id, qty, "escrow");
             }
             Side::Buy => {
                 require!(qty == 1, "players sell one unit at a time");
-                self.add_goods(&player, &good_id, -1);
+                self.move_goods(&player, &env::current_account_id(), &good_id, 1, "escrow");
                 locked = escrow.unwrap_or_else(|| env::panic_str("a buying merchant must escrow coins"));
                 require!(locked > 0, "escrow must be positive");
                 require!(self.coins_of(merchant.account.clone()) >= locked, "the merchant can't afford to buy");
@@ -1034,13 +1188,13 @@ impl Bazaar {
                 }
                 self.add_coins(&player, -i64::from(price));
                 self.add_coins(&merchant.account, i64::from(price));
-                self.add_goods(&player, &h.good_id, i64::from(h.qty));
+                self.move_goods(&env::current_account_id(), &player, &h.good_id, h.qty, "deal");
             }
             (Side::Sell, None) => {
                 if let (Some(a), Some(auth)) = (&buyer_agent, &auth) {
                     self.charge_cap(&a.id, -(auth.max as i64));
                 }
-                self.add_goods(&merchant.account, &h.good_id, i64::from(h.qty));
+                self.move_goods(&env::current_account_id(), &merchant.account, &h.good_id, h.qty, "no deal");
             }
             (Side::Buy, Some(price)) => {
                 // An agent selling signed for this haggle; selling spends nothing, so release the reservation.
@@ -1051,13 +1205,13 @@ impl Bazaar {
                 require!(u64::from(price) <= h.escrow, "deal price is above the merchant's escrow");
                 self.add_coins(&player, i64::from(price));
                 self.add_coins(&merchant.account, h.escrow as i64 - i64::from(price));
-                self.add_goods(&merchant.account, &h.good_id, 1);
+                self.move_goods(&env::current_account_id(), &merchant.account, &h.good_id, 1, "deal");
             }
             (Side::Buy, None) => {
                 if let (Some(a), Some(auth)) = (&buyer_agent, &auth) {
                     self.charge_cap(&a.id, -(auth.max as i64));
                 }
-                self.add_goods(&player, &h.good_id, 1);
+                self.move_goods(&env::current_account_id(), &player, &h.good_id, 1, "no deal");
                 self.add_coins(&merchant.account, h.escrow as i64);
             }
         }
@@ -1093,10 +1247,10 @@ impl Bazaar {
         require!(env::block_height() >= h.opened_block + REVEAL_WINDOW_BLOCKS, "reveal window still open");
         let merchant = self.agent(&h.merchant_id);
         match h.side {
-            Side::Sell => self.add_goods(&merchant.account, &h.good_id, i64::from(h.qty)),
+            Side::Sell => self.move_goods(&env::current_account_id(), &merchant.account, &h.good_id, h.qty, "expired"),
             Side::Buy => {
                 let (p, g) = (h.player.clone(), h.good_id.clone());
-                self.add_goods(&p, &g, 1);
+                self.move_goods(&env::current_account_id(), &p, &g, 1, "expired");
                 self.add_coins(&merchant.account, h.escrow as i64);
             }
         }
@@ -1717,13 +1871,13 @@ mod tests {
     }
 
     #[test]
-    fn migrate_keeps_v32_state() {
+    fn migrate_keeps_v33_state() {
         let mut c = setup();
         buy_rug(&mut c, "h1");
         post(&mut c, "o1", 50);
         c.award_cred(player(), 4, "caught_bluff".into());
-        // Write the v3.2 layout, as it sits on testnet today, then migrate.
-        let old = BazaarV32 {
+        // Write the v3.3 layout, as it sits on testnet today, then migrate.
+        let old = BazaarV33 {
             owner: acc("owner.testnet"),
             server: acc("server.testnet"),
             haggles: LookupMap::new(StorageKey::Haggles),
@@ -1746,7 +1900,10 @@ mod tests {
             deliveries: 3,
             cred: LookupMap::new(StorageKey::Cred),
             server_xp: LookupMap::new(StorageKey::ServerXp),
+            stalls: IterableMap::new(StorageKey::Stalls),
+            burned: 150,
         };
+        c.server_xp.flush();
         c.cred.flush();
         c.orders.flush();
         c.coins.flush();
@@ -1754,7 +1911,7 @@ mod tests {
         c.agents.flush();
         c.haggles.flush();
         env::state_write(&old);
-        let m = Bazaar::migrate();
+        let m = Bazaar::migrate(vec![("rug".into(), U128(103)), ("saffron".into(), U128(3))]);
         assert_eq!(m.coins_of(player()), STARTER_COINS - 60);
         assert_eq!(m.goods_of(player(), "rug".into()), 1);
         assert_eq!(m.get_haggle("h1".into()).unwrap().status, Status::Deal);
@@ -1763,6 +1920,9 @@ mod tests {
         assert_eq!(m.get_order("o1".into()).unwrap().status, OrderStatus::Open);
         assert_eq!(m.cred_of(player()).xp, 10 + 4, "cred carries over");
         assert!(m.stalls().is_empty());
+        assert_eq!(m.stats().burned, 150);
+        assert_eq!(m.mt_supply("rug".into()), Some(U128(103)));
+        assert_eq!(m.mt_balance_of(player(), "rug".into()), U128(1));
     }
 
     // ---------- street cred ----------
@@ -1961,5 +2121,91 @@ mod tests {
         let mut c = setup();
         c.set_coins(&player(), 0);
         c.pay_wages("w1".into(), player());
+    }
+
+    // ---------- NEP-245 goods ----------
+
+    fn with_deposit(caller: &str, yocto: u128) {
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(acc(caller))
+            .current_account_id(acc("bazaar.testnet"))
+            .block_height(100)
+            .attached_deposit(near_sdk::NearToken::from_yoctonear(yocto))
+            .build());
+    }
+
+    #[test]
+    fn goods_are_minted_with_supply_and_nep245_events() {
+        let mut c = setup();
+        assert_eq!(c.mt_supply("rug".into()), Some(U128(103)), "Farrukh's 3 + Wu's 100");
+        assert_eq!(c.mt_batch_supply(vec!["saffron".into(), "gold".into()]), vec![Some(U128(3)), None]);
+        assert_eq!(c.mt_token(vec!["rug".into()])[0].as_ref().unwrap().token_id, "rug");
+        ctx("owner.testnet", 100);
+        c.register_agent("tobin".into(), "Tobin".into(), acc("tobin.testnet"), AgentKind::Merchant, 400, 50, vec![("lamp".into(), 2, 10)]);
+        assert_eq!(c.mt_supply("lamp".into()), Some(U128(2)));
+        assert!(get_logs().iter().any(|l| l.contains(r#""standard":"nep245""#) && l.contains("mt_mint")));
+    }
+
+    #[test]
+    fn a_deal_moves_tokens_through_escrow_with_transfer_events() {
+        let mut c = setup();
+        let s = sell_secret();
+        open(&mut c, "h1", &s);
+        // While haggling, Farrukh's rug is held by the contract.
+        assert_eq!(c.mt_balance_of(farrukh(), "rug".into()), U128(2));
+        assert_eq!(c.mt_balance_of(env::current_account_id(), "rug".into()), U128(1));
+        c.close_haggle("h1".into(), s, SALT.into(), Some(60), false);
+        assert_eq!(c.mt_balance_of(player(), "rug".into()), U128(1));
+        assert_eq!(c.mt_balance_of(env::current_account_id(), "rug".into()), U128(0));
+        assert!(get_logs().iter().any(|l| l.contains("mt_transfer") && l.contains(r#""new_owner_id":"player.testnet""#)));
+        assert_eq!(c.mt_supply("rug".into()), Some(U128(103)), "trading doesn't change supply");
+    }
+
+    #[test]
+    fn using_a_good_burns_it() {
+        let mut c = setup();
+        c.consume("farrukh".into(), "rug".into(), 1);
+        assert_eq!(c.mt_supply("rug".into()), Some(U128(102)));
+        assert!(get_logs().iter().any(|l| l.contains("mt_burn")));
+    }
+
+    #[test]
+    fn a_real_account_can_transfer_its_goods() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        with_deposit("player.testnet", 1);
+        c.mt_transfer(acc("friend.testnet"), "rug".into(), U128(1), None, Some("a gift".into()));
+        assert_eq!(c.mt_balance_of(acc("friend.testnet"), "rug".into()), U128(1));
+        assert_eq!(c.mt_balance_of(player(), "rug".into()), U128(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly 1 yoctoNEAR")]
+    fn transfers_need_exactly_one_yocto() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        with_deposit("player.testnet", 0);
+        c.mt_transfer(acc("friend.testnet"), "rug".into(), U128(1), None, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "doesn't have that good")]
+    fn you_cannot_transfer_more_than_you_hold() {
+        let mut c = setup();
+        with_deposit("player.testnet", 1);
+        c.mt_transfer(acc("friend.testnet"), "rug".into(), U128(1), None, None);
+    }
+
+    #[test]
+    fn a_failed_transfer_call_is_refunded() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        with_deposit("player.testnet", 1);
+        c.mt_transfer(acc("market.testnet"), "rug".into(), U128(1), None, None);
+        // The receiver's call failed: resolve gives the whole amount back.
+        ctx("bazaar.testnet", 100);
+        let kept = c.mt_resolve_transfer(player(), acc("market.testnet"), vec!["rug".into()], vec![U128(1)], Err(PromiseError::Failed));
+        assert_eq!(kept, vec![U128(0)]);
+        assert_eq!(c.mt_balance_of(player(), "rug".into()), U128(1));
     }
 }
