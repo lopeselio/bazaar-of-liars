@@ -185,6 +185,10 @@ Dockerfile       one image: game + API on port 8080
 
 The game server can see a merchant's secret during a haggle. The design guarantees that the secret can't *change* and that the deal *respects* it. It doesn't guarantee the secret stays hidden from the server's operator. See DESIGN.md, "What it doesn't prove".
 
+## Our other hackathon project
+
+Following the hackathon's rule for people with two entries (Q-015), this project is independent of, and discloses, our other submission: [Realm Ledger](https://github.com/lopeselio/realm-ledger), a turn-based conquest game where rival realms are AI agents with sealed orders on NEAR. The two share no code.
+
 ## License
 
 MIT
