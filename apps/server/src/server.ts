@@ -72,8 +72,10 @@ console.log(`state store: ${store.kind}`);
 // Canal Street's agent economy (contract v3): agents with their own accounts, purses and stock.
 const signers = ledger ? agentSignersFromEnv(AGENTS.map((a) => a.id)) : null;
 const market = ledger && signers ? new Market(ledger, signers, store) : null;
-console.log(market ? "agent economy: on (v3)" : "agent economy: off");
-const MARKET_TICK_MS = Number(process.env.MARKET_TICK_MS ?? 40_000);
+console.log(market ? `agent economy: on (v3)${Number(process.env.MARKET_TICK_MS ?? 0) > 0 ? ", agents acting" : ", agents idle here (set MARKET_TICK_MS to run them)"}` : "agent economy: off");
+// Only one deployment should run the agents against a contract: the hosted demo sets
+// MARKET_TICK_MS=40000. Locally the agents stay still unless you set it (reads still work).
+const MARKET_TICK_MS = Number(process.env.MARKET_TICK_MS ?? 0);
 if (market && MARKET_TICK_MS > 0)
   setInterval(async () => {
     // One replica at a time runs the agents.
