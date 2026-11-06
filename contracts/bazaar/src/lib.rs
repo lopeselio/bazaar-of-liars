@@ -35,6 +35,13 @@
 //! a streak bonus on the first XP of each UTC day. The server may add what only it sees (a caught
 //! bluff) through `award_cred`, capped per player per day. Constants match packages/core cred.ts.
 //!
+//! ## Player stalls (v3.3)
+//! At 120 XP (level 3) a player can buy a licence for one of four stall slots. They stock it with
+//! goods they own and set prices. Agents buy from it while the player is away, each purchase
+//! signed by the buying agent (`authorize_spend`) and settled here: the good goes to the agent,
+//! the price (less a 10% street commission, burned) goes to the stall's till. Constants match
+//! packages/core stalls.ts.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -70,6 +77,7 @@ enum StorageKey {
     Income,
     Cred,
     ServerXp,
+    Stalls,
 }
 
 #[near(serializers = [borsh, json])]
@@ -243,6 +251,8 @@ pub struct Stats {
     /// Haggles the server never revealed. Should always be 0.
     pub unrevealed: u64,
     pub deliveries: u64,
+    /// Coins burned by licence fees and stall commission.
+    pub burned: u64,
 }
 
 #[near(serializers = [json])]
@@ -290,29 +300,45 @@ pub struct Bazaar {
     cred: LookupMap<AccountId, Cred>,
     /// v3.2: player → (day, server-awarded XP that day)
     server_xp: LookupMap<AccountId, (u64, u64)>,
+    /// v3.3: player stalls, by slot
+    stalls: IterableMap<String, PlayerStall>,
+    /// v3.3: coins burned by licence fees and street commission
+    burned: u64,
 }
 
-/// A player's street cred.
+/// One good on a player's stall.
 #[near(serializers = [borsh, json])]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Cred {
-    pub xp: u64,
-    pub streak: u32,
-    pub best_streak: u32,
-    /// UTC day of the last XP earned.
-    pub last_day: u64,
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listing {
+    pub good_id: String,
+    pub qty: u32,
+    pub price: u32,
 }
 
-pub const XP_DEAL: u64 = 5;
-pub const XP_DELIVERY: u64 = 10;
-pub const XP_EXPRESS_BONUS: u64 = 5;
-pub const XP_STREAK_BONUS: u64 = 5;
-pub const STREAK_CAP: u32 = 7;
-pub const SERVER_XP_PER_DAY: u64 = 80;
+/// A player-owned stall on Canal Street.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerStall {
+    pub slot: String,
+    pub owner: AccountId,
+    pub listings: Vec<Listing>,
+    /// Coins waiting to be collected.
+    pub till: u64,
+    pub sold: u64,
+    /// Everything the stall has ever paid its owner (after commission).
+    pub earned: u64,
+    pub opened_ms: u64,
+}
 
-/// The v3.1 state layout, read once by `migrate`.
+pub const STALL_SLOTS: [&str; 4] = ["corner-1", "corner-2", "corner-3", "corner-4"];
+pub const LICENCE_PRICE: u64 = 150;
+pub const LICENCE_XP: u64 = 120;
+pub const STALL_COMMISSION_PCT: u64 = 10;
+pub const MAX_STALL_PRICE: u32 = 500;
+
+/// The v3.2 state layout, read once by `migrate`.
 #[near(serializers = [borsh])]
-pub struct BazaarV31 {
+pub struct BazaarV32 {
     owner: AccountId,
     server: AccountId,
     haggles: LookupMap<String, Haggle>,
@@ -333,7 +359,27 @@ pub struct BazaarV31 {
     orders: IterableMap<String, Order>,
     income: LookupMap<String, (u64, u64)>,
     deliveries: u64,
+    cred: LookupMap<AccountId, Cred>,
+    server_xp: LookupMap<AccountId, (u64, u64)>,
 }
+
+/// A player's street cred.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Cred {
+    pub xp: u64,
+    pub streak: u32,
+    pub best_streak: u32,
+    /// UTC day of the last XP earned.
+    pub last_day: u64,
+}
+
+pub const XP_DEAL: u64 = 5;
+pub const XP_DELIVERY: u64 = 10;
+pub const XP_EXPRESS_BONUS: u64 = 5;
+pub const XP_STREAK_BONUS: u64 = 5;
+pub const STREAK_CAP: u32 = 7;
+pub const SERVER_XP_PER_DAY: u64 = 80;
 
 /// Most coins a customer's business brings in per UTC day.
 pub const CUSTOMER_INCOME_PER_DAY: u64 = 400;
@@ -414,14 +460,16 @@ impl Bazaar {
             deliveries: 0,
             cred: LookupMap::new(StorageKey::Cred),
             server_xp: LookupMap::new(StorageKey::ServerXp),
+            stalls: IterableMap::new(StorageKey::Stalls),
+            burned: 0,
         }
     }
 
-    /// Owner (the contract account itself): upgrade v3.1 state to v3.2, keeping everything.
+    /// Owner (the contract account itself): upgrade v3.2 state to v3.3, keeping everything.
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: BazaarV31 = env::state_read().unwrap_or_else(|| env::panic_str("no v3.1 state to migrate"));
+        let old: BazaarV32 = env::state_read().unwrap_or_else(|| env::panic_str("no v3.2 state to migrate"));
         Self {
             owner: old.owner,
             server: old.server,
@@ -443,8 +491,10 @@ impl Bazaar {
             orders: old.orders,
             income: old.income,
             deliveries: old.deliveries,
-            cred: LookupMap::new(StorageKey::Cred),
-            server_xp: LookupMap::new(StorageKey::ServerXp),
+            cred: old.cred,
+            server_xp: old.server_xp,
+            stalls: IterableMap::new(StorageKey::Stalls),
+            burned: 0,
         }
     }
 
@@ -712,6 +762,116 @@ impl Bazaar {
         }
     }
 
+    // ---------- player stalls ----------
+
+    fn stall_slot_of(&self, player: &AccountId) -> Option<String> {
+        self.stalls.iter().find(|(_, st)| &st.owner == player).map(|(k, _)| k.clone())
+    }
+    fn my_stall(&self, player: &AccountId) -> PlayerStall {
+        let slot = self.stall_slot_of(player).unwrap_or_else(|| env::panic_str("you don't have a stall"));
+        self.stalls.get(&slot).cloned().unwrap()
+    }
+
+    /// Server, for a player: buy the licence for a free stall slot. Needs 120 XP of street cred;
+    /// the fee is burned.
+    pub fn buy_licence(&mut self, player: AccountId, slot: String) {
+        self.require_server();
+        require!(STALL_SLOTS.contains(&slot.as_str()), "no such stall slot");
+        require!(!self.stalls.contains_key(&slot), "that slot is taken");
+        require!(self.agent_of(&player).is_none(), "agents don't hold licences");
+        require!(self.stall_slot_of(&player).is_none(), "you already have a stall");
+        require!(self.cred_of(player.clone()).xp >= LICENCE_XP, "a licence needs street cred level 3");
+        self.add_coins(&player, -(LICENCE_PRICE as i64));
+        self.burned += LICENCE_PRICE;
+        let st = PlayerStall { slot: slot.clone(), owner: player.clone(), listings: vec![], till: 0, sold: 0, earned: 0, opened_ms: env::block_timestamp_ms() };
+        self.stalls.insert(slot.clone(), st);
+        emit("licence_bought", json!({ "player": player, "slot": slot, "fee": LICENCE_PRICE }));
+    }
+
+    /// Server, for a stall owner: move goods from their purse onto the stall at a price
+    /// (`price` updates the listing; `qty` may be 0 to only reprice).
+    pub fn stock_stall(&mut self, player: AccountId, good_id: String, qty: u32, price: u32) {
+        self.require_server();
+        require!(is_id(&good_id), "good id must be [a-z0-9_-]{1,64}");
+        require!((1..=MAX_STALL_PRICE).contains(&price), "price must be 1..=500");
+        let mut st = self.my_stall(&player);
+        self.add_goods(&player, &good_id, -i64::from(qty));
+        match st.listings.iter_mut().find(|l| l.good_id == good_id) {
+            Some(l) => {
+                l.qty += qty;
+                l.price = price;
+            }
+            None => st.listings.push(Listing { good_id: good_id.clone(), qty, price }),
+        }
+        emit("stall_stocked", json!({ "player": player, "slot": st.slot, "good_id": good_id, "qty": qty, "price": price }));
+        self.stalls.insert(st.slot.clone(), st);
+    }
+
+    /// Server, for a stall owner: take goods back off the stall.
+    pub fn withdraw_stock(&mut self, player: AccountId, good_id: String, qty: u32) {
+        self.require_server();
+        let mut st = self.my_stall(&player);
+        let l = st.listings.iter_mut().find(|l| l.good_id == good_id).unwrap_or_else(|| env::panic_str("not on your stall"));
+        require!(l.qty >= qty, "not that many on your stall");
+        l.qty -= qty;
+        self.add_goods(&player, &good_id, i64::from(qty));
+        self.stalls.insert(st.slot.clone(), st);
+    }
+
+    /// Server, for a stall owner: move the till into their purse.
+    pub fn collect_till(&mut self, player: AccountId) -> u64 {
+        self.require_server();
+        let mut st = self.my_stall(&player);
+        let amount = st.till;
+        st.till = 0;
+        self.add_coins(&player, amount as i64);
+        emit("till_collected", json!({ "player": player, "slot": st.slot, "amount": amount }));
+        self.stalls.insert(st.slot.clone(), st);
+        amount
+    }
+
+    /// Server: an agent buys one unit from a player's stall at its listed price. The agent signed
+    /// for it with `authorize_spend(sale_id, max)` first. The owner's take goes to the till; the
+    /// street commission is burned.
+    pub fn stall_sale(&mut self, sale_id: String, slot: String, good_id: String) {
+        self.require_server();
+        let auth = self.auths.remove(&sale_id).unwrap_or_else(|| env::panic_str("the agent hasn't authorized this spend"));
+        let agent = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("only agents buy from stalls"));
+        let mut st = self.stalls.get(&slot).cloned().unwrap_or_else(|| env::panic_str("no stall in that slot"));
+        let l = st.listings.iter_mut().find(|l| l.good_id == good_id && l.qty > 0).unwrap_or_else(|| env::panic_str("the stall is out of that"));
+        let price = u64::from(l.price);
+        require!(price <= auth.max, "price is above what the agent authorized");
+        l.qty -= 1;
+        // The agent pays from its own purse, within its cap.
+        self.charge_cap(&agent.id, price as i64 - auth.max as i64);
+        self.add_coins(&auth.agent, -(price as i64));
+        let commission = price * STALL_COMMISSION_PCT / 100;
+        self.burned += commission;
+        st.till += price - commission;
+        st.earned += price - commission;
+        st.sold += 1;
+        // The buyer's running cost basis for what it now holds.
+        let key = goods_key(&auth.agent, &good_id);
+        let held = u64::from(self.goods_of(auth.agent.clone(), good_id.clone()));
+        let old = self.cost_basis.get(&key).copied().unwrap_or(0);
+        self.cost_basis.insert(key, (old * held + price * 100) / (held + 1));
+        self.add_goods(&auth.agent, &good_id, 1);
+        emit("stall_sale", json!({ "sale_id": sale_id, "slot": slot, "owner": st.owner, "buyer": agent.id, "good_id": good_id, "price": price, "commission": commission }));
+        self.stalls.insert(slot, st);
+    }
+
+    /// Server, for a stall owner: give up the stall. Stock and till go back to the player.
+    pub fn release_stall(&mut self, player: AccountId) {
+        self.require_server();
+        let st = self.my_stall(&player);
+        for l in &st.listings {
+            self.add_goods(&player, &l.good_id, i64::from(l.qty));
+        }
+        self.add_coins(&player, st.till as i64);
+        self.stalls.remove(&st.slot);
+        emit("stall_released", json!({ "player": player, "slot": st.slot }));
+    }
+
     // ---------- haggles ----------
 
     /// Post the commitment. Must happen before the first message.
@@ -972,6 +1132,14 @@ impl Bazaar {
             .collect()
     }
 
+    pub fn stalls(&self) -> Vec<PlayerStall> {
+        self.stalls.values().cloned().collect()
+    }
+
+    pub fn stall_of(&self, player: AccountId) -> Option<PlayerStall> {
+        self.stall_slot_of(&player).and_then(|s| self.stalls.get(&s).cloned())
+    }
+
     pub fn cred_of(&self, player: AccountId) -> Cred {
         self.cred.get(&player).copied().unwrap_or_default()
     }
@@ -995,7 +1163,7 @@ impl Bazaar {
     }
 
     pub fn stats(&self) -> Stats {
-        Stats { server: self.server.clone(), haggles: self.haggle_count, deals: self.deals, no_deals: self.no_deals, unrevealed: self.unrevealed, deliveries: self.deliveries }
+        Stats { server: self.server.clone(), haggles: self.haggle_count, deals: self.deals, no_deals: self.no_deals, unrevealed: self.unrevealed, deliveries: self.deliveries, burned: self.burned }
     }
 }
 
@@ -1519,12 +1687,13 @@ mod tests {
     }
 
     #[test]
-    fn migrate_keeps_v31_state() {
+    fn migrate_keeps_v32_state() {
         let mut c = setup();
         buy_rug(&mut c, "h1");
         post(&mut c, "o1", 50);
-        // Write the v3.1 layout, as it sits on testnet today, then migrate.
-        let old = BazaarV31 {
+        c.award_cred(player(), 4, "caught_bluff".into());
+        // Write the v3.2 layout, as it sits on testnet today, then migrate.
+        let old = BazaarV32 {
             owner: acc("owner.testnet"),
             server: acc("server.testnet"),
             haggles: LookupMap::new(StorageKey::Haggles),
@@ -1545,7 +1714,10 @@ mod tests {
             orders: IterableMap::new(StorageKey::Orders),
             income: LookupMap::new(StorageKey::Income),
             deliveries: 3,
+            cred: LookupMap::new(StorageKey::Cred),
+            server_xp: LookupMap::new(StorageKey::ServerXp),
         };
+        c.cred.flush();
         c.orders.flush();
         c.coins.flush();
         c.goods.flush();
@@ -1559,7 +1731,8 @@ mod tests {
         assert_eq!(m.agents(vec!["rug".into()]).len(), 7);
         assert_eq!(m.stats().deliveries, 3);
         assert_eq!(m.get_order("o1".into()).unwrap().status, OrderStatus::Open);
-        assert_eq!(m.cred_of(player()), Cred::default(), "cred starts fresh");
+        assert_eq!(m.cred_of(player()).xp, 10 + 4, "cred carries over");
+        assert!(m.stalls().is_empty());
     }
 
     // ---------- street cred ----------
@@ -1623,5 +1796,86 @@ mod tests {
         c.open_haggle("t1".into(), acc("ivy.testnet"), Side::Sell, "farrukh".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), None, None);
         c.close_haggle("t1".into(), s, SALT.into(), Some(60), false);
         assert_eq!(c.cred_of(acc("ivy.testnet")).xp, 0);
+    }
+
+    // ---------- player stalls ----------
+
+    /// Give the player enough cred for a licence and a saffron to sell.
+    fn licensed(c: &mut Bazaar) {
+        get_saffron(c);
+        c.award_cred(player(), 80, "caught_bluff".into());
+        at_day("server.testnet", 1);
+        c.award_cred(player(), 40, "caught_bluff".into());
+        ctx("server.testnet", 100);
+        c.buy_licence(player(), "corner-1".into());
+    }
+
+    #[test]
+    fn a_licensed_stall_sells_to_an_agent_while_the_owner_is_away() {
+        let mut c = setup();
+        licensed(&mut c);
+        assert_eq!(c.coins_of(player()), STARTER_COINS - 40 - LICENCE_PRICE);
+        c.stock_stall(player(), "saffron".into(), 1, 50);
+        assert_eq!(c.goods_of(player(), "saffron".into()), 0, "on the stall now");
+        // Ivy signs for the purchase herself.
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("sale1".into(), 60);
+        ctx("server.testnet", 100);
+        c.stall_sale("sale1".into(), "corner-1".into(), "saffron".into());
+        assert_eq!(c.goods_of(acc("ivy.testnet"), "saffron".into()), 1);
+        assert_eq!(c.coins_of(acc("ivy.testnet")), 300 - 50);
+        let st = c.stall_of(player()).unwrap();
+        assert_eq!((st.till, st.sold, st.listings[0].qty), (45, 1, 0));
+        assert_eq!(c.stats().burned, LICENCE_PRICE + 5);
+        // The owner comes back and collects.
+        assert_eq!(c.collect_till(player()), 45);
+        assert_eq!(c.coins_of(player()), STARTER_COINS - 40 - LICENCE_PRICE + 45);
+    }
+
+    #[test]
+    #[should_panic(expected = "street cred level 3")]
+    fn a_licence_needs_street_cred() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        c.buy_licence(player(), "corner-1".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "slot is taken")]
+    fn one_owner_per_slot() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.buy_licence(acc("other.testnet"), "corner-1".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "hasn't authorized")]
+    fn the_server_cannot_buy_from_a_stall_with_an_agents_coins() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.stock_stall(player(), "saffron".into(), 1, 50);
+        c.stall_sale("sale1".into(), "corner-1".into(), "saffron".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "above what the agent authorized")]
+    fn agents_never_pay_more_than_they_signed_for() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.stock_stall(player(), "saffron".into(), 1, 90);
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("sale1".into(), 60);
+        ctx("server.testnet", 100);
+        c.stall_sale("sale1".into(), "corner-1".into(), "saffron".into());
+    }
+
+    #[test]
+    fn releasing_a_stall_returns_stock_and_till() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.stock_stall(player(), "saffron".into(), 1, 50);
+        c.release_stall(player());
+        assert_eq!(c.goods_of(player(), "saffron".into()), 1);
+        assert!(c.stall_of(player()).is_none());
     }
 }
