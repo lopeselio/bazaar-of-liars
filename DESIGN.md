@@ -79,6 +79,22 @@ The reason to come back tomorrow.
 
   The server enforces the gates when a job is taken. The rules are in `packages/core/src/cred.ts`, with matching constants in the contract.
 
+## Player stalls (v3.3)
+
+The long-term hook: a stall that keeps trading while you're away.
+
+- **Licence.** Four stall slots stand further along Canal Street. At 120 XP (level 3) a player can buy one licence for 150 coins, which is burned. The contract checks the XP, the slot and the one-stall-per-player rule.
+- **Running it.** The owner moves goods from their purse onto the stall and sets each price (1–500). They can reprice or take goods back at any time.
+- **Who buys** (`packages/core/src/stalls.ts`, run by `market.ts`):
+  - Rival traders browse the stalls every tick. They buy anything priced under street value, more often the cheaper it is, to flip to a merchant.
+  - A customer whose delivery order expired buys the good from a stall instead, if the listing is within its bounty.
+- **Settlement.**
+  - The buying agent signs `authorize_spend` with its own key, then the server calls `stall_sale`.
+  - The contract checks the signed maximum and the agent's daily cap, moves the good to the agent and updates the agent's cost basis.
+  - It pays the price, less a 10% street commission (burned), into the stall's till.
+  - The server can't buy from a stall with an agent's coins on its own.
+- **Coming back.** The owner collects the till with `collect_till`. The game shows what the stall sold since their last visit. Burned licence fees and commissions are public in `stats().burned`.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
