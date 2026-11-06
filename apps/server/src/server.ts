@@ -12,6 +12,9 @@
  *   GET  /api/orders?player=guest-…     open delivery orders across Manhattan, and the player's job
  *   POST /api/orders/:id/take {player,x,z}   take a delivery job (one at a time)
  *   POST /api/orders/:id/deliver {player,x,z,mode}  hand it over at the drop site
+ *   GET  /api/stalls?player=…&visit=1   the stall slots, and the player's own stall (with what it
+ *                                       earned since their last visit)
+ *   POST /api/stalls/{licence|stock|withdraw|collect} {player,…}  run your own stall
  *
  * State: live haggles, market days and rate limits sit in a Store (store.ts): Redis when
  * REDIS_URL is set, so any number of replicas can serve the same haggle; memory otherwise.
@@ -22,7 +25,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, CANAL_ORIGIN, GOODS, MERCHANTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, CANAL_ORIGIN, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { Market } from "./market.js";
 import {
@@ -272,6 +275,68 @@ async function deliverOrder(id: string, body: Record<string, unknown>) {
   await store.del(`job:${player}`);
   await market.onDelivered(o, fare, mode, tx);
   return { bounty: o.bounty, fare, net: o.bounty - fare, mode, metres, seconds: Math.round(elapsed / 1000), msToSpare: o.deadline_ms - Date.now(), txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
+}
+
+// ---------- player stalls ----------
+
+const shortPlayer = (p: string) => p.slice(0, 12);
+
+async function stallsView(player: string, visit: boolean) {
+  if (!market) return { slots: [], mine: null, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL };
+  const stalls = await market.stalls();
+  const slots = STALL_SLOTS.map((slot) => {
+    const st = stalls.find((x) => x.slot === slot);
+    return st
+      ? { slot, owner: st.owner === player ? "you" : shortPlayer(st.owner), mine: st.owner === player, listings: st.listings.filter((l) => l.qty > 0), sold: st.sold }
+      : { slot, owner: null, mine: false, listings: [], sold: 0 };
+  });
+  const own = PLAYER_RE.test(player) ? stalls.find((x) => x.owner === player) : undefined;
+  let away: { sold: number; earned: number } | null = null;
+  if (own && visit) {
+    // What the stall did since the player last looked.
+    const seen = await store.getJSON<{ sold: number; earned: number }>(`stallSeen:${player}`);
+    if (seen && (own.sold > seen.sold || own.earned > seen.earned)) away = { sold: own.sold - seen.sold, earned: own.earned - seen.earned };
+    await store.putJSON(`stallSeen:${player}`, { sold: own.sold, earned: own.earned }, 90 * 24 * 3_600_000);
+  }
+  return { slots, mine: own ?? null, away, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL };
+}
+
+async function stallAction(action: string, body: Record<string, unknown>) {
+  if (!market || !ledger?.buyLicence) throw new HttpError(404, "stalls need the agent economy");
+  const player = String(body.player ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  const goodId = String(body.goodId ?? "");
+  const qty = Math.floor(Number(body.qty ?? 0));
+  const price = Math.floor(Number(body.price ?? 0));
+  let tx: string;
+  try {
+    if (action === "licence") {
+      const slot = String(body.slot ?? "");
+      if (!(STALL_SLOTS as readonly string[]).includes(slot)) throw new HttpError(400, "no such stall slot");
+      const cred = await credOf(player);
+      if ((cred?.level ?? 1) < LICENCE_LEVEL) throw new HttpError(403, `A licence needs street cred level ${LICENCE_LEVEL}.`);
+      const p = await purse(player);
+      if (p.coins < LICENCE_PRICE) throw new HttpError(402, `A licence costs ${LICENCE_PRICE} coins; you have ${p.coins}.`);
+      tx = await ledger.buyLicence({ player, slot });
+    } else if (action === "stock") {
+      if (!GOODS[goodId]) throw new HttpError(400, "unknown good");
+      if (!(qty >= 0 && qty <= 20 && price >= 1 && price <= MAX_STALL_PRICE)) throw new HttpError(400, `stock 0–20 at a price of 1–${MAX_STALL_PRICE}`);
+      tx = await ledger.stockStall!({ player, goodId, qty, price });
+    } else if (action === "withdraw") {
+      if (!GOODS[goodId] || !(qty >= 1 && qty <= 20)) throw new HttpError(400, "withdraw 1–20 of a known good");
+      tx = await ledger.withdrawStock!({ player, goodId, qty });
+    } else if (action === "collect") {
+      tx = await ledger.collectTill!(player);
+    } else throw new HttpError(404, "not found");
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    // Contract refusals ("you don't have a stall", "that slot is taken", …) are the player's to read.
+    const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
+    throw new HttpError(409, m ? m[1] : "The street office refused that. Try again.");
+  }
+  market.invalidate();
+  if (action === "licence") await store.pushNews({ t: Date.now(), kind: "stall", text: `A player opened a stall on Canal Street (${String(body.slot)})`, tx: explorerTx(ledger.network, tx), agents: [] });
+  return { ok: true, txUrl: explorerTx(ledger.network, tx), stalls: await stallsView(player, false), player: await playerView(player) };
 }
 
 async function nextDay(body: Record<string, unknown>) {
@@ -554,6 +619,12 @@ createServer(async (req, res) => {
     if (req.method === "POST" && url === "/api/invest") return send(res, 200, await invest(await readJson(req)));
     if (req.method === "GET" && url.startsWith("/api/orders"))
       return send(res, 200, await listOrders(new URL(url, "http://x").searchParams.get("player") ?? ""));
+    if (req.method === "GET" && url.startsWith("/api/stalls")) {
+      const q = new URL(url, "http://x").searchParams;
+      return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
+    }
+    const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect)$/);
+    if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], await readJson(req)));
     const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
     if (req.method === "POST" && om) return send(res, 200, await (om[2] === "take" ? takeOrder : deliverOrder)(om[1], await readJson(req)));
     const m = url.match(/^\/api\/haggle\/([0-9a-f-]{36})\/turn$/);
