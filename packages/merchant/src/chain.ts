@@ -72,6 +72,8 @@ export interface Ledger {
   withdrawStock?(a: { player: string; goodId: string; qty: number }): Promise<string>;
   collectTill?(player: string): Promise<string>;
   stallSale?(a: { saleId: string; slot: string; goodId: string }): Promise<string>;
+  /** v3.4: a broke player's dock wage, from the wholesaler's purse (it signs first). */
+  payWages?(a: { wageId: string; player: string }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -122,6 +124,7 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     withdrawStock: (a) => call("withdraw_stock", { player: a.player, good_id: a.goodId, qty: a.qty }, "FINAL"),
     collectTill: (player) => call("collect_till", { player }, "FINAL"),
     stallSale: (a) => call("stall_sale", { sale_id: a.saleId, slot: a.slot, good_id: a.goodId }),
+    payWages: (a) => call("pay_wages", { wage_id: a.wageId, player: a.player }, "FINAL"),
   };
 }
 
