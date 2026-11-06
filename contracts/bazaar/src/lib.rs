@@ -30,6 +30,11 @@
 //! `fulfil_order`: the good moves to the customer, the bounty to the player, and any cab fare to the
 //! cab company's account. A missed deadline lets anyone expire the order and refund the bounty.
 //!
+//! ## Street cred (v3.2)
+//! Players earn XP onchain. The contract awards what it can see itself (a deal, a delivery), plus
+//! a streak bonus on the first XP of each UTC day. The server may add what only it sees (a caught
+//! bluff) through `award_cred`, capped per player per day. Constants match packages/core cred.ts.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -63,6 +68,8 @@ enum StorageKey {
     Investments,
     Orders,
     Income,
+    Cred,
+    ServerXp,
 }
 
 #[near(serializers = [borsh, json])]
@@ -279,11 +286,33 @@ pub struct Bazaar {
     /// v3.1: customer id → (day, coins of income paid that day)
     income: LookupMap<String, (u64, u64)>,
     deliveries: u64,
+    /// v3.2: street cred per player
+    cred: LookupMap<AccountId, Cred>,
+    /// v3.2: player → (day, server-awarded XP that day)
+    server_xp: LookupMap<AccountId, (u64, u64)>,
 }
 
-/// The v3 state layout, read once by `migrate`.
+/// A player's street cred.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Cred {
+    pub xp: u64,
+    pub streak: u32,
+    pub best_streak: u32,
+    /// UTC day of the last XP earned.
+    pub last_day: u64,
+}
+
+pub const XP_DEAL: u64 = 5;
+pub const XP_DELIVERY: u64 = 10;
+pub const XP_EXPRESS_BONUS: u64 = 5;
+pub const XP_STREAK_BONUS: u64 = 5;
+pub const STREAK_CAP: u32 = 7;
+pub const SERVER_XP_PER_DAY: u64 = 80;
+
+/// The v3.1 state layout, read once by `migrate`.
 #[near(serializers = [borsh])]
-pub struct BazaarV3 {
+pub struct BazaarV31 {
     owner: AccountId,
     server: AccountId,
     haggles: LookupMap<String, Haggle>,
@@ -301,6 +330,9 @@ pub struct BazaarV3 {
     cost_basis: LookupMap<String, u64>,
     auths: LookupMap<String, Auth>,
     investments: LookupMap<String, u64>,
+    orders: IterableMap<String, Order>,
+    income: LookupMap<String, (u64, u64)>,
+    deliveries: u64,
 }
 
 /// Most coins a customer's business brings in per UTC day.
@@ -380,14 +412,16 @@ impl Bazaar {
             orders: IterableMap::new(StorageKey::Orders),
             income: LookupMap::new(StorageKey::Income),
             deliveries: 0,
+            cred: LookupMap::new(StorageKey::Cred),
+            server_xp: LookupMap::new(StorageKey::ServerXp),
         }
     }
 
-    /// Owner (the contract account itself): upgrade v3 state to v3.1, keeping everything.
+    /// Owner (the contract account itself): upgrade v3.1 state to v3.2, keeping everything.
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: BazaarV3 = env::state_read().unwrap_or_else(|| env::panic_str("no v3 state to migrate"));
+        let old: BazaarV31 = env::state_read().unwrap_or_else(|| env::panic_str("no v3.1 state to migrate"));
         Self {
             owner: old.owner,
             server: old.server,
@@ -406,10 +440,43 @@ impl Bazaar {
             cost_basis: old.cost_basis,
             auths: old.auths,
             investments: old.investments,
-            orders: IterableMap::new(StorageKey::Orders),
-            income: LookupMap::new(StorageKey::Income),
-            deliveries: 0,
+            orders: old.orders,
+            income: old.income,
+            deliveries: old.deliveries,
+            cred: LookupMap::new(StorageKey::Cred),
+            server_xp: LookupMap::new(StorageKey::ServerXp),
         }
+    }
+
+    /// Add XP to a player (never an agent), with the streak bonus on the first XP of a UTC day.
+    fn grant(&mut self, player: &AccountId, xp: u64, reason: &str) {
+        if self.agent_of(player).is_some() {
+            return;
+        }
+        let mut c = self.cred.get(player).copied().unwrap_or_default();
+        let day = today();
+        let mut bonus = 0;
+        if c.last_day != day || c.xp == 0 {
+            c.streak = if c.xp > 0 && c.last_day + 1 == day { c.streak + 1 } else { 1 };
+            c.best_streak = c.best_streak.max(c.streak);
+            c.last_day = day;
+            bonus = XP_STREAK_BONUS * u64::from(c.streak.min(STREAK_CAP));
+        }
+        c.xp += xp + bonus;
+        self.cred.insert(player.clone(), c);
+        emit("cred", json!({ "player": player, "xp": xp, "streak_bonus": bonus, "reason": reason, "total": c.xp, "streak": c.streak }));
+    }
+
+    /// Server: XP for what only the server sees (a caught bluff), capped per player per day.
+    pub fn award_cred(&mut self, player: AccountId, xp: u64, reason: String) {
+        self.require_server();
+        require!(is_id(&reason), "reason must be [a-z0-9_-]{1,64}");
+        let day = today();
+        let (d, given) = self.server_xp.get(&player).copied().unwrap_or((day, 0));
+        let given = if d == day { given } else { 0 };
+        require!(given + xp <= SERVER_XP_PER_DAY, "over today's server-awarded XP");
+        self.server_xp.insert(player.clone(), (day, given + xp));
+        self.grant(&player, xp, &reason);
     }
 
     fn require_server(&self) {
@@ -613,6 +680,7 @@ impl Bazaar {
                 .unwrap_or_else(|| env::panic_str("no cab company registered"));
             self.add_coins(&cab, fare as i64);
         }
+        self.grant(&player, XP_DELIVERY + if o.express { XP_EXPRESS_BONUS } else { 0 }, "delivery");
         o.status = OrderStatus::Delivered;
         o.courier = Some(player.clone());
         o.fare = fare;
@@ -807,6 +875,7 @@ impl Bazaar {
             h.status = Status::Deal;
             h.price = deal_price;
             self.deals += 1;
+            self.grant(&player, XP_DEAL, "deal");
         } else {
             h.status = Status::NoDeal;
             self.no_deals += 1;
@@ -901,6 +970,10 @@ impl Bazaar {
                 spent_today: if a.spent_day == day { a.spent_today } else { 0 },
             })
             .collect()
+    }
+
+    pub fn cred_of(&self, player: AccountId) -> Cred {
+        self.cred.get(&player).copied().unwrap_or_default()
     }
 
     pub fn get_order(&self, order_id: String) -> Option<Order> {
@@ -1446,11 +1519,12 @@ mod tests {
     }
 
     #[test]
-    fn migrate_keeps_v3_state() {
+    fn migrate_keeps_v31_state() {
         let mut c = setup();
         buy_rug(&mut c, "h1");
-        // Write the v3 layout, as it sits on testnet today, then migrate.
-        let old = BazaarV3 {
+        post(&mut c, "o1", 50);
+        // Write the v3.1 layout, as it sits on testnet today, then migrate.
+        let old = BazaarV31 {
             owner: acc("owner.testnet"),
             server: acc("server.testnet"),
             haggles: LookupMap::new(StorageKey::Haggles),
@@ -1468,7 +1542,11 @@ mod tests {
             cost_basis: LookupMap::new(StorageKey::CostBasis),
             auths: LookupMap::new(StorageKey::Auths),
             investments: LookupMap::new(StorageKey::Investments),
+            orders: IterableMap::new(StorageKey::Orders),
+            income: LookupMap::new(StorageKey::Income),
+            deliveries: 3,
         };
+        c.orders.flush();
         c.coins.flush();
         c.goods.flush();
         c.agents.flush();
@@ -1479,6 +1557,71 @@ mod tests {
         assert_eq!(m.goods_of(player(), "rug".into()), 1);
         assert_eq!(m.get_haggle("h1".into()).unwrap().status, Status::Deal);
         assert_eq!(m.agents(vec!["rug".into()]).len(), 7);
-        assert_eq!(m.stats().deliveries, 0);
+        assert_eq!(m.stats().deliveries, 3);
+        assert_eq!(m.get_order("o1".into()).unwrap().status, OrderStatus::Open);
+        assert_eq!(m.cred_of(player()), Cred::default(), "cred starts fresh");
+    }
+
+    // ---------- street cred ----------
+
+    fn at_day(caller: &str, day: u64) {
+        let ms = day * DAY_MS + 1_000;
+        testing_env!(VMContextBuilder::new().predecessor_account_id(acc(caller)).block_height(100).block_timestamp(ms * 1_000_000).build());
+    }
+
+    #[test]
+    fn deals_and_deliveries_earn_xp_with_a_daily_streak_bonus() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        // First XP ever: the deal (5) plus a 1-day streak bonus (5).
+        assert_eq!(c.cred_of(player()), Cred { xp: 10, streak: 1, best_streak: 1, last_day: 0 });
+        post(&mut c, "o1", 90);
+        get_saffron(&mut c);
+        c.fulfil_order("o1".into(), player(), 0);
+        // Same day: deal +5 and delivery +10, no second bonus.
+        assert_eq!(c.cred_of(player()).xp, 25);
+    }
+
+    #[test]
+    fn streaks_grow_on_consecutive_days_and_reset_after_a_gap() {
+        let mut c = setup();
+        at_day("server.testnet", 10);
+        c.award_cred(player(), 4, "caught_bluff".into());
+        at_day("server.testnet", 11);
+        c.award_cred(player(), 4, "caught_bluff".into());
+        let cr = c.cred_of(player());
+        assert_eq!((cr.streak, cr.xp), (2, 4 + 5 + 4 + 10));
+        at_day("server.testnet", 13);
+        c.award_cred(player(), 4, "caught_bluff".into());
+        let cr = c.cred_of(player());
+        assert_eq!((cr.streak, cr.best_streak), (1, 2));
+    }
+
+    #[test]
+    #[should_panic(expected = "server-awarded XP")]
+    fn server_awarded_xp_is_capped_per_day() {
+        let mut c = setup();
+        c.award_cred(player(), 60, "caught_bluff".into());
+        c.award_cred(player(), 21, "caught_bluff".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "only the game server")]
+    fn only_the_server_awards_xp() {
+        let mut c = setup();
+        ctx("player.testnet", 100);
+        c.award_cred(player(), 4, "caught_bluff".into());
+    }
+
+    #[test]
+    fn agents_earn_no_cred() {
+        let mut c = setup();
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("t1".into(), 70);
+        ctx("server.testnet", 100);
+        let s = sell_secret();
+        c.open_haggle("t1".into(), acc("ivy.testnet"), Side::Sell, "farrukh".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), None, None);
+        c.close_haggle("t1".into(), s, SALT.into(), Some(60), false);
+        assert_eq!(c.cred_of(acc("ivy.testnet")).xp, 0);
     }
 }
