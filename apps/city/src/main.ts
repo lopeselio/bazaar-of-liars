@@ -9,6 +9,7 @@ import * as THREE from "three";
 import "./style.css";
 import { api, type Ending, type MarketAgent, type MerchantInfo, type NewsItem, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "../../web/src/api";
 import { animateMerchant, buildStall, type StallLook } from "../../web/src/scene";
+import { initJobs } from "./jobs";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -265,6 +266,22 @@ async function refreshMarket() {
 }
 void refreshMarket();
 setInterval(refreshMarket, 8000);
+
+// ---------- delivery jobs across Manhattan ----------
+
+initJobs({
+  scene: bridge.scene,
+  camera: () => bridge.cameraSystem.camera,
+  player: PLAYER,
+  cm,
+  frame: bridge.frame,
+  me: () => me,
+  refreshPurse,
+  toast,
+  burst,
+  goodIcon: GOOD_ICON,
+  busy: () => !!current,
+});
 
 // ---------- per frame: tags, proximity, merchant body language ----------
 
