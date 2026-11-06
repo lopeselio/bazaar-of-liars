@@ -11,6 +11,7 @@ import { api, type Ending, type MarketAgent, type MerchantInfo, type NewsItem, t
 import { animateMerchant, buildStall, type StallLook } from "../../web/src/scene";
 import { initJobs } from "./jobs";
 import { initCred } from "./cred";
+import { initOwnStalls } from "./ownstalls";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -284,6 +285,27 @@ initJobs({
   toast,
   burst,
   goodIcon: GOOD_ICON,
+  busy: () => !!current,
+});
+
+// ---------- player-owned stalls further along Canal Street ----------
+
+const allGoods = () => merchants.flatMap((m) => [m.good, m.buys]);
+initOwnStalls({
+  scene: bridge.scene,
+  camera: () => bridge.cameraSystem.camera,
+  player: PLAYER,
+  cm,
+  frame: bridge.frame,
+  spot: sidewalkSpot,
+  ground: (x, z) => cm.getGroundHeight(x, z, "person"),
+  me: () => me,
+  refreshPurse,
+  toast,
+  burst,
+  goodIcon: GOOD_ICON,
+  goodName: (id) => allGoods().find((g) => g.id === id)?.name ?? id,
+  goodValue: (id) => allGoods().find((g) => g.id === id)?.baseValue ?? 20,
   busy: () => !!current,
 });
 
