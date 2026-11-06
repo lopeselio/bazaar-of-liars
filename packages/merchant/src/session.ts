@@ -23,6 +23,7 @@ import {
   rollSecret,
   type HaggleState,
   type Merchant,
+  type MerchantSecret,
   type MerchantReply,
   type PlayerMemory,
   type Side,
@@ -105,6 +106,11 @@ export class HaggleSession {
     readonly side: Side = "sell",
     /** What this merchant remembers about the player (must match the contract's record). */
     private memory: PlayerMemory = { lowballs: 0, deals: 0 },
+    /**
+     * A secret already priced from the merchant's onchain purse and stock (economy.ts), and the
+     * coins to escrow when the merchant buys. Without it the secret is rolled from the seed.
+     */
+    private pricing?: { secret: MerchantSecret; escrow?: number },
   ) {}
 
   /** Plain-JSON state for a shared store. Signatures still in flight are fetched again by bundle(). */
@@ -173,7 +179,7 @@ export class HaggleSession {
 
   /** Returns the commitment (to post onchain) and the opening line. */
   async open(): Promise<{ commitment: string; openingAsk: number; verification: ModelVerification; openTx: string | null }> {
-    const secret = rollSecret(mulberry32(this.seed), this.merchant, this.good, this.side, this.memory);
+    const secret = this.pricing?.secret ?? rollSecret(mulberry32(this.seed), this.merchant, this.good, this.side, this.memory);
     this.state = openHaggle(secret, this.merchant.personality);
     this.commitment = commit(secret, this.salt);
     // Preflight: attest BEFORE the first completion, so the evidence can't be swapped afterwards.
@@ -204,6 +210,7 @@ export class HaggleSession {
         grudge: secret.grudge,
         loyalty: secret.loyalty,
         commitment: this.commitment,
+        ...(this.pricing?.escrow !== undefined ? { escrow: this.pricing.escrow } : {}),
       });
       this.chain = { network: ledger.network, contractId: ledger.contractId, serverId: ledger.serverId, player, openTx, closeTx: null };
     }

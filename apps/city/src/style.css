@@ -518,8 +518,165 @@ button:disabled {
 }
 
 #bz-hud[hidden],
+#bz-wire[hidden],
+#bz-reasons[hidden],
 #bz-prompt[hidden],
 #bz-panel[hidden],
 .bz-ask[hidden] {
   display: none;
+}
+
+/* Stock on the stall tags */
+.bz-stock {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--bz-green);
+}
+.bz-stock.sold_out {
+  color: var(--bz-gold);
+}
+.bz-stock.broke {
+  color: var(--bz-red);
+}
+
+/* The street wire: agents trading onchain */
+#bz-wire {
+  position: fixed;
+  left: 16px;
+  bottom: 190px;
+  z-index: 40;
+  width: min(330px, calc(100vw - 32px));
+  color: var(--bz-ink);
+  font: 12px/1.35 var(--bz-font);
+  transition: border-color 0.3s;
+}
+#bz-wire.ping {
+  border-color: var(--bz-gold);
+}
+#bz-wire header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+#bz-wire header b {
+  color: var(--bz-gold);
+  font-size: 13px;
+}
+#bz-wire header span {
+  color: var(--bz-dim);
+  font-size: 11px;
+}
+#bz-news {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+#bz-news li {
+  display: grid;
+  grid-template-columns: 18px 1fr auto auto;
+  gap: 6px;
+  align-items: start;
+  animation: bz-pop-in 0.3s ease;
+}
+#bz-news a {
+  color: var(--bz-gold);
+  font-size: 11px;
+}
+#bz-news time {
+  color: var(--bz-dim);
+  font-size: 10px;
+}
+
+/* The merchant's agent wallet in the haggle panel */
+#bz-agent:empty {
+  display: none;
+}
+.bz-wallet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.bz-wallet a {
+  color: var(--bz-gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bz-chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(110, 231, 160, 0.15);
+  color: var(--bz-green);
+  font-size: 11px;
+  font-weight: 700;
+}
+.bz-agent-facts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+.bz-agent-facts div {
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.bz-agent-facts span {
+  display: block;
+  font-size: 10px;
+  color: var(--bz-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bz-agent-facts b {
+  font-size: 14px;
+}
+.bz-invest p {
+  margin: 8px 0 6px;
+  font-size: 13px;
+  color: var(--bz-dim);
+}
+.bz-invest button {
+  margin-right: 6px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--bz-gold);
+  background: rgba(255, 196, 92, 0.15);
+  color: var(--bz-ink);
+  font: inherit;
+  cursor: pointer;
+}
+#bz-reasons {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  color: var(--bz-dim);
+}
+#bz-reasons li::before {
+  content: "· ";
+}
+#bz-reasons li.h {
+  color: var(--bz-ink);
+  font-weight: 600;
+}
+#bz-reasons li.h::before {
+  content: "";
+}
+@media (max-width: 640px) {
+  #bz-wire {
+    display: none;
+  }
 }

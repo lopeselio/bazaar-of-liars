@@ -66,4 +66,14 @@ describe.each(backends)("%s store", (_name, make) => {
     await s.putDay("p", { n: 2, left: 5, startWorth: 210 }, 60_000);
     expect(await s.getDay("p")).toEqual({ n: 2, left: 5, startWorth: 210 });
   });
+
+  it("keeps a capped, newest-first news feed and decaying counters", async () => {
+    const s = await ready;
+    for (let i = 0; i < 5; i++) await s.pushNews({ t: i, kind: "sale", text: `n${i}`, agents: [] }, 3);
+    expect((await s.news(10)).map((x) => x.text)).toEqual(["n4", "n3", "n2"]);
+    expect(await s.bump("sales:x", 60_000)).toBe(1);
+    expect(await s.bump("sales:x", 60_000)).toBe(2);
+    expect(await s.count("sales:x")).toBe(2);
+    expect(await s.count("sales:y")).toBe(0);
+  });
 });

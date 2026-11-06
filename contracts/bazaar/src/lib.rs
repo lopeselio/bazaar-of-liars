@@ -1,17 +1,28 @@
-//! # Bazaar of Liars — fair-play contract (v2)
+//! # Bazaar of Liars — fair-play contract (v3: Canal Street's agent economy)
 //!
 //! Every haggle is a commit-reveal:
-//! 1. `open_haggle`: before the player's first message, the game server posts
+//! 1. `open_haggle`: before the first message, the game server posts
 //!    `sha256("bazaar-v2|side|merchant|good|limit|need|seed|listPrice|grudge|loyalty|salt")`.
 //!    The contract checks that `grudge` / `loyalty` (what the merchant remembers about this
-//!    player) match its own records, so the server can't quietly hold a grudge that isn't real.
-//!    When the merchant is BUYING, the player's good is escrowed here until the haggle ends.
+//!    player) match its own records, and escrows what's being traded: the merchant's goods
+//!    when it sells, the player's good and the merchant's coins when it buys.
 //! 2. `close_haggle`: when the haggle ends (deal or not) the server reveals the secret + salt.
 //!    The contract recomputes the hash and rejects any mismatch. On a deal it also checks the
 //!    limit: a merchant selling never goes below its floor, a merchant buying never pays above
-//!    its ceiling. Only then do coins and goods move, and the merchant's memory updates.
+//!    its ceiling. Only then do coins and goods move between the two accounts.
 //! 3. `expire_haggle`: if the server never reveals, anyone can expire the haggle after
-//!    `REVEAL_WINDOW_BLOCKS` (escrow is returned); it's counted publicly in `stats().unrevealed`.
+//!    `REVEAL_WINDOW_BLOCKS` (escrows are returned); it's counted publicly in `stats().unrevealed`.
+//!
+//! ## Agents (v3)
+//! Merchants, the wholesaler, rival traders and the runner are agents with their own NEAR
+//! accounts. Their coins and stock live here, keyed by those accounts, so every sale pays the
+//! merchant itself. Each agent's policy is enforced here, not trusted to the server:
+//! - an agent spends only after it signs `authorize_spend` (or `pay_agent`) with its own key,
+//!   and never more than its `daily_cap` in a UTC day;
+//! - a merchant never sells below what its stock cost it (its running cost basis);
+//! - a merchant buying from a player can only pay out of coins escrowed from its own purse.
+//!
+//! The agents' keys are function-call keys for this contract only: they can't move NEAR.
 //!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
@@ -27,7 +38,10 @@ pub const REVEAL_WINDOW_BLOCKS: u64 = 3_600;
 pub const MEMORY_CAP: u32 = 5;
 /// Leaderboard size.
 pub const TOP_N: usize = 10;
+/// Most units in one lot.
+pub const MAX_QTY: u32 = 20;
 const COMMIT_DOMAIN: &str = "bazaar-v2";
+const DAY_MS: u64 = 86_400_000;
 
 #[near(serializers = [borsh])]
 #[derive(BorshStorageKey)]
@@ -36,6 +50,11 @@ enum StorageKey {
     Coins,
     Goods,
     Memory,
+    Agents,
+    AgentByAccount,
+    CostBasis,
+    Auths,
+    Investments,
 }
 
 #[near(serializers = [borsh, json])]
@@ -66,8 +85,19 @@ impl Side {
     }
 }
 
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentKind {
+    Merchant,
+    Wholesaler,
+    Trader,
+    Runner,
+}
+
 /// The merchant's hidden hand. Field names match the TypeScript `MerchantSecret`.
 /// `floor` is the merchant's limit: the lowest it sells for, or the highest it buys for.
+/// For a lot (`qty` > 1) it's the limit for the whole lot.
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -86,10 +116,15 @@ pub struct Secret {
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug)]
 pub struct Haggle {
+    /// The merchant's counterpart: a player, or an agent (a trader, or a merchant at the docks).
     pub player: AccountId,
     pub side: Side,
     pub merchant_id: String,
     pub good_id: String,
+    /// Units traded (1 at a stall, a lot at the docks).
+    pub qty: u32,
+    /// Coins locked from the merchant's purse while it's buying.
+    pub escrow: u64,
     pub grudge: u32,
     pub loyalty: u32,
     pub commitment: String,
@@ -115,6 +150,42 @@ pub struct LeaderEntry {
     pub player: AccountId,
     /// The most coins this player has ever held.
     pub peak: u64,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Agent {
+    pub id: String,
+    pub name: String,
+    pub account: AccountId,
+    pub kind: AgentKind,
+    /// Most coins it may commit in one UTC day.
+    pub daily_cap: u64,
+    pub spent_day: u64,
+    pub spent_today: u64,
+}
+
+/// A spend an agent signed for one haggle.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Auth {
+    pub agent: AccountId,
+    pub max: u64,
+}
+
+#[near(serializers = [json])]
+pub struct AgentView {
+    pub id: String,
+    pub name: String,
+    pub account: AccountId,
+    pub kind: AgentKind,
+    pub coins: u64,
+    /// Units held of each requested good, in order.
+    pub goods: Vec<u32>,
+    /// Average coins paid per unit of each requested good, in hundredths.
+    pub cost_basis: Vec<u64>,
+    pub daily_cap: u64,
+    pub spent_today: u64,
 }
 
 #[near(serializers = [json])]
@@ -144,16 +215,25 @@ pub struct Bazaar {
     server: AccountId,
     haggles: LookupMap<String, Haggle>,
     coins: LookupMap<AccountId, u64>,
-    /// "player#good" → count
+    /// "account#good" → count
     goods: LookupMap<String, u32>,
     /// "player#merchant" → memory
     memory: LookupMap<String, Memory>,
-    /// Top players by peak coins, best first. Peaks only rise, so this is exact.
+    /// Top players (and traders) by peak coins, best first. Peaks only rise, so this is exact.
     leaders: Vec<LeaderEntry>,
     haggle_count: u64,
     deals: u64,
     no_deals: u64,
     unrevealed: u64,
+    agents: LookupMap<String, Agent>,
+    agent_ids: Vec<String>,
+    agent_by_account: LookupMap<AccountId, String>,
+    /// "account#good" → average cost per unit, in hundredths of a coin
+    cost_basis: LookupMap<String, u64>,
+    /// haggle id → the spend an agent signed for it
+    auths: LookupMap<String, Auth>,
+    /// "player#agent" → coins invested
+    investments: LookupMap<String, u64>,
 }
 
 /// sha256 of the canonical preimage, lowercase hex.
@@ -189,15 +269,18 @@ fn is_id(s: &str) -> bool {
 }
 
 fn emit(event: &str, data: near_sdk::serde_json::Value) {
-    let log = json!({ "standard": "bazaar", "version": "2.0.0", "event": event, "data": [data] });
+    let log = json!({ "standard": "bazaar", "version": "3.0.0", "event": event, "data": [data] });
     env::log_str(&format!("EVENT_JSON:{log}"));
 }
 
-fn goods_key(player: &AccountId, good: &str) -> String {
-    format!("{player}#{good}")
+fn goods_key(account: &AccountId, good: &str) -> String {
+    format!("{account}#{good}")
 }
 fn memory_key(player: &AccountId, merchant: &str) -> String {
     format!("{player}#{merchant}")
+}
+fn today() -> u64 {
+    env::block_timestamp_ms() / DAY_MS
 }
 
 #[near]
@@ -216,37 +299,101 @@ impl Bazaar {
             deals: 0,
             no_deals: 0,
             unrevealed: 0,
+            agents: LookupMap::new(StorageKey::Agents),
+            agent_ids: Vec::new(),
+            agent_by_account: LookupMap::new(StorageKey::AgentByAccount),
+            cost_basis: LookupMap::new(StorageKey::CostBasis),
+            auths: LookupMap::new(StorageKey::Auths),
+            investments: LookupMap::new(StorageKey::Investments),
         }
     }
 
     fn require_server(&self) {
         require!(env::predecessor_account_id() == self.server, "only the game server can do this");
     }
+    fn require_owner(&self) {
+        require!(env::predecessor_account_id() == self.owner, "only the owner can do this");
+    }
 
     /// Owner only: rotate the server account.
     pub fn set_server(&mut self, server: AccountId) {
-        require!(env::predecessor_account_id() == self.owner, "only the owner can do this");
+        self.require_owner();
         self.server = server;
     }
 
-    fn add_goods(&mut self, player: &AccountId, good: &str, delta: i64) {
-        let key = goods_key(player, good);
+    #[allow(clippy::too_many_arguments)]
+    /// Owner only: give an agent its account, policy and opening stock. `stock` is
+    /// (good, units, cost per unit in coins). Re-registering updates the name and cap only.
+    pub fn register_agent(&mut self, id: String, name: String, account: AccountId, kind: AgentKind, daily_cap: u64, coins: u64, stock: Vec<(String, u32, u32)>) {
+        self.require_owner();
+        require!(is_id(&id), "agent id must be [a-z0-9_-]{1,64}");
+        if let Some(a) = self.agents.get(&id).cloned() {
+            require!(a.account == account, "an agent keeps its account");
+            self.agents.insert(id, Agent { name, daily_cap, ..a });
+            return;
+        }
+        require!(!self.agent_by_account.contains_key(&account), "account is already an agent");
+        self.agents.insert(id.clone(), Agent { id: id.clone(), name: name.clone(), account: account.clone(), kind, daily_cap, spent_day: today(), spent_today: 0 });
+        self.agent_ids.push(id.clone());
+        self.agent_by_account.insert(account.clone(), id.clone());
+        self.set_coins(&account, coins);
+        for (good, units, cost) in stock {
+            require!(is_id(&good), "good id must be [a-z0-9_-]{1,64}");
+            self.add_goods(&account, &good, i64::from(units));
+            self.cost_basis.insert(goods_key(&account, &good), u64::from(cost) * 100);
+        }
+        emit("agent_registered", json!({ "id": id, "name": name, "account": account, "kind": kind, "daily_cap": daily_cap, "coins": coins }));
+    }
+
+    fn agent(&self, id: &str) -> Agent {
+        self.agents.get(id).cloned().unwrap_or_else(|| env::panic_str("unknown agent"))
+    }
+    fn agent_of(&self, account: &AccountId) -> Option<Agent> {
+        self.agent_by_account.get(account).and_then(|id| self.agents.get(id).cloned())
+    }
+
+    /// Count `amount` against the agent's daily cap (negative releases an unused reservation).
+    fn charge_cap(&mut self, id: &str, amount: i64) {
+        let mut a = self.agent(id);
+        let day = today();
+        if a.spent_day != day {
+            a.spent_day = day;
+            a.spent_today = 0;
+        }
+        let next = a.spent_today as i64 + amount;
+        require!(next <= a.daily_cap as i64, "over the agent's daily spending cap");
+        a.spent_today = next.max(0) as u64;
+        self.agents.insert(id.to_string(), a);
+    }
+
+    fn add_goods(&mut self, account: &AccountId, good: &str, delta: i64) {
+        let key = goods_key(account, good);
         let have = i64::from(self.goods.get(&key).copied().unwrap_or(0));
         let next = have + delta;
         require!(next >= 0, "player doesn't have that good");
         self.goods.insert(key, next as u32);
     }
 
-    fn set_coins(&mut self, player: &AccountId, coins: u64) {
-        self.coins.insert(player.clone(), coins);
-        // Leaderboard of peak purses.
-        if let Some(e) = self.leaders.iter_mut().find(|e| &e.player == player) {
+    fn add_coins(&mut self, account: &AccountId, delta: i64) {
+        let have = self.coins_of(account.clone()) as i64;
+        let next = have + delta;
+        require!(next >= 0, "not enough coins");
+        self.set_coins(account, next as u64);
+    }
+
+    fn set_coins(&mut self, account: &AccountId, coins: u64) {
+        self.coins.insert(account.clone(), coins);
+        // Leaderboard of peak purses: players and rival traders, not shopkeepers.
+        if self.agent_of(account).is_some_and(|a| a.kind != AgentKind::Trader) {
+            return;
+        }
+        if let Some(e) = self.leaders.iter_mut().find(|e| &e.player == account) {
             if coins <= e.peak {
                 return;
             }
             e.peak = coins;
         } else if self.leaders.len() < TOP_N || coins > self.leaders.last().map(|e| e.peak).unwrap_or(0) {
-            self.leaders.push(LeaderEntry { player: player.clone(), peak: coins });
+            self.leaders.push(LeaderEntry { player: account.clone(), peak: coins });
         } else {
             return;
         }
@@ -254,7 +401,60 @@ impl Bazaar {
         self.leaders.truncate(TOP_N);
     }
 
-    /// Post the commitment. Must happen before the player's first message.
+    // ---------- agents spend with their own keys ----------
+
+    /// Signed by an agent's own account: allow the game server to spend up to `max` coins of
+    /// this agent's purse in one haggle (a trader at a stall, a merchant restocking at the docks).
+    pub fn authorize_spend(&mut self, haggle_id: String, max: u64) {
+        let who = env::predecessor_account_id();
+        let a = self.agent_of(&who).unwrap_or_else(|| env::panic_str("only an agent can authorize its own spending"));
+        require!(is_id(&haggle_id), "haggle_id must be [a-z0-9_-]{1,64}");
+        require!(!self.haggles.contains_key(&haggle_id) && !self.auths.contains_key(&haggle_id), "haggle_id already used");
+        require!(max > 0 && max <= self.coins_of(who.clone()), "can't authorize more than the agent holds");
+        self.charge_cap(&a.id, max as i64);
+        self.auths.insert(haggle_id.clone(), Auth { agent: who.clone(), max });
+        emit("spend_authorized", json!({ "haggle_id": haggle_id, "agent": a.id, "max": max }));
+    }
+
+    /// Signed by an agent's own account: pay another agent (hiring a runner, say).
+    pub fn pay_agent(&mut self, to: String, amount: u64, memo: String) {
+        let who = env::predecessor_account_id();
+        let from = self.agent_of(&who).unwrap_or_else(|| env::panic_str("only an agent can pay from its purse"));
+        let to_agent = self.agent(&to);
+        require!(amount > 0 && memo.len() <= 140, "amount must be positive, memo at most 140 chars");
+        self.charge_cap(&from.id, amount as i64);
+        self.add_coins(&who, -(amount as i64));
+        self.add_coins(&to_agent.account, amount as i64);
+        emit("agent_paid", json!({ "from": from.id, "to": to, "amount": amount, "memo": memo }));
+    }
+
+    /// Server, for a player: invest coins in an agent (say, a merchant that's gone broke).
+    pub fn invest(&mut self, player: AccountId, agent_id: String, amount: u64) {
+        self.require_server();
+        require!(self.agent_of(&player).is_none(), "agents don't invest");
+        let a = self.agent(&agent_id);
+        require!(amount > 0, "amount must be positive");
+        self.add_coins(&player, -(amount as i64));
+        self.add_coins(&a.account, amount as i64);
+        let key = memory_key(&player, &agent_id);
+        let total = self.investments.get(&key).copied().unwrap_or(0) + amount;
+        self.investments.insert(key, total);
+        emit("invested", json!({ "player": player, "agent": agent_id, "amount": amount, "total": total }));
+    }
+
+    /// Server: a merchant uses up a good it bought (so it wants another one later).
+    pub fn consume(&mut self, agent_id: String, good_id: String, qty: u32) {
+        self.require_server();
+        let a = self.agent(&agent_id);
+        self.add_goods(&a.account, &good_id, -i64::from(qty));
+        emit("consumed", json!({ "agent": agent_id, "good_id": good_id, "qty": qty }));
+    }
+
+    // ---------- haggles ----------
+
+    /// Post the commitment. Must happen before the first message.
+    /// `qty` defaults to 1. `escrow` is required when the merchant buys: the coins locked from
+    /// its purse, at least its committed ceiling.
     #[allow(clippy::too_many_arguments)]
     pub fn open_haggle(
         &mut self,
@@ -266,12 +466,27 @@ impl Bazaar {
         grudge: u32,
         loyalty: u32,
         commitment: String,
+        qty: Option<u32>,
+        escrow: Option<u64>,
     ) {
         self.require_server();
         require!(is_id(&haggle_id), "haggle_id must be [a-z0-9_-]{1,64}");
         require!(is_id(&merchant_id) && is_id(&good_id), "merchant_id/good_id must be [a-z0-9_-]{1,64}");
         require!(is_lower_hex(&commitment, 64), "commitment must be 64 lowercase hex chars");
         require!(!self.haggles.contains_key(&haggle_id), "haggle_id already used");
+        let qty = qty.unwrap_or(1);
+        require!((1..=MAX_QTY).contains(&qty), "qty must be 1..=20");
+        let merchant = self.agent(&merchant_id);
+        require!(matches!(merchant.kind, AgentKind::Merchant | AgentKind::Wholesaler), "only merchants and the wholesaler haggle");
+        require!(merchant.account != player, "an agent can't haggle with itself");
+
+        // An agent on the other side must have signed for this spend itself.
+        if self.agent_of(&player).is_some() {
+            let auth = self.auths.get(&haggle_id).cloned().unwrap_or_else(|| env::panic_str("the agent hasn't authorized this spend"));
+            require!(auth.agent == player, "authorization is from a different agent");
+        } else if !self.coins.contains_key(&player) {
+            self.set_coins(&player, STARTER_COINS);
+        }
 
         // The merchant's memory is ours, not the server's to invent.
         let mem = self.memory_of(player.clone(), merchant_id.clone());
@@ -280,13 +495,23 @@ impl Bazaar {
             "grudge/loyalty don't match the merchant's onchain memory"
         );
 
-        if !self.coins.contains_key(&player) {
-            self.set_coins(&player, STARTER_COINS);
-        }
+        let mut locked = 0;
         match side {
-            Side::Sell => require!(self.coins_of(player.clone()) > 0, "player has no coins"),
-            // Escrow the good the player is selling.
-            Side::Buy => self.add_goods(&player, &good_id, -1),
+            Side::Sell => {
+                require!(self.coins_of(player.clone()) > 0, "player has no coins");
+                // The merchant's goods wait here until the deal.
+                let have = self.goods_of(merchant.account.clone(), good_id.clone());
+                require!(have >= qty, "the merchant is sold out");
+                self.add_goods(&merchant.account, &good_id, -i64::from(qty));
+            }
+            Side::Buy => {
+                require!(qty == 1, "players sell one unit at a time");
+                self.add_goods(&player, &good_id, -1);
+                locked = escrow.unwrap_or_else(|| env::panic_str("a buying merchant must escrow coins"));
+                require!(locked > 0, "escrow must be positive");
+                require!(self.coins_of(merchant.account.clone()) >= locked, "the merchant can't afford to buy");
+                self.add_coins(&merchant.account, -(locked as i64));
+            }
         }
 
         self.haggles.insert(
@@ -296,6 +521,8 @@ impl Bazaar {
                 side,
                 merchant_id: merchant_id.clone(),
                 good_id: good_id.clone(),
+                qty,
+                escrow: locked,
                 grudge,
                 loyalty,
                 commitment: commitment.clone(),
@@ -309,14 +536,15 @@ impl Bazaar {
         self.haggle_count += 1;
         emit(
             "haggle_opened",
-            json!({ "haggle_id": haggle_id, "player": player, "side": side, "merchant_id": merchant_id, "good_id": good_id, "commitment": commitment }),
+            json!({ "haggle_id": haggle_id, "player": player, "side": side, "merchant_id": merchant_id, "good_id": good_id, "qty": qty, "escrow": locked, "commitment": commitment }),
         );
     }
 
     /// Reveal the secret. `deal_price = Some(p)` settles a trade; `None` closes with no deal.
     /// `lowballed` updates the merchant's memory of this player.
     /// Panics (and nothing moves) unless the reveal matches the commitment and the deal
-    /// respects the merchant's limit.
+    /// respects every limit: the merchant's committed floor or ceiling, the no-loss rule,
+    /// the buyer's purse, and an agent buyer's signed maximum.
     pub fn close_haggle(&mut self, haggle_id: String, secret: Secret, salt: String, deal_price: Option<u32>, lowballed: bool) {
         self.require_server();
         let mut h = self.haggles.get(&haggle_id).cloned().unwrap_or_else(|| env::panic_str("unknown haggle"));
@@ -331,22 +559,55 @@ impl Bazaar {
         require!(commitment_of(&secret, &salt) == h.commitment, "reveal does not match the commitment");
 
         let player = h.player.clone();
+        let merchant = self.agent(&h.merchant_id);
+        let buyer_agent = self.agent_of(&player);
+        let auth = self.auths.remove(&haggle_id);
         match (h.side, deal_price) {
             (Side::Sell, Some(price)) => {
                 require!(price >= secret.floor, "deal price is below the merchant's committed floor");
+                // No-loss rule: the committed floor covers what the stock cost the merchant.
+                let basis = self.cost_basis.get(&goods_key(&merchant.account, &h.good_id)).copied().unwrap_or(0);
+                require!(u64::from(secret.floor) * 100 >= basis * u64::from(h.qty), "the merchant's floor is below its cost");
                 let balance = self.coins_of(player.clone());
                 require!(balance >= u64::from(price), "player can't afford this price");
-                self.set_coins(&player, balance - u64::from(price));
-                self.add_goods(&player, &h.good_id, 1);
+                if let (Some(a), Some(auth)) = (&buyer_agent, &auth) {
+                    require!(u64::from(price) <= auth.max, "price is above what the agent authorized");
+                    self.charge_cap(&a.id, u64::from(price) as i64 - auth.max as i64);
+                    // The buyer's running cost basis for what it now holds.
+                    let key = goods_key(&player, &h.good_id);
+                    let held = u64::from(self.goods_of(player.clone(), h.good_id.clone()));
+                    let old = self.cost_basis.get(&key).copied().unwrap_or(0);
+                    let next = (old * held + u64::from(price) * 100) / (held + u64::from(h.qty));
+                    self.cost_basis.insert(key, next);
+                }
+                self.add_coins(&player, -i64::from(price));
+                self.add_coins(&merchant.account, i64::from(price));
+                self.add_goods(&player, &h.good_id, i64::from(h.qty));
+            }
+            (Side::Sell, None) => {
+                if let (Some(a), Some(auth)) = (&buyer_agent, &auth) {
+                    self.charge_cap(&a.id, -(auth.max as i64));
+                }
+                self.add_goods(&merchant.account, &h.good_id, i64::from(h.qty));
             }
             (Side::Buy, Some(price)) => {
+                // An agent selling signed for this haggle; selling spends nothing, so release the reservation.
+                if let (Some(a), Some(auth)) = (&buyer_agent, &auth) {
+                    self.charge_cap(&a.id, -(auth.max as i64));
+                }
                 require!(price <= secret.floor, "deal price is above the merchant's committed ceiling");
-                let balance = self.coins_of(player.clone());
-                self.set_coins(&player, balance + u64::from(price));
-                // The escrowed good goes to the merchant.
+                require!(u64::from(price) <= h.escrow, "deal price is above the merchant's escrow");
+                self.add_coins(&player, i64::from(price));
+                self.add_coins(&merchant.account, h.escrow as i64 - i64::from(price));
+                self.add_goods(&merchant.account, &h.good_id, 1);
             }
-            (Side::Buy, None) => self.add_goods(&player, &h.good_id, 1), // return escrow
-            (Side::Sell, None) => {}
+            (Side::Buy, None) => {
+                if let (Some(a), Some(auth)) = (&buyer_agent, &auth) {
+                    self.charge_cap(&a.id, -(auth.max as i64));
+                }
+                self.add_goods(&player, &h.good_id, 1);
+                self.add_coins(&merchant.account, h.escrow as i64);
+            }
         }
         if deal_price.is_some() {
             h.status = Status::Deal;
@@ -365,7 +626,7 @@ impl Bazaar {
 
         emit(
             "haggle_closed",
-            json!({ "haggle_id": haggle_id, "side": h.side, "status": h.status, "price": h.price, "limit": secret.floor, "need": secret.need }),
+            json!({ "haggle_id": haggle_id, "player": player, "merchant_id": h.merchant_id, "side": h.side, "good_id": h.good_id, "qty": h.qty, "status": h.status, "price": h.price, "limit": secret.floor, "need": secret.need }),
         );
         h.secret = Some(secret);
         h.salt = Some(salt);
@@ -377,9 +638,17 @@ impl Bazaar {
         let mut h = self.haggles.get(&haggle_id).cloned().unwrap_or_else(|| env::panic_str("unknown haggle"));
         require!(h.status == Status::Open, "haggle already closed");
         require!(env::block_height() >= h.opened_block + REVEAL_WINDOW_BLOCKS, "reveal window still open");
-        if h.side == Side::Buy {
-            let (p, g) = (h.player.clone(), h.good_id.clone());
-            self.add_goods(&p, &g, 1);
+        let merchant = self.agent(&h.merchant_id);
+        match h.side {
+            Side::Sell => self.add_goods(&merchant.account, &h.good_id, i64::from(h.qty)),
+            Side::Buy => {
+                let (p, g) = (h.player.clone(), h.good_id.clone());
+                self.add_goods(&p, &g, 1);
+                self.add_coins(&merchant.account, h.escrow as i64);
+            }
+        }
+        if let Some((a, auth)) = self.auths.remove(&haggle_id).and_then(|auth| self.agent_of(&auth.agent).map(|a| (a, auth))) {
+            self.charge_cap(&a.id, -(auth.max as i64));
         }
         h.status = Status::Expired;
         self.haggles.insert(haggle_id.clone(), h);
@@ -405,6 +674,10 @@ impl Bazaar {
         self.memory.get(&memory_key(&player, &merchant_id)).copied().unwrap_or_default()
     }
 
+    pub fn invested(&self, player: AccountId, agent_id: String) -> u64 {
+        self.investments.get(&memory_key(&player, &agent_id)).copied().unwrap_or(0)
+    }
+
     /// Everything the game UI needs about a player in one call. At most 16 goods.
     pub fn player_state(&self, player: AccountId, good_ids: Vec<String>) -> PlayerState {
         require!(good_ids.len() <= 16, "at most 16 goods");
@@ -413,6 +686,27 @@ impl Bazaar {
             coins: self.coins_of(player.clone()),
             goods: good_ids.into_iter().map(|g| self.goods_of(player.clone(), g)).collect(),
         }
+    }
+
+    /// Every agent's purse, stock and policy. At most 16 goods.
+    pub fn agents(&self, good_ids: Vec<String>) -> Vec<AgentView> {
+        require!(good_ids.len() <= 16, "at most 16 goods");
+        let day = today();
+        self.agent_ids
+            .iter()
+            .filter_map(|id| self.agents.get(id))
+            .map(|a| AgentView {
+                id: a.id.clone(),
+                name: a.name.clone(),
+                account: a.account.clone(),
+                kind: a.kind,
+                coins: self.coins_of(a.account.clone()),
+                goods: good_ids.iter().map(|g| self.goods_of(a.account.clone(), g.clone())).collect(),
+                cost_basis: good_ids.iter().map(|g| self.cost_basis.get(&goods_key(&a.account, g)).copied().unwrap_or(0)).collect(),
+                daily_cap: a.daily_cap,
+                spent_today: if a.spent_day == day { a.spent_today } else { 0 },
+            })
+            .collect()
     }
 
     pub fn leaderboard(&self) -> Vec<LeaderEntry> {
@@ -435,7 +729,7 @@ mod tests {
     }
 
     fn ctx(caller: &str, block: u64) {
-        testing_env!(VMContextBuilder::new().predecessor_account_id(acc(caller)).block_height(block).build());
+        testing_env!(VMContextBuilder::new().predecessor_account_id(acc(caller)).block_height(block).block_timestamp(block * 1_000_000_000).build());
     }
 
     const SALT: &str = "00112233445566778899aabbccddeeff";
@@ -449,9 +743,19 @@ mod tests {
 
     fn setup() -> Bazaar {
         ctx("owner.testnet", 100);
-        let c = Bazaar::new(acc("server.testnet"));
+        let mut c = Bazaar::new(acc("server.testnet"));
+        let stock = |g: &str, n: u32, cost: u32| vec![(g.to_string(), n, cost)];
+        c.register_agent("farrukh".into(), "Old Farrukh".into(), acc("farrukh.testnet"), AgentKind::Merchant, 400, 100, stock("rug", 3, 40));
+        c.register_agent("zaria".into(), "Zaria".into(), acc("zaria.testnet"), AgentKind::Merchant, 400, 200, stock("saffron", 3, 20));
+        c.register_agent("wu".into(), "Auntie Wu".into(), acc("wu.testnet"), AgentKind::Wholesaler, 0, 0, stock("rug", 100, 0));
+        c.register_agent("ivy".into(), "Ivy".into(), acc("ivy.testnet"), AgentKind::Trader, 150, 300, vec![]);
+        c.register_agent("lo".into(), "Little Lo".into(), acc("lo.testnet"), AgentKind::Runner, 50, 0, vec![]);
         ctx("server.testnet", 100);
         c
+    }
+
+    fn farrukh() -> AccountId {
+        acc("farrukh.testnet")
     }
 
     fn player() -> AccountId {
@@ -459,7 +763,8 @@ mod tests {
     }
 
     fn open(c: &mut Bazaar, id: &str, s: &Secret) {
-        c.open_haggle(id.into(), player(), s.side, s.merchant_id.clone(), s.good_id.clone(), s.grudge, s.loyalty, commitment_of(s, SALT));
+        let escrow = (s.side == Side::Buy).then_some(80);
+        c.open_haggle(id.into(), player(), s.side, s.merchant_id.clone(), s.good_id.clone(), s.grudge, s.loyalty, commitment_of(s, SALT), None, escrow);
     }
 
     /// Buy a rug from Farrukh at 60, so the player has something to sell.
@@ -487,6 +792,9 @@ mod tests {
         assert_eq!(c.coins_of(player()), STARTER_COINS - 60);
         assert_eq!(c.goods_of(player(), "rug".into()), 1);
         assert_eq!(c.memory_of(player(), "farrukh".into()), Memory { lowballs: 0, deals: 1 });
+        // The sale paid Farrukh's own account and came off his shelf.
+        assert_eq!(c.coins_of(farrukh()), 160);
+        assert_eq!(c.goods_of(farrukh(), "rug".into()), 2);
         assert!(get_logs().iter().any(|l| l.starts_with("EVENT_JSON:") && l.contains("haggle_closed")));
     }
 
@@ -500,7 +808,10 @@ mod tests {
         c.close_haggle("h2".into(), s, SALT.into(), Some(68), false);
         assert_eq!(c.coins_of(player()), STARTER_COINS - 60 + 68);
         assert_eq!(c.goods_of(player(), "rug".into()), 0);
-        assert_eq!(c.leaderboard()[0], LeaderEntry { player: player(), peak: STARTER_COINS + 8 });
+        // Zaria paid out of her own purse (escrow 80, refund 12) and now holds the rug.
+        assert_eq!(c.coins_of(acc("zaria.testnet")), 200 - 68);
+        assert_eq!(c.goods_of(acc("zaria.testnet"), "rug".into()), 1);
+        assert!(c.leaderboard().contains(&LeaderEntry { player: player(), peak: STARTER_COINS + 8 }));
     }
 
     #[test]
@@ -512,6 +823,7 @@ mod tests {
         c.close_haggle("h2".into(), s, SALT.into(), None, true);
         assert_eq!(c.goods_of(player(), "rug".into()), 1);
         assert_eq!(c.memory_of(player(), "zaria".into()), Memory { lowballs: 1, deals: 0 });
+        assert_eq!(c.coins_of(acc("zaria.testnet")), 200, "escrow returned");
     }
 
     #[test]
@@ -642,16 +954,18 @@ mod tests {
     #[test]
     fn leaderboard_keeps_the_top_peaks() {
         let mut c = setup();
+        // Ivy (a rival trader, 300 coins) is ranked alongside players.
         for i in 0..12u64 {
             c.set_coins(&acc(&format!("p{i}.testnet")), 100 + i);
         }
         let lb = c.leaderboard();
         assert_eq!(lb.len(), TOP_N);
-        assert_eq!(lb[0].peak, 111);
-        assert_eq!(lb[TOP_N - 1].peak, 102);
+        assert_eq!(lb[0], LeaderEntry { player: acc("ivy.testnet"), peak: 300 });
+        assert_eq!(lb[1].peak, 111);
+        assert_eq!(lb[TOP_N - 1].peak, 103);
         // Spending doesn't lower a peak.
         c.set_coins(&acc("p11.testnet"), 5);
-        assert_eq!(c.leaderboard()[0].peak, 111);
+        assert_eq!(c.leaderboard()[1].peak, 111);
     }
 
     #[test]
@@ -663,6 +977,7 @@ mod tests {
         c.expire_haggle("h2".into());
         assert_eq!(c.get_haggle("h2".into()).unwrap().status, Status::Expired);
         assert_eq!(c.goods_of(player(), "rug".into()), 1);
+        assert_eq!(c.coins_of(acc("zaria.testnet")), 200);
         assert_eq!(c.stats().unrevealed, 1);
     }
 
@@ -673,5 +988,152 @@ mod tests {
         open(&mut c, "h1", &sell_secret());
         ctx("anyone.testnet", 101);
         c.expire_haggle("h1".into());
+    }
+
+    // ---------- agents ----------
+
+    fn wholesale_secret(floor: u32) -> Secret {
+        Secret { side: Side::Sell, merchant_id: "wu".into(), good_id: "rug".into(), floor, need: "restocking".into(), seed: 1, list_price: floor * 2, grudge: 0, loyalty: 0 }
+    }
+
+    /// Farrukh signs for a restock himself, then the server runs the haggle at the docks.
+    fn restock(c: &mut Bazaar, id: &str, max: u64, floor: u32, price: Option<u32>) {
+        ctx("farrukh.testnet", 100);
+        c.authorize_spend(id.into(), max);
+        ctx("server.testnet", 100);
+        let s = wholesale_secret(floor);
+        c.open_haggle(id.into(), farrukh(), Side::Sell, "wu".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), Some(4), None);
+        c.close_haggle(id.into(), s, SALT.into(), price, false);
+    }
+
+    #[test]
+    fn a_merchant_restocks_with_its_own_signature_and_tracks_cost() {
+        let mut c = setup();
+        restock(&mut c, "w1", 100, 80, Some(90));
+        assert_eq!(c.coins_of(farrukh()), 10);
+        assert_eq!(c.coins_of(acc("wu.testnet")), 90);
+        assert_eq!(c.goods_of(farrukh(), "rug".into()), 7);
+        // (3 × 40 + 90) / 7 = 30 coins a unit.
+        let v = c.agents(vec!["rug".into()]);
+        let f = v.iter().find(|a| a.id == "farrukh").unwrap();
+        assert_eq!(f.cost_basis, vec![3000]);
+        assert_eq!(f.spent_today, 90, "only what was spent counts against the cap");
+    }
+
+    #[test]
+    #[should_panic(expected = "hasn't authorized")]
+    fn the_server_cannot_spend_an_agents_coins_without_its_signature() {
+        let mut c = setup();
+        let s = wholesale_secret(80);
+        c.open_haggle("w1".into(), farrukh(), Side::Sell, "wu".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), Some(4), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "above what the agent authorized")]
+    fn an_agent_never_pays_past_what_it_signed_for() {
+        let mut c = setup();
+        restock(&mut c, "w1", 85, 80, Some(90));
+    }
+
+    #[test]
+    #[should_panic(expected = "daily spending cap")]
+    fn agents_respect_their_daily_cap() {
+        let mut c = setup();
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("a1".into(), 100);
+        c.authorize_spend("a2".into(), 60);
+    }
+
+    #[test]
+    #[should_panic(expected = "only an agent")]
+    fn only_agents_authorize_spending() {
+        let mut c = setup();
+        ctx("player.testnet", 100);
+        c.authorize_spend("a1".into(), 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "below its cost")]
+    fn a_merchant_never_sells_below_cost() {
+        let mut c = setup();
+        // Farrukh's rugs cost him 40 each; a floor of 39 is a loss.
+        let s = Secret { floor: 39, list_price: 70, ..sell_secret() };
+        open(&mut c, "h1", &s);
+        c.close_haggle("h1".into(), s, SALT.into(), Some(50), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "sold out")]
+    fn an_empty_shelf_cannot_sell() {
+        let mut c = setup();
+        for i in 0..4 {
+            open(&mut c, &format!("h{i}"), &sell_secret());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "can't afford to buy")]
+    fn a_broke_merchant_cannot_buy() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        let s = buy_secret();
+        c.open_haggle("h2".into(), player(), Side::Buy, "zaria".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), None, Some(500));
+    }
+
+    #[test]
+    fn hiring_a_runner_pays_it_from_the_merchants_purse() {
+        let mut c = setup();
+        ctx("farrukh.testnet", 100);
+        c.pay_agent("lo".into(), 7, "haul 4 rugs from Pier 34".into());
+        assert_eq!(c.coins_of(farrukh()), 93);
+        assert_eq!(c.coins_of(acc("lo.testnet")), 7);
+        assert!(get_logs().iter().any(|l| l.contains("agent_paid") && l.contains("Pier 34")));
+    }
+
+    #[test]
+    fn a_trader_buys_at_a_stall_and_makes_the_leaderboard() {
+        let mut c = setup();
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("t1".into(), 70);
+        ctx("server.testnet", 100);
+        let s = sell_secret();
+        c.open_haggle("t1".into(), acc("ivy.testnet"), Side::Sell, "farrukh".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), None, None);
+        c.close_haggle("t1".into(), s, SALT.into(), Some(60), false);
+        assert_eq!(c.goods_of(acc("ivy.testnet"), "rug".into()), 1);
+        assert_eq!(c.coins_of(acc("ivy.testnet")), 240);
+        assert!(c.leaderboard().iter().any(|e| e.player == acc("ivy.testnet")));
+        assert!(!c.leaderboard().iter().any(|e| e.player == farrukh()), "shopkeepers aren't ranked");
+    }
+
+    #[test]
+    fn players_can_invest_in_a_merchant() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        c.invest(player(), "farrukh".into(), 40);
+        assert_eq!(c.coins_of(player()), STARTER_COINS - 60 - 40);
+        assert_eq!(c.coins_of(farrukh()), 200);
+        assert_eq!(c.invested(player(), "farrukh".into()), 40);
+    }
+
+    #[test]
+    fn a_trader_sells_to_a_merchant_only_with_its_own_signature() {
+        let mut c = setup();
+        // Ivy buys a rug from Farrukh, then sells it to Zaria.
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("t1".into(), 70);
+        ctx("server.testnet", 100);
+        let s = sell_secret();
+        c.open_haggle("t1".into(), acc("ivy.testnet"), Side::Sell, "farrukh".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), None, None);
+        c.close_haggle("t1".into(), s, SALT.into(), Some(60), false);
+        ctx("ivy.testnet", 100);
+        c.authorize_spend("t2".into(), 1);
+        ctx("server.testnet", 100);
+        let b = buy_secret();
+        c.open_haggle("t2".into(), acc("ivy.testnet"), Side::Buy, "zaria".into(), "rug".into(), 0, 0, commitment_of(&b, SALT), None, Some(80));
+        c.close_haggle("t2".into(), b, SALT.into(), Some(68), false);
+        assert_eq!(c.coins_of(acc("ivy.testnet")), 300 - 60 + 68);
+        assert_eq!(c.goods_of(acc("zaria.testnet"), "rug".into()), 1);
+        let ivy = c.agents(vec![]).into_iter().find(|a| a.id == "ivy").unwrap();
+        assert_eq!(ivy.spent_today, 60, "selling doesn't count as spending");
     }
 }

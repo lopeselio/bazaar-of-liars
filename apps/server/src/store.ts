@@ -48,7 +48,23 @@ export interface Store {
   hit(key: string, windowMs: number, limit: number): Promise<boolean>;
   getDay(player: string): Promise<DayRecord | null>;
   putDay(player: string, day: DayRecord, ttlMs: number): Promise<void>;
+  /** Newest-first feed of what happened on the street, capped at `max`. */
+  pushNews(item: NewsItem, max?: number): Promise<void>;
+  news(n: number): Promise<NewsItem[]>;
+  /** A counter that forgets after `ttlMs` of no hits (recent demand). */
+  bump(key: string, ttlMs: number): Promise<number>;
+  count(key: string): Promise<number>;
   close(): Promise<void>;
+}
+
+/** One line in the street's news feed. */
+export interface NewsItem {
+  t: number;
+  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed";
+  text: string;
+  /** Explorer link for the transaction that settled it. */
+  tx?: string;
+  agents: string[];
 }
 
 // ---------- in-memory (one process) ----------
@@ -60,8 +76,27 @@ export function memoryStore(): Store {
   const active = new Map<string, string>();
   const hits = new Map<string, { n: number; until: number }>();
   const days = new Map<string, string>();
+  let feed: NewsItem[] = [];
+  const counters = new Map<string, { n: number; until: number }>();
   return {
     kind: "memory",
+    async pushNews(item, max = 50) {
+      feed = [item, ...feed].slice(0, max);
+    },
+    async news(n) {
+      return feed.slice(0, n);
+    },
+    async bump(key, ttlMs) {
+      const now = Date.now();
+      const c = counters.get(key);
+      const n = c && c.until > now ? c.n + 1 : 1;
+      counters.set(key, { n, until: now + ttlMs });
+      return n;
+    },
+    async count(key) {
+      const c = counters.get(key);
+      return c && c.until > Date.now() ? c.n : 0;
+    },
     async getLive(id) {
       const raw = live.get(id);
       return raw ? JSON.parse(raw) : null;
@@ -180,6 +215,19 @@ export async function redisStore(url: string, prefix = "{bazaar}:"): Promise<Sto
     },
     async putDay(player, day, ttlMs) {
       await client.set(k("day", player), JSON.stringify(day), { expiration: { type: "PX", value: ttlMs } });
+    },
+    async pushNews(item, max = 50) {
+      await client.multi().lPush(k("news"), JSON.stringify(item)).lTrim(k("news"), 0, max - 1).exec();
+    },
+    async news(n) {
+      return (await client.lRange(k("news"), 0, n - 1)).map((x) => JSON.parse(x));
+    },
+    async bump(key, ttlMs) {
+      const [n] = (await client.multi().incr(k("n", key)).pExpire(k("n", key), ttlMs).exec()) as unknown as [number];
+      return Number(n);
+    },
+    async count(key) {
+      return Number((await client.get(k("n", key))) ?? 0);
     },
     async close() {
       await client.quit();

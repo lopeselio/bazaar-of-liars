@@ -7,7 +7,7 @@
  */
 import * as THREE from "three";
 import "./style.css";
-import { api, type Ending, type MerchantInfo, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "../../web/src/api";
+import { api, type Ending, type MarketAgent, type MerchantInfo, type NewsItem, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "../../web/src/api";
 import { animateMerchant, buildStall, type StallLook } from "../../web/src/scene";
 
 interface Bridge {
@@ -77,13 +77,19 @@ document.body.insertAdjacentHTML(
      <div class="bz-card bz-day" id="bz-day"></div>
      <button class="bz-card bz-go" id="bz-go" type="button">⇢ Canal St</button>
    </div>
+   <section id="bz-wire" class="bz-card" hidden>
+     <header><b>Canal St wire</b><span>agents trading onchain</span></header>
+     <ol id="bz-news"></ol>
+   </section>
    <div id="bz-tags"></div>
    <div id="bz-prompt" hidden><kbd>F</kbd><span id="bz-prompt-text"></span></div>
    <aside id="bz-panel" hidden>
      <header><div><h2 id="bz-name"></h2><p id="bz-sub"></p></div><button id="bz-close" type="button" aria-label="Leave">✕</button></header>
+     <div id="bz-agent"></div>
      <div id="bz-choose"></div>
      <div class="bz-ask" id="bz-askrow" hidden><span id="bz-asklabel">Asking</span><b id="bz-ask">–</b><span id="bz-claim"></span></div>
      <div id="bz-steps"></div>
+     <ul id="bz-reasons" hidden></ul>
      <ol id="bz-log"></ol>
      <div id="bz-quick"></div>
      <form id="bz-form" autocomplete="off"><input id="bz-input" maxlength="300" placeholder="Say something, or name a price…" disabled /><button id="bz-send" disabled>Say</button></form>
@@ -159,7 +165,7 @@ const stalls: CityStall[] = merchants
     const front = new THREE.Vector3(spot.x + spot.toRoad.x * 1.8, y, spot.z + spot.toRoad.y * 1.8);
     const tag = document.createElement("div");
     tag.className = "bz-tag";
-    tag.innerHTML = `<b>${esc(shortName(info.name))}</b><span>${GOOD_ICON[info.good.id] ?? ""} sells ${esc(info.good.name)}</span>`;
+    tag.innerHTML = `<b>${esc(shortName(info.name))}</b><span>${GOOD_ICON[info.good.id] ?? ""} sells ${esc(info.good.name)}</span><em class="bz-stock"></em>`;
     $("bz-tags").appendChild(tag);
     return { info, stall, pos: new THREE.Vector3(spot.x, y, spot.z), front, tag };
   });
@@ -214,6 +220,51 @@ async function refreshPurse(bump = false) {
 }
 $("bz-hud").hidden = false;
 void refreshPurse();
+
+// ---------- the agent economy: purses, shelves and the street wire ----------
+
+let agents: Record<string, MarketAgent> = {};
+let seenNews = 0;
+const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫" };
+const ago = (t: number) => {
+  const s = Math.max(1, Math.round((Date.now() - t) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
+};
+function renderNews(news: NewsItem[]) {
+  $("bz-news").innerHTML = news
+    .slice(0, 6)
+    .map((n) => `<li class="k-${n.kind}"><i>${KIND_ICON[n.kind] ?? "•"}</i><span>${esc(n.text)}</span>${n.tx ? `<a href="${n.tx}" target="_blank" rel="noopener" title="Settled onchain">tx</a>` : ""}<time>${ago(n.t)}</time></li>`)
+    .join("");
+  const newest = news[0]?.t ?? 0;
+  if (seenNews && newest > seenNews) $("bz-wire").classList.add("ping");
+  setTimeout(() => $("bz-wire").classList.remove("ping"), 900);
+  seenNews = newest;
+}
+function renderStock() {
+  for (const s of stalls) {
+    const a = agents[s.info.id];
+    const el = s.tag.querySelector(".bz-stock") as HTMLElement;
+    if (!a) continue;
+    const n = a.stock[s.info.good.id] ?? 0;
+    el.className = `bz-stock ${a.status ?? ""}`;
+    el.textContent = a.status === "broke" ? "SHUTTERED · broke" : n === 0 ? "SOLD OUT · restocking" : `${n} left · ${a.coins} coins`;
+  }
+}
+async function refreshMarket() {
+  try {
+    const m = await api.market();
+    if (!m.onchain) return;
+    agents = Object.fromEntries(m.agents.map((a) => [a.id, a]));
+    $("bz-wire").hidden = false;
+    renderNews(m.news);
+    renderStock();
+    if (current && !current.side) renderAgentCard(current.s);
+  } catch {
+    /* the wire can wait */
+  }
+}
+void refreshMarket();
+setInterval(refreshMarket, 8000);
 
 // ---------- per frame: tags, proximity, merchant body language ----------
 
@@ -319,6 +370,8 @@ function openStall(s: CityStall) {
   $("bz-askrow").hidden = true;
   $("bz-name").textContent = s.info.name;
   $("bz-sub").textContent = `${GOOD_ICON[s.info.good.id] ?? ""} sells ${s.info.good.name} · ${GOOD_ICON[s.info.buys.id] ?? ""} buys ${s.info.buys.name}`;
+  $("bz-reasons").hidden = true;
+  renderAgentCard(s);
   ($("bz-input") as HTMLInputElement).disabled = true;
   ($("bz-send") as HTMLButtonElement).disabled = true;
   $("bz-panel").hidden = false;
@@ -340,6 +393,47 @@ function openStall(s: CityStall) {
   $("bz-choose")
     .querySelectorAll("button[data-side]")
     .forEach((b) => b.addEventListener("click", () => void start((b as HTMLElement).dataset.side as Side)));
+}
+
+/** The merchant is an agent with its own NEAR account: show its wallet, shelf and policy. */
+function renderAgentCard(s: CityStall) {
+  const a = agents[s.info.id];
+  const card = $("bz-agent");
+  if (!a) return void (card.innerHTML = "");
+  const n = a.stock[s.info.good.id] ?? 0;
+  const cost = a.costBasis[s.info.good.id];
+  const canInvest = a.status !== "open" && !current?.side;
+  card.innerHTML = `
+    <div class="bz-wallet">
+      <span class="bz-chip">AI agent</span>
+      <a href="${a.accountUrl}" target="_blank" rel="noopener" title="This merchant's own NEAR account">${esc(a.account)} ↗</a>
+    </div>
+    <div class="bz-agent-facts">
+      <div><span>Purse</span><b>${a.coins}</b></div>
+      <div><span>${esc(s.info.good.name)}</span><b>${n}</b></div>
+      <div><span>Paid each</span><b>${cost || "–"}</b></div>
+      <div><span>Spent today</span><b>${a.spentToday}/${a.dailyCap}</b></div>
+    </div>
+    ${
+      canInvest
+        ? `<div class="bz-invest"><p>${a.status === "broke" ? `${esc(shortName(s.info.name))} is broke and can't restock.` : `${esc(shortName(s.info.name))} is sold out. A lot is on its way from the docks.`} Invest to help it restock:</p>
+           <button type="button" data-invest="20">Invest 20</button><button type="button" data-invest="50">Invest 50</button></div>`
+        : ""
+    }`;
+  card.querySelectorAll<HTMLButtonElement>("button[data-invest]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        const r = await api.invest(PLAYER, s.info.id, Number(b.dataset.invest));
+        toast(`Invested ${b.dataset.invest} coins in ${shortName(s.info.name)}.`);
+        void r;
+        await Promise.all([refreshPurse(true), refreshMarket()]);
+      } catch (e) {
+        toast((e as Error).message);
+        b.disabled = false;
+      }
+    }),
+  );
 }
 
 function closeStall() {
@@ -366,6 +460,10 @@ async function start(side: Side) {
     current.opened = opened;
     $("bz-steps").innerHTML = `<p class="done">🔒 Secret sealed on NEAR${opened.openTxUrl ? ` · <a href="${opened.openTxUrl}" target="_blank" rel="noopener">tx</a>` : ""}</p>`;
     $("bz-asklabel").textContent = side === "sell" ? "Asking" : "Offering you";
+    if (opened.reasons?.length) {
+      $("bz-reasons").innerHTML = `<li class="h">Why ${esc(shortName(s.info.name))} prices it this way today</li>` + opened.reasons.map((r) => `<li>${esc(r)}</li>`).join("");
+      $("bz-reasons").hidden = false;
+    }
     $("bz-askrow").hidden = false;
     if (opened.memory.lowballs || opened.memory.deals)
       say("sys", opened.memory.grudge > 0 ? `${esc(shortName(s.info.name))} remembers your lowballs. Prices start higher.` : `${esc(shortName(s.info.name))} remembers you. A friend's price.`);
@@ -460,4 +558,5 @@ function finish(end: Ending) {
   $("bz-reveal").hidden = false;
   $("bz-done").addEventListener("click", closeStall);
   void refreshPurse(true);
+  setTimeout(() => void refreshMarket(), 2500);
 }

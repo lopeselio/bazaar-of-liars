@@ -18,7 +18,7 @@ RUN pnpm build
 ENV NODE_ENV=production \
     PORT=8080 \
     NEAR_NETWORK=testnet \
-    BAZAAR_CONTRACT_ID=v2.bazaar-liars.testnet \
+    BAZAAR_CONTRACT_ID=v3.bazaar-liars.testnet \
     SERVER_ACCOUNT_ID=bazaar-server.testnet \
     NEARAI_BASE_URL=https://cloud-api.near.ai/v1 \
     NEARAI_MODEL=Qwen/Qwen3.6-35B-A3B-FP8

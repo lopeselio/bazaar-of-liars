@@ -3,8 +3,12 @@
  *   Ledger      — the game server's writes: open_haggle (commit) and close_haggle (reveal + settle).
  *   ChainReader — keyless reads the verifier uses to check a bundle against the chain.
  *
+ *   AgentSigner — an agent signing for itself (v3): authorize_spend and pay_agent, with its own
+ *                 function-call key. The server can't spend an agent's coins without it.
+ *
  * The server key is read from ~/.near-credentials (near-cli-rs legacy keychain) or from
- * SERVER_PRIVATE_KEY for a hosted deploy. It is never logged or written to a bundle.
+ * SERVER_PRIVATE_KEY for a hosted deploy; agent keys likewise, or from AGENT_KEYS (a JSON map of
+ * account → private key). Keys are never logged or written to a bundle.
  */
 import { Near } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
@@ -43,8 +47,16 @@ export interface Ledger {
     grudge: number;
     loyalty: number;
     commitment: string;
+    /** Units in the lot (v3; default 1). */
+    qty?: number;
+    /** Coins locked from a buying merchant's purse (v3; required when it buys). */
+    escrow?: number;
   }): Promise<string>;
   close(a: { haggleId: string; secret: MerchantSecret; salt: string; dealPrice: number | null; lowballed: boolean }): Promise<string>;
+  /** v3: a player puts coins into an agent. */
+  invest?(a: { player: string; agentId: string; amount: number }): Promise<string>;
+  /** v3: a merchant uses up a good it bought. */
+  consume?(a: { agentId: string; goodId: string; qty: number }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -79,10 +91,59 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
         grudge: a.grudge,
         loyalty: a.loyalty,
         commitment: a.commitment,
+        ...(a.qty !== undefined || a.escrow !== undefined ? { qty: a.qty ?? null, escrow: a.escrow ?? null } : {}),
       }),
     close: (a) =>
       call("close_haggle", { haggle_id: a.haggleId, secret: a.secret, salt: a.salt, deal_price: a.dealPrice, lowballed: a.lowballed }, "FINAL"),
+    invest: (a) => call("invest", { player: a.player, agent_id: a.agentId, amount: a.amount }, "FINAL"),
+    consume: (a) => call("consume", { agent_id: a.agentId, good_id: a.goodId, qty: a.qty }),
   };
+}
+
+// ---------- agents signing for themselves (v3) ----------
+
+export interface AgentSigner {
+  readonly account: string;
+  /** Let the server spend up to `max` of this agent's coins in one haggle. */
+  authorizeSpend(haggleId: string, max: number): Promise<string>;
+  /** Pay another agent (hire it). */
+  payAgent(to: string, amount: number, memo: string): Promise<string>;
+}
+
+export function agentSigner(cfg: { network: Network; contractId: string; account: string; privateKey?: string }): AgentSigner {
+  const near = new Near({
+    network: cfg.network,
+    rpcUrl: RPC[cfg.network],
+    defaultSignerId: cfg.account,
+    ...(cfg.privateKey
+      ? { privateKey: cfg.privateKey as `ed25519:${string}` }
+      : { keyStore: new FileKeyStore("~/.near-credentials", cfg.network) }),
+  });
+  const call = async (method: string, args: object) => {
+    const r = await near
+      .transaction(cfg.account)
+      .functionCall(cfg.contractId, method, args, { gas: "30 Tgas" })
+      .send({ waitUntil: "EXECUTED_OPTIMISTIC" });
+    return r.transaction.hash as string;
+  };
+  return {
+    account: cfg.account,
+    authorizeSpend: (haggleId, max) => call("authorize_spend", { haggle_id: haggleId, max }),
+    payAgent: (to, amount, memo) => call("pay_agent", { to, amount, memo }),
+  };
+}
+
+/** Signers for every agent account, keys from AGENT_KEYS or the local keychain. */
+export function agentSignersFromEnv(agentIds: string[], env = process.env): Record<string, AgentSigner> | null {
+  if (!env.BAZAAR_CONTRACT_ID?.startsWith("v3.")) return null;
+  const keys: Record<string, string> = env.AGENT_KEYS ? JSON.parse(env.AGENT_KEYS) : {};
+  const network = (env.NEAR_NETWORK as Network) ?? "testnet";
+  return Object.fromEntries(
+    agentIds.map((id) => {
+      const account = `${id}.${env.BAZAAR_CONTRACT_ID}`;
+      return [id, agentSigner({ network, contractId: env.BAZAAR_CONTRACT_ID!, account, privateKey: keys[account] })];
+    }),
+  );
 }
 
 /** Ledger from env (BAZAAR_CONTRACT_ID, SERVER_ACCOUNT_ID, optional SERVER_PRIVATE_KEY), or null if unset. */
@@ -178,4 +239,24 @@ export async function readMemory(network: Network, contractId: string, player: s
 export async function readLeaderboard(network: Network, contractId: string): Promise<{ player: string; peak: number }[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<{ player: string; peak: number }[]>(contractId, "leaderboard", {}, { finality: "optimistic" })) ?? [];
+}
+
+export interface AgentView {
+  id: string;
+  name: string;
+  account: string;
+  kind: "merchant" | "wholesaler" | "trader" | "runner";
+  coins: number;
+  /** Units of each requested good, in order. */
+  goods: number[];
+  /** Average cost per unit of each requested good, in hundredths of a coin. */
+  cost_basis: number[];
+  daily_cap: number;
+  spent_today: number;
+}
+
+/** Every agent's purse, stock and policy (v3). */
+export async function readAgents(network: Network, contractId: string, goodIds: string[]): Promise<AgentView[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<AgentView[]>(contractId, "agents", { good_ids: goodIds }, { finality: "optimistic" })) ?? [];
 }

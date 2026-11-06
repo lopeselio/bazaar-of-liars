@@ -7,6 +7,8 @@
  *   POST /api/haggle {merchantId,player,side} attest the model, roll + commit the secret onchain
  *   POST /api/haggle/:id/turn {text}    one turn; when the haggle ends the response carries the reveal
  *   POST /api/day/next {player}         after sundown, start the next market day
+ *   GET  /api/market                    Canal Street's agents (purse, stock, policy) and the street news
+ *   POST /api/invest {player,agentId,amount} put coins into an agent (say, a broke merchant)
  *
  * State: live haggles, market days and rate limits sit in a Store (store.ts): Redis when
  * REDIS_URL is set, so any number of replicas can serve the same haggle; memory otherwise.
@@ -17,8 +19,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { GOODS, MERCHANTS, type Side } from "@bazaar/core";
+import { AGENTS, GOODS, MERCHANTS, type Side } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
+import { Market } from "./market.js";
 import {
   HaggleSession,
   NearAiClient,
@@ -29,6 +32,7 @@ import {
   ledgerFromEnv,
   nearAiAttestor,
   readPlayer,
+  agentSignersFromEnv,
   verifyBundle,
   type Ledger,
 } from "@bazaar/merchant";
@@ -62,6 +66,23 @@ const attestor = nearAiAttestor(KEY);
 
 const store = await storeFromEnv();
 console.log(`state store: ${store.kind}`);
+// Canal Street's agent economy (contract v3): agents with their own accounts, purses and stock.
+const signers = ledger ? agentSignersFromEnv(AGENTS.map((a) => a.id)) : null;
+const market = ledger && signers ? new Market(ledger, signers, store) : null;
+console.log(market ? "agent economy: on (v3)" : "agent economy: off");
+const MARKET_TICK_MS = Number(process.env.MARKET_TICK_MS ?? 40_000);
+if (market && MARKET_TICK_MS > 0)
+  setInterval(async () => {
+    // One replica at a time runs the agents.
+    const token = await store.lock("market-tick", 5 * 60_000).catch(() => null);
+    if (!token) return;
+    try {
+      await market.tick();
+    } finally {
+      await store.unlock("market-tick", token);
+    }
+  }, MARKET_TICK_MS).unref();
+
 const restore = (rec: LiveRecord) => HaggleSession.restore(rec.snap, llm, attestor, ledger ?? undefined);
 
 // ---------- helpers ----------
@@ -141,6 +162,23 @@ async function playerView(player: string) {
   return { ...p, worth: w, day: { ...(await dayOf(player, w)), perDay: HAGGLES_PER_DAY } };
 }
 
+async function invest(body: Record<string, unknown>) {
+  if (!market || !ledger?.invest) throw new HttpError(404, "investing needs the agent economy");
+  const player = String(body.player ?? "");
+  const agentId = String(body.agentId ?? "");
+  const amount = Math.floor(Number(body.amount));
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!MERCHANTS.some((m) => m.id === agentId)) throw new HttpError(400, "you can only invest in a merchant");
+  if (!(amount >= 5 && amount <= 500)) throw new HttpError(400, "invest between 5 and 500 coins");
+  const p = await purse(player);
+  if (p.coins < amount) throw new HttpError(402, `You only have ${p.coins} coins.`);
+  const tx = await ledger.invest({ player, agentId, amount });
+  market.invalidate();
+  const name = MERCHANTS.find((m) => m.id === agentId)!.name;
+  await store.pushNews({ t: Date.now(), kind: "invest", text: `A player invested ${amount} coins in ${name}`, tx: explorerTx(ledger.network, tx), agents: [agentId] });
+  return { ok: true, txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
+}
+
 async function nextDay(body: Record<string, unknown>) {
   const player = String(body.player ?? "");
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
@@ -161,6 +199,10 @@ async function finish(id: string, l: LiveRecord, session = restore(l)) {
   if (day) await store.putDay(l.player, day, DAY_TTL_MS);
   const chain = await session.close();
   const bundle = await session.bundle();
+  if (market && bundle.outcome.status === "deal" && bundle.outcome.dealPrice !== null)
+    void market
+      .onPlayerDeal(bundle.reveal.secret.merchantId, bundle.reveal.secret.side, bundle.reveal.secret.goodId, bundle.outcome.dealPrice, chain?.closeTx ?? null)
+      .catch((e) => console.error("market news:", e));
   const checks = await verifyBundle(bundle);
   const secret = bundle.reveal.secret;
   // Every claim, whether it was true, and whether the player called it.
@@ -262,6 +304,10 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
   if (side === "buy" && !(me.goods[goodId] > 0)) throw new HttpError(400, `You have no ${GOODS[goodId].name} to sell.`);
   const memory = ledger ? await readMemory(ledger.network, ledger.contractId, player, merchant.id) : { lowballs: 0, deals: 0 };
 
+  // With the agent economy on, the merchant's secret comes from its real purse and shelf.
+  const priced = market ? await market.price(merchant, side, memory) : null;
+  if (priced && "refusal" in priced) throw new HttpError(409, priced.refusal);
+
   const t0 = Date.now();
   const session = new HaggleSession(
     llm,
@@ -272,6 +318,7 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
     ledger ? { ledger, player } : undefined,
     side,
     memory,
+    priced ? { secret: priced.secret, escrow: priced.escrow } : undefined,
   );
   let opened;
   try {
@@ -298,6 +345,8 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
     openingAsk: opened.openingAsk,
     budget: me.coins,
     day: me.day,
+    /** Why the merchant prices the way it does today (no numbers that reveal the limit). */
+    reasons: priced ? priced.reasons.map((r) => r.label) : [],
     openTx: opened.openTx,
     openTxUrl: opened.openTx && ledger ? explorerTx(ledger.network, opened.openTx) : null,
     attestation: {
@@ -397,6 +446,11 @@ createServer(async (req, res) => {
       return send(res, 200, { leaders: ledger ? await readLeaderboard(ledger.network, ledger.contractId) : [] });
     if (req.method === "POST" && url === "/api/haggle") return send(res, 200, await openHaggle(await readJson(req), ip));
     if (req.method === "POST" && url === "/api/day/next") return send(res, 200, await nextDay(await readJson(req)));
+    if (req.method === "GET" && url === "/api/market") {
+      if (!market) return send(res, 200, { agents: [], news: [], onchain: false });
+      return send(res, 200, { agents: await market.agents(), news: await market.news(25), onchain: true, contractId: ledger!.contractId });
+    }
+    if (req.method === "POST" && url === "/api/invest") return send(res, 200, await invest(await readJson(req)));
     const m = url.match(/^\/api\/haggle\/([0-9a-f-]{36})\/turn$/);
     if (req.method === "POST" && m) return send(res, 200, await turn(m[1], await readJson(req)));
     if (url.startsWith("/api/")) throw new HttpError(404, "not found");

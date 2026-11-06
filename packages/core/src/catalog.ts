@@ -47,3 +47,37 @@ export const MERCHANTS: Merchant[] = [
     },
   },
 ];
+
+/** Who's who in Canal Street's agent economy. Each one has its own NEAR account (see contracts/bazaar). */
+export type AgentKind = "merchant" | "wholesaler" | "trader" | "runner";
+export interface AgentDef {
+  id: string;
+  name: string;
+  kind: AgentKind;
+  blurb: string;
+  /** Traders: which scripted strategy they haggle with (bots.ts). */
+  bot?: string;
+}
+
+/** The wholesaler at the docks: sells every good in lots, to merchants. */
+export const WHOLESALER: Merchant = {
+  id: "wu",
+  name: "Auntie Wu",
+  goodId: "rug",
+  buysGoodId: "rug",
+  personality: { stubbornness: 0.6, temper: 0.15, bluff: 0.3 },
+  tells: {
+    relaxed: "counts crates, unbothered",
+    firm: "taps the price chalked on a crate",
+    nervous: "glances at the incoming tide",
+    irritated: "waves the next buyer forward",
+  },
+};
+
+export const AGENTS: AgentDef[] = [
+  ...MERCHANTS.map((m) => ({ id: m.id, name: m.name, kind: "merchant" as const, blurb: `Sells ${GOODS[m.goodId].name}, buys ${GOODS[m.buysGoodId].name}` })),
+  { id: WHOLESALER.id, name: WHOLESALER.name, kind: "wholesaler", blurb: "Sells every good in lots at the Pier 34 docks" },
+  { id: "ivy", name: "Ivy the Flipper", kind: "trader", blurb: "Buys low at one stall, sells high at another. Calls bluffs.", bot: "sharp" },
+  { id: "rex", name: "Rex Two-Coats", kind: "trader", blurb: "A patient trader who splits the difference.", bot: "splitter" },
+  { id: "lo", name: "Little Lo", kind: "runner", blurb: "Hauls lots from the docks for a fee" },
+];

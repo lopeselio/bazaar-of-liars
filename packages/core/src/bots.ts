@@ -45,6 +45,15 @@ export const BOTS: Record<string, Bot> = {
     if (v.lastOffer === undefined) return Math.round(v.listPrice * 0.6);
     return Math.round((v.lastOffer + ask(v)) / 2);
   },
+  /**
+   * Selling to a merchant who's buying (the merchant's ask is its bid): opens high, then meets
+   * the bid halfway each round. Rival traders use it to sell what they bought.
+   */
+  seller: (v) => {
+    if (v.reply?.action === "final") return "accept";
+    if (v.lastOffer === undefined) return Math.round(v.listPrice * 1.7);
+    return Math.round((v.lastOffer + ask(v)) / 2);
+  },
   /** Reacts to tells: pushes while relaxed, backs off when firm/irritated, presses when nervous. */
   reader: (v) => {
     if (v.reply?.action === "final") return "accept";
