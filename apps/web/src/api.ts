@@ -222,5 +222,6 @@ export const api = {
   stockStall: (player: string, goodId: string, qty: number, price: number) => call<StallResult>("/api/stalls/stock", { player, goodId, qty, price }),
   withdrawStock: (player: string, goodId: string, qty: number) => call<StallResult>("/api/stalls/withdraw", { player, goodId, qty }),
   collectTill: (player: string) => call<StallResult>("/api/stalls/collect", { player }),
+  dockWork: (player: string, x: number, z: number) => call<{ wage: number; txUrl: string; player: PlayerView }>("/api/dockwork", { player, x, z }),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };
