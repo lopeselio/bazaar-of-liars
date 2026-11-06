@@ -32,7 +32,7 @@ export const titleOf = (level: number) => TITLES[Math.min(level, TITLES.length) 
 export const UNLOCKS: { level: number; what: string }[] = [
   { level: 2, what: "Express delivery jobs (bigger bounties, tighter clocks)" },
   { level: 3, what: "Jobs from the far side of town (Times Square, Central Park)" },
-  { level: 5, what: "A stall licence on Canal Street (coming next)" },
+  { level: 3, what: "A stall licence on Canal Street (150 coins): your own stall that sells while you're away" },
 ];
 
 /** Express jobs need level 2; far drop sites need level 3. */

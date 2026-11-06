@@ -8,3 +8,4 @@ export * from "./play.js";
 export * from "./economy.js";
 export * from "./orders.js";
 export * from "./cred.js";
+export * from "./stalls.js";
