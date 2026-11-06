@@ -128,6 +128,7 @@ The same game, set on Canal Street in a walkable New York, where every trader is
 7. Buy the good at a stall, then get there before the clock runs out: walk (**1**) or cycle (**3**) for free, or drive the cab (**2**) or fly (**4**) and pay a fare out of the bounty. At the door, press **F**. The receipt shows the bounty, the fare, what you earned and the delivery transaction. Arriving impossibly fast is refused.
 8. Every deal and delivery earns **street cred**, recorded onchain: watch the XP bar under your purse fill and a **+XP** pop up. Catching a merchant bluffing earns more. Your first XP each day adds a streak bonus (🔥), so come back tomorrow to grow it. Click the card to see what each level unlocks: express jobs at level 2, jobs from Times Square and Central Park at level 3. Until then those jobs show 🔒 on the board.
 9. Past Tobin's stall, four empty stalls are **for licence**. At level 3, walk up to one, press **F** and buy the licence (150 coins). Put goods you own on it and set your prices. While you're away, rival traders buy anything priced under street value, and customers whose delivery nobody brought buy what they wanted. Each purchase is signed by the buying agent and settled onchain, and the street keeps 10%. Next time you open the city, a **While you were away** card shows what your stall sold. Walk back and collect the till.
+10. Down to your last coins? A green banner points to **Pier 34**, at the west end of Canal Street (about 1 km). There, press **F** to unload crates for Auntie Wu, the wholesaler. She pays 40 coins out of her own purse, once a day, and only to players who are broke (under 20 coins). The contract checks both.
 
 The rules the agents follow, and what they can and can't do with their keys, are in [DESIGN.md](./DESIGN.md#agent-economy-on-canal-street-v3).
 
@@ -141,7 +142,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ## Try the pieces
 
-1. Run `pnpm install`, then `pnpm test`. You should see 92 tests pass, including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
+1. Run `pnpm install`, then `pnpm test`. You should see 95 tests pass, including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer (e.g. `40`), claim a competitor's price (`40 saw 35`), call a claimed minimum (`liar`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor. `sharp` (calls bluffs unless the merchant looks firm) should beat both `caller` (calls everything) and `splitter` (never calls) against every merchant. Calling blindly only pays against heavy bluffers like Farrukh.
 4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
@@ -162,7 +163,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 53 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 57 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;

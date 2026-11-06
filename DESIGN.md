@@ -95,6 +95,20 @@ The long-term hook: a stall that keeps trading while you're away.
   - The server can't buy from a stall with an agent's coins on its own.
 - **Coming back.** The owner collects the till with `collect_till`. The game shows what the stall sold since their last visit. Burned licence fees and commissions are public in `stats().burned`.
 
+## Dock work: the way back from broke (v3.4)
+
+A player can run out of coins and goods, which would end their game. Dock work fixes that without creating money.
+
+- **Who:** only a player with fewer than 20 coins, once per UTC day.
+- **Where:** Pier 34, at the west end of Canal Street. The server checks the reported position is within 45 m.
+- **How it's paid:**
+  - Auntie Wu, the wholesaler, signs `authorize_spend(wage_id, 40)` with her own key;
+  - the server calls `pay_wages`, and the contract checks the player is broke and hasn't worked today;
+  - the 40 coins move from Wu's purse, which is what merchants paid her for their lots.
+
+  No coins are minted. Her daily cap (400) bounds how many shifts she can pay in a day.
+- **In the city:** when your purse is nearly empty, a banner with a direction arrow and a green beacon lead to the docks.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
