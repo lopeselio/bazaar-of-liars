@@ -66,6 +66,12 @@ export interface Ledger {
   pruneOrders?(orderIds: string[]): Promise<string>;
   /** v3.2: XP for what only the server sees (a caught bluff), capped per day by the contract. */
   awardCred?(a: { player: string; xp: number; reason: string }): Promise<string>;
+  /** v3.3: player stalls. */
+  buyLicence?(a: { player: string; slot: string }): Promise<string>;
+  stockStall?(a: { player: string; goodId: string; qty: number; price: number }): Promise<string>;
+  withdrawStock?(a: { player: string; goodId: string; qty: number }): Promise<string>;
+  collectTill?(player: string): Promise<string>;
+  stallSale?(a: { saleId: string; slot: string; goodId: string }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -111,6 +117,11 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     expireOrder: (orderId) => call("expire_order", { order_id: orderId }),
     pruneOrders: (orderIds) => call("prune_orders", { order_ids: orderIds }),
     awardCred: (a) => call("award_cred", { player: a.player, xp: a.xp, reason: a.reason }),
+    buyLicence: (a) => call("buy_licence", { player: a.player, slot: a.slot }, "FINAL"),
+    stockStall: (a) => call("stock_stall", { player: a.player, good_id: a.goodId, qty: a.qty, price: a.price }, "FINAL"),
+    withdrawStock: (a) => call("withdraw_stock", { player: a.player, good_id: a.goodId, qty: a.qty }, "FINAL"),
+    collectTill: (player) => call("collect_till", { player }, "FINAL"),
+    stallSale: (a) => call("stall_sale", { sale_id: a.saleId, slot: a.slot, good_id: a.goodId }),
   };
 }
 
@@ -310,4 +321,20 @@ export interface OnchainCred {
 export async function readCred(network: Network, contractId: string, player: string): Promise<OnchainCred> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<OnchainCred>(contractId, "cred_of", { player }, { finality: "optimistic" })) ?? { xp: 0, streak: 0, best_streak: 0, last_day: 0 };
+}
+
+export interface OnchainStall {
+  slot: string;
+  owner: string;
+  listings: { good_id: string; qty: number; price: number }[];
+  till: number;
+  sold: number;
+  earned: number;
+  opened_ms: number;
+}
+
+/** Every licensed player stall (v3.3). */
+export async function readStalls(network: Network, contractId: string): Promise<OnchainStall[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<OnchainStall[]>(contractId, "stalls", {}, { finality: "optimistic" })) ?? [];
 }
