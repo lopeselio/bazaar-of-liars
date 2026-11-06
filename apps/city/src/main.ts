@@ -12,6 +12,7 @@ import { animateMerchant, buildStall, type StallLook } from "../../web/src/scene
 import { initJobs } from "./jobs";
 import { initCred } from "./cred";
 import { initOwnStalls } from "./ownstalls";
+import { initDocks } from "./docks";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -285,6 +286,21 @@ initJobs({
   toast,
   burst,
   goodIcon: GOOD_ICON,
+  busy: () => !!current,
+});
+
+// ---------- dock work at Pier 34 for broke players ----------
+
+initDocks({
+  scene: bridge.scene,
+  camera: () => bridge.cameraSystem.camera,
+  player: PLAYER,
+  cm,
+  frame: bridge.frame,
+  me: () => me,
+  refreshPurse,
+  toast,
+  burst,
   busy: () => !!current,
 });
 
