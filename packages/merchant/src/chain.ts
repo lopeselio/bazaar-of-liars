@@ -64,6 +64,8 @@ export interface Ledger {
   /** v3.1: refund an order past its deadline (anyone may). */
   expireOrder?(orderId: string): Promise<string>;
   pruneOrders?(orderIds: string[]): Promise<string>;
+  /** v3.2: XP for what only the server sees (a caught bluff), capped per day by the contract. */
+  awardCred?(a: { player: string; xp: number; reason: string }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -108,6 +110,7 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     fulfilOrder: (a) => call("fulfil_order", { order_id: a.orderId, player: a.player, fare: a.fare }, "FINAL"),
     expireOrder: (orderId) => call("expire_order", { order_id: orderId }),
     pruneOrders: (orderIds) => call("prune_orders", { order_ids: orderIds }),
+    awardCred: (a) => call("award_cred", { player: a.player, xp: a.xp, reason: a.reason }),
   };
 }
 
@@ -294,4 +297,17 @@ export interface OnchainOrder {
 export async function readOrders(network: Network, contractId: string, openOnly = false): Promise<OnchainOrder[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<OnchainOrder[]>(contractId, "orders", { open_only: openOnly, limit: 100 }, { finality: "optimistic" })) ?? [];
+}
+
+export interface OnchainCred {
+  xp: number;
+  streak: number;
+  best_streak: number;
+  last_day: number;
+}
+
+/** A player's street cred (v3.2). */
+export async function readCred(network: Network, contractId: string, player: string): Promise<OnchainCred> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<OnchainCred>(contractId, "cred_of", { player }, { finality: "optimistic" })) ?? { xp: 0, streak: 0, best_streak: 0, last_day: 0 };
 }
