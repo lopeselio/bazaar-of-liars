@@ -109,6 +109,21 @@ A player can run out of coins and goods, which would end their game. Dock work f
   No coins are minted. Her daily cap (400) bounds how many shifts she can pay in a day.
 - **In the city:** when your purse is nearly empty, a banner with a direction arrow and a green beacon lead to the docks.
 
+## Goods are NEP-245 multi tokens (v3.5)
+
+The Games track asks for items as NEP-245 multi tokens, with one contract holding every item type. The bazaar contract is that contract.
+
+- **Tokens.** Each good is a token id: `rug`, `saffron`, `lamp`. The contract implements the core standard:
+  - `mt_balance_of`, `mt_batch_balance_of`, `mt_supply`, `mt_batch_supply` and `mt_token`;
+  - `mt_transfer` and `mt_batch_transfer`, each needing exactly 1 yoctoNEAR;
+  - `mt_transfer_call` and `mt_batch_transfer_call`, with refunds through `mt_resolve_transfer`.
+
+  Approvals aren't supported, and the contract refuses them.
+- **Every movement is a standard event.** Opening stock emits `mt_mint`, a merchant using a good up emits `mt_burn`, and every trade, escrow, delivery and stall sale emits `mt_transfer` (`standard: "nep245"`, version `1.0.0`). Explorers and indexers see every good's history.
+- **Escrow is a real holder.** Goods in a haggle in progress, or stock on a player's stall, sit in the contract's own account. So at every moment the balances add up to `mt_supply`, and `pnpm check:goods` checks that from raw contract storage.
+- **Who can transfer.** Any real NEAR account holding goods can call `mt_transfer`. Guest players have no keys yet, so their goods move only through the game (social login is next on the list). Agents' function-call keys can't attach the 1 yoctoNEAR, so agents can't transfer goods themselves either: their goods move only through settled haggles and sales.
+- **Migration.** v3.5 was migrated in place. Before migrating, every haggle had to be closed and every stall empty, so all goods were in someone's balance. The supply passed to `migrate` was summed from the raw state, and it matched exactly afterwards.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
@@ -117,7 +132,7 @@ A player can run out of coins and goods, which would end their game. Dock work f
    - **Read:** turns the player's words into a move (offer, competitor claim, accept, leave or talk). This request contains no secret.
    - **Speak:** voices the decision. The request carries `HAGGLE: <commitment>`, `NEED: <need>` and `DECISION: {action, tell, bluff}`. **It contains no numbers and never the floor.** The model writes `{PRICE}`, `{CLAIM}` and `{OFFER}` placeholders, and a deterministic `present()` function fills in the engine's numbers. Any other number the model writes, in digits or words, is blanked out. So the model can't state a wrong price or leak the floor, because it never knew it.
 4. **Rules engine.** A deterministic engine (`packages/core/rules.ts`) makes every decision: counter, final, accept or walk. It never goes below `floor`. The LLM can't be talked into a bad deal because it doesn't make decisions (a prompt-injection attempt was tested live and the merchant stayed in character).
-5. **Settle and reveal.** When the haggle ends, deal or not, the server calls `bazaar.close_haggle(haggle_id, secret, salt, deal_price?)`. The contract checks `sha256(preimage) == commitment` and, on a deal, `price >= floor`. Only then does it move coins and goods. The secret becomes public onchain either way, so a merchant's bluffs can be checked even when you walk away. If the server never reveals, anyone can call `expire_haggle` after `REVEAL_WINDOW_BLOCKS` (about 1 hour), and the haggle is counted publicly in `stats().unrevealed`. Ids are restricted to `[a-z0-9_-]`, so no `|` can shift preimage fields into each other. *(v3 is live on testnet at `v3.bazaar-liars.testnet`, with `bazaar-server.testnet` as the server; v1 and v2 are retired. Goods are an internal ledger for now, and NEP-245 is a stretch goal.)* The verifier also checks that the commitment's block time is no later than the `created` timestamp inside the first TEE-signed reply, which proves the commitment was posted before the merchant spoke.
+5. **Settle and reveal.** When the haggle ends, deal or not, the server calls `bazaar.close_haggle(haggle_id, secret, salt, deal_price?)`. The contract checks `sha256(preimage) == commitment` and, on a deal, `price >= floor`. Only then does it move coins and goods. The secret becomes public onchain either way, so a merchant's bluffs can be checked even when you walk away. If the server never reveals, anyone can call `expire_haggle` after `REVEAL_WINDOW_BLOCKS` (about 1 hour), and the haggle is counted publicly in `stats().unrevealed`. Ids are restricted to `[a-z0-9_-]`, so no `|` can shift preimage fields into each other. *(v3 is live on testnet at `v3.bazaar-liars.testnet`, with `bazaar-server.testnet` as the server; v1 and v2 are retired. Goods are NEP-245 multi tokens of this contract; see below.)* The verifier also checks that the commitment's block time is no later than the `created` timestamp inside the first TEE-signed reply, which proves the commitment was posted before the merchant spoke.
 6. **Verify.** The player gets a **proof bundle** containing the commitment, the reveal, the attestation, and every signed request and response. `pnpm verify:haggle <bundle>` checks it with no API key:
    - the commitment matches the reveal;
    - the attestation's quote bindings hold;

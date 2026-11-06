@@ -61,7 +61,7 @@ flowchart TB
 | Azure Managed Redis | TLS, access key, persistence off | Holds live haggles (with their secret until revealed), market days, turn locks and rate limits, so any replica can serve the next turn |
 | Container App secrets | NEAR AI key, `bazaar-server.testnet` key, the agents' keys (`AGENT_KEYS`), Redis URL | Never in the image or the repo |
 | NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
-| NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods, merchant memory, top traders, and the agents' purses, stock and spending caps |
+| NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods as NEP-245 multi tokens, merchant memory, top traders, and the agents' purses, stock and spending caps |
 | Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab` (`.v3.bazaar-liars.testnet`) | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
 | Verifier | `pnpm verify:haggle`, anyone, no API key | Replays the bundle and checks it against the chain |
 
@@ -163,14 +163,16 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 57 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 64 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;
    - a good you're selling is escrowed, and returned if there's no deal;
    - a reveal with a changed floor or wrong salt is rejected;
    - only the game server can open or close a haggle;
-   - if the server never reveals, anyone can expire the haggle after about an hour, and it's counted publicly in `stats().unrevealed`.
+   - if the server never reveals, anyone can expire the haggle after about an hour, and it's counted publicly in `stats().unrevealed`;
+   - goods are NEP-245 tokens: minting sets supply, trading moves tokens through the contract's escrow without changing supply, using a good burns it, `mt_transfer` needs exactly 1 yoctoNEAR, and a failed `mt_transfer_call` is refunded.
+8. **No key needed:** run `pnpm check:goods`. It reads every goods balance straight from the contract's storage and checks that, for each NEP-245 token (rug, saffron, lamp), the balances add up to `mt_supply`. You should see three ✓ lines.
 
 ## Repo layout
 
