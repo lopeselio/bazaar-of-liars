@@ -131,6 +131,40 @@ export interface NewsItem {
   agents: string[];
 }
 
+/** A customer's delivery order, posted onchain with its bounty locked. */
+export interface Order {
+  id: string;
+  customer: string;
+  customerName: string;
+  good_id: string;
+  goodName: string;
+  bounty: number;
+  deadline_ms: number;
+  site: string;
+  siteName: string;
+  district: string;
+  x: number;
+  z: number;
+  express: boolean;
+}
+export interface Job {
+  orderId: string;
+  takenAt: number;
+  from: { x: number; z: number };
+}
+export type TravelMode = "foot" | "bike" | "cab" | "heli";
+export interface Delivered {
+  bounty: number;
+  fare: number;
+  net: number;
+  mode: TravelMode;
+  metres: number;
+  seconds: number;
+  msToSpare: number;
+  txUrl: string;
+  player: PlayerView;
+}
+
 export const api = {
   merchants: () => call<{ merchants: MerchantInfo[]; model: string; onchain: { network: string; contractId: string } | null }>("/api/merchants"),
   player: (id: string) => call<PlayerView>(`/api/player?id=${encodeURIComponent(id)}`),
@@ -139,5 +173,9 @@ export const api = {
   turn: (haggleId: string, text: string) => call<TurnOut>(`/api/haggle/${haggleId}/turn`, { text }),
   nextDay: (player: string) => call<PlayerView>("/api/day/next", { player }),
   market: () => call<{ agents: MarketAgent[]; news: NewsItem[]; onchain: boolean; contractId?: string }>("/api/market"),
+  orders: (player: string) => call<{ orders: Order[]; job: Job | null; now: number }>(`/api/orders?player=${encodeURIComponent(player)}`),
+  takeOrder: (id: string, player: string, x: number, z: number) => call<{ job: Job; order: Order }>(`/api/orders/${id}/take`, { player, x, z }),
+  deliver: (id: string, player: string, x: number, z: number, mode: TravelMode) =>
+    call<Delivered>(`/api/orders/${id}/deliver`, { player, x, z, mode }),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };
