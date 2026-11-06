@@ -39,7 +39,7 @@ flowchart TB
   P["Player's browser&nbsp;&nbsp;&nbsp;"]
   subgraph AZ["Azure"]
     direction TB
-    S["Game servers x2-5&nbsp;&nbsp;&nbsp;"]
+    S["Game servers&nbsp;&nbsp;&nbsp;"]
     R[("Managed Redis&nbsp;&nbsp;&nbsp;")]
   end
   AI["NEAR AI TEE&nbsp;&nbsp;&nbsp;"]
