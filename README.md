@@ -114,6 +114,12 @@ To run it yourself you need Node 22 or later, pnpm, and a NEAR AI Cloud key in `
 
 For a production build, run `pnpm build && pnpm start`. The server serves the game on port 8787.
 
+### Canal Street (preview)
+
+The same game, set on Canal Street in a walkable New York. Run `pnpm build`, then `pnpm start`, and open http://localhost:8787/city/ (or `/city/` on the hosted demo). It needs a WebGPU browser (recent Chrome, Edge or Safari). After the city loads (about 15 seconds) you stand on Canal Street in Chinatown. Walk up to a stall with WASD and press **F** to haggle. The haggle, the onchain secret and the fair-play checks are the same as above.
+
+The city is [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob (MIT), vendored in `apps/city/vendor/slop-newyork` with a small bridge patch (lines marked `[bazaar]`). Its map data comes from NYC Open Data, MTA, and © OpenStreetMap contributors (ODbL).
+
 ### Host it
 
 Live haggles, market days and rate limits sit in a shared store: Redis when `REDIS_URL` is set, the server's memory otherwise. With Redis, any number of replicas can serve the same haggle (a per-haggle lock stops two of them playing the same turn) and a restart doesn't drop a game in progress. A turn can take 40 seconds, so the server runs as always-on containers, not serverless functions. The `Dockerfile` serves the game and the API on port 8080; secrets come from the host's environment (`NEARAI_API_KEY`, `SERVER_PRIVATE_KEY`), never from the image. To try it locally, run `docker build -t bazaar-liars .`, then `docker run -p 8080:8080 --env-file .env -v ~/.near-credentials:/home/node/.near-credentials:ro bazaar-liars`, and open http://localhost:8080.
@@ -156,6 +162,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ```
 apps/web         Three.js bazaar + chat haggle UI (Vite)
+apps/city        Canal Street: Slop New York (vendored, MIT) + the walk-up haggle layer
 apps/server      haggle API: attest → commit onchain → signed turns → reveal + settle;
                  store.ts keeps live haggles and market days (Redis or memory)
 packages/core    rules engine, secrets, commitments

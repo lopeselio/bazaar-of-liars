@@ -1,0 +1,16 @@
+{
+  "name": "@bazaar/city",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "rm -rf dist && cp -R vendor/slop-newyork dist && vite build",
+    "dev": "rm -rf dist && cp -R vendor/slop-newyork dist && vite build --watch"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "three": "0.186.1",
+    "typescript": "^5.7.2",
+    "vite": "8.3.4"
+  }
+}

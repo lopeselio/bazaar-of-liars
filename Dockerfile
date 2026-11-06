@@ -9,6 +9,7 @@ COPY packages/merchant/package.json packages/merchant/
 COPY packages/verify/package.json packages/verify/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
+COPY apps/city/package.json apps/city/
 RUN pnpm install --frozen-lockfile
 COPY packages packages
 COPY apps apps

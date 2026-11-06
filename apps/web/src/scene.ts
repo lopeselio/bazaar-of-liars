@@ -15,7 +15,7 @@ export interface StallLook {
   good: "rug" | "saffron" | "lamp";
 }
 
-interface Merchant {
+export interface Merchant {
   root: THREE.Group;
   body: THREE.Group;
   head: THREE.Group;
@@ -29,7 +29,7 @@ interface Merchant {
   style: string;
 }
 
-interface Stall {
+export interface Stall {
   look: StallLook;
   group: THREE.Group;
   merchant: Merchant;
@@ -277,7 +277,8 @@ function buildMerchant(look: StallLook): Merchant {
 
 // ---------- stall ----------
 
-function buildStall(look: StallLook): Omit<Stall, "anchor" | "face" | "forward"> {
+/** A stall with its merchant, built from primitives. Also used by the Canal Street city mode. */
+export function buildStall(look: StallLook): Omit<Stall, "anchor" | "face" | "forward"> {
   const group = new THREE.Group();
   const wood = mat("#7a4e2f");
   const darkWood = mat("#5a3820");
@@ -810,7 +811,7 @@ function poseFor(style: string, tell: Tell, t: number): Pose {
   return p;
 }
 
-function animateMerchant(m: Merchant, t: number, dt: number, now: number) {
+export function animateMerchant(m: Merchant, t: number, dt: number, now: number) {
   const k = Math.min(1, dt * 6);
   const p = poseFor(m.style, m.tell, t);
   m.body.rotation.x = lerp(m.body.rotation.x, p.lean, k);

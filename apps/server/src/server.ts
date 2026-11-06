@@ -347,6 +347,8 @@ async function turn(id: string, body: Record<string, unknown>) {
 // ---------- static (production) ----------
 
 const WEB_DIST = resolve(import.meta.dirname, "../../web/dist");
+/** Canal Street city mode (apps/city): Slop New York + the game layer, served at /city/. */
+const CITY_DIST = resolve(import.meta.dirname, "../../city/dist");
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript",
@@ -357,10 +359,17 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 function serveStatic(url: string, res: ServerResponse): boolean {
-  if (!existsSync(WEB_DIST)) return false;
-  const rel = normalize(decodeURIComponent(url.split("?")[0])).replace(/^(\.\.[/\\])+/, "");
-  let file = join(WEB_DIST, rel);
-  if (!file.startsWith(WEB_DIST) || !existsSync(file) || statSync(file).isDirectory()) file = join(WEB_DIST, "index.html");
+  const path = decodeURIComponent(url.split("?")[0]);
+  if (path === "/city") {
+    res.writeHead(301, { location: "/city/" });
+    res.end();
+    return true;
+  }
+  const [root, sub] = path.startsWith("/city/") ? [CITY_DIST, path.slice(5)] : [WEB_DIST, path];
+  if (!existsSync(root)) return false;
+  const rel = normalize(sub).replace(/^(\.\.[/\\])+/, "");
+  let file = join(root, rel);
+  if (!file.startsWith(root) || !existsSync(file) || statSync(file).isDirectory()) file = join(root, "index.html");
   res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
   res.end(readFileSync(file));
   return true;
