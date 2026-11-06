@@ -24,10 +24,16 @@
 //!
 //! The agents' keys are function-call keys for this contract only: they can't move NEAR.
 //!
+//! ## Delivery orders (v3.1)
+//! Customers across Manhattan are agents too. A customer posts an order with its own signature
+//! (`post_order`), which locks the bounty from its purse. When a player delivers, the server calls
+//! `fulfil_order`: the good moves to the customer, the bounty to the player, and any cab fare to the
+//! cab company's account. A missed deadline lets anyone expire the order and refund the bounty.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
-use near_sdk::store::LookupMap;
+use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{AccountId, BorshStorageKey, PanicOnDefault, env, near, require};
 
 /// Coins a player gets the first time they open a haggle.
@@ -55,6 +61,8 @@ enum StorageKey {
     CostBasis,
     Auths,
     Investments,
+    Orders,
+    Income,
 }
 
 #[near(serializers = [borsh, json])]
@@ -93,6 +101,37 @@ pub enum AgentKind {
     Wholesaler,
     Trader,
     Runner,
+    Customer,
+    Cab,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderStatus {
+    Open,
+    Delivered,
+    Expired,
+}
+
+/// A customer's standing order for one good, delivered to its door.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Order {
+    pub id: String,
+    pub customer: String,
+    pub good_id: String,
+    /// Coins locked from the customer's purse, paid on delivery.
+    pub bounty: u64,
+    /// Block time (ms) after which the order can be expired.
+    pub deadline_ms: u64,
+    /// Drop site id (see packages/core orders.ts).
+    pub site: String,
+    pub express: bool,
+    pub status: OrderStatus,
+    pub posted_ms: u64,
+    pub courier: Option<AccountId>,
+    pub fare: u64,
 }
 
 /// The merchant's hidden hand. Field names match the TypeScript `MerchantSecret`.
@@ -196,6 +235,7 @@ pub struct Stats {
     pub no_deals: u64,
     /// Haggles the server never revealed. Should always be 0.
     pub unrevealed: u64,
+    pub deliveries: u64,
 }
 
 #[near(serializers = [json])]
@@ -234,7 +274,39 @@ pub struct Bazaar {
     auths: LookupMap<String, Auth>,
     /// "player#agent" → coins invested
     investments: LookupMap<String, u64>,
+    /// v3.1: open and recent delivery orders
+    orders: IterableMap<String, Order>,
+    /// v3.1: customer id → (day, coins of income paid that day)
+    income: LookupMap<String, (u64, u64)>,
+    deliveries: u64,
 }
+
+/// The v3 state layout, read once by `migrate`.
+#[near(serializers = [borsh])]
+pub struct BazaarV3 {
+    owner: AccountId,
+    server: AccountId,
+    haggles: LookupMap<String, Haggle>,
+    coins: LookupMap<AccountId, u64>,
+    goods: LookupMap<String, u32>,
+    memory: LookupMap<String, Memory>,
+    leaders: Vec<LeaderEntry>,
+    haggle_count: u64,
+    deals: u64,
+    no_deals: u64,
+    unrevealed: u64,
+    agents: LookupMap<String, Agent>,
+    agent_ids: Vec<String>,
+    agent_by_account: LookupMap<AccountId, String>,
+    cost_basis: LookupMap<String, u64>,
+    auths: LookupMap<String, Auth>,
+    investments: LookupMap<String, u64>,
+}
+
+/// Most coins a customer's business brings in per UTC day.
+pub const CUSTOMER_INCOME_PER_DAY: u64 = 400;
+/// Most open orders at once, across all customers.
+pub const MAX_OPEN_ORDERS: usize = 40;
 
 /// sha256 of the canonical preimage, lowercase hex.
 pub fn commitment_of(s: &Secret, salt: &str) -> String {
@@ -305,6 +377,38 @@ impl Bazaar {
             cost_basis: LookupMap::new(StorageKey::CostBasis),
             auths: LookupMap::new(StorageKey::Auths),
             investments: LookupMap::new(StorageKey::Investments),
+            orders: IterableMap::new(StorageKey::Orders),
+            income: LookupMap::new(StorageKey::Income),
+            deliveries: 0,
+        }
+    }
+
+    /// Owner (the contract account itself): upgrade v3 state to v3.1, keeping everything.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let old: BazaarV3 = env::state_read().unwrap_or_else(|| env::panic_str("no v3 state to migrate"));
+        Self {
+            owner: old.owner,
+            server: old.server,
+            haggles: old.haggles,
+            coins: old.coins,
+            goods: old.goods,
+            memory: old.memory,
+            leaders: old.leaders,
+            haggle_count: old.haggle_count,
+            deals: old.deals,
+            no_deals: old.no_deals,
+            unrevealed: old.unrevealed,
+            agents: old.agents,
+            agent_ids: old.agent_ids,
+            agent_by_account: old.agent_by_account,
+            cost_basis: old.cost_basis,
+            auths: old.auths,
+            investments: old.investments,
+            orders: IterableMap::new(StorageKey::Orders),
+            income: LookupMap::new(StorageKey::Income),
+            deliveries: 0,
         }
     }
 
@@ -448,6 +552,96 @@ impl Bazaar {
         let a = self.agent(&agent_id);
         self.add_goods(&a.account, &good_id, -i64::from(qty));
         emit("consumed", json!({ "agent": agent_id, "good_id": good_id, "qty": qty }));
+    }
+
+    // ---------- delivery orders ----------
+
+    /// Server: a customer's business brings in coins, at most `CUSTOMER_INCOME_PER_DAY` a day.
+    /// It's the money its bounties are paid from.
+    pub fn pay_income(&mut self, agent_id: String, amount: u64) {
+        self.require_server();
+        let a = self.agent(&agent_id);
+        require!(a.kind == AgentKind::Customer, "only customers have income");
+        let day = today();
+        let (d, paid) = self.income.get(&agent_id).copied().unwrap_or((day, 0));
+        let paid = if d == day { paid } else { 0 };
+        require!(paid + amount <= CUSTOMER_INCOME_PER_DAY, "over the customer's daily income");
+        self.income.insert(agent_id.clone(), (day, paid + amount));
+        self.add_coins(&a.account, amount as i64);
+        emit("income", json!({ "agent": agent_id, "amount": amount }));
+    }
+
+    /// Signed by a customer's own account: post an order and lock its bounty.
+    pub fn post_order(&mut self, order_id: String, good_id: String, bounty: u64, deadline_ms: u64, site: String, express: bool) {
+        let who = env::predecessor_account_id();
+        let c = self.agent_of(&who).unwrap_or_else(|| env::panic_str("only a customer can post an order"));
+        require!(c.kind == AgentKind::Customer, "only a customer can post an order");
+        require!(is_id(&order_id) && is_id(&good_id) && is_id(&site), "ids must be [a-z0-9_-]{1,64}");
+        require!(!self.orders.contains_key(&order_id), "order_id already used");
+        let open = self.orders.values().filter(|o| o.status == OrderStatus::Open).count();
+        require!(open < MAX_OPEN_ORDERS, "too many open orders");
+        let now = env::block_timestamp_ms();
+        require!(deadline_ms > now && deadline_ms <= now + DAY_MS, "deadline must be within the next day");
+        require!(bounty > 0, "bounty must be positive");
+        self.charge_cap(&c.id, bounty as i64);
+        self.add_coins(&who, -(bounty as i64));
+        let order = Order { id: order_id.clone(), customer: c.id.clone(), good_id, bounty, deadline_ms, site, express, status: OrderStatus::Open, posted_ms: now, courier: None, fare: 0 };
+        emit("order_posted", json!(order));
+        self.orders.insert(order_id, order);
+    }
+
+    /// Server: a player delivered. The good goes to the customer, the bounty to the player, and
+    /// `fare` (if they took a cab or helicopter) out of the bounty to the cab company.
+    pub fn fulfil_order(&mut self, order_id: String, player: AccountId, fare: u64) {
+        self.require_server();
+        let mut o = self.orders.get(&order_id).cloned().unwrap_or_else(|| env::panic_str("unknown order"));
+        require!(o.status == OrderStatus::Open, "order is no longer open");
+        require!(env::block_timestamp_ms() <= o.deadline_ms, "the customer stopped waiting");
+        require!(self.agent_of(&player).is_none(), "agents don't run deliveries");
+        require!(fare <= o.bounty, "fare can't exceed the bounty");
+        let customer = self.agent(&o.customer);
+        self.add_goods(&player, &o.good_id, -1);
+        self.add_goods(&customer.account, &o.good_id, 1);
+        self.add_coins(&player, (o.bounty - fare) as i64);
+        if fare > 0 {
+            let cab = self
+                .agent_ids
+                .iter()
+                .filter_map(|id| self.agents.get(id))
+                .find(|a| a.kind == AgentKind::Cab)
+                .map(|a| a.account.clone())
+                .unwrap_or_else(|| env::panic_str("no cab company registered"));
+            self.add_coins(&cab, fare as i64);
+        }
+        o.status = OrderStatus::Delivered;
+        o.courier = Some(player.clone());
+        o.fare = fare;
+        self.deliveries += 1;
+        emit("order_delivered", json!({ "order_id": order_id, "courier": player, "customer": o.customer, "good_id": o.good_id, "bounty": o.bounty, "fare": fare }));
+        self.orders.insert(order_id, o);
+    }
+
+    /// Anyone: expire an order past its deadline and refund the customer's bounty.
+    pub fn expire_order(&mut self, order_id: String) {
+        let mut o = self.orders.get(&order_id).cloned().unwrap_or_else(|| env::panic_str("unknown order"));
+        require!(o.status == OrderStatus::Open, "order is no longer open");
+        require!(env::block_timestamp_ms() > o.deadline_ms, "the customer is still waiting");
+        let customer = self.agent(&o.customer);
+        self.add_coins(&customer.account, o.bounty as i64);
+        self.charge_cap(&o.customer, -(o.bounty as i64));
+        o.status = OrderStatus::Expired;
+        emit("order_expired", json!({ "order_id": order_id }));
+        self.orders.insert(order_id, o);
+    }
+
+    /// Server: drop closed orders from storage (their events stay in the chain's history).
+    pub fn prune_orders(&mut self, order_ids: Vec<String>) {
+        self.require_server();
+        for id in order_ids {
+            if self.orders.get(&id).is_some_and(|o| o.status != OrderStatus::Open) {
+                self.orders.remove(&id);
+            }
+        }
     }
 
     // ---------- haggles ----------
@@ -709,12 +903,26 @@ impl Bazaar {
             .collect()
     }
 
+    pub fn get_order(&self, order_id: String) -> Option<Order> {
+        self.orders.get(&order_id).cloned()
+    }
+
+    /// Orders still in storage (open, or closed and not yet pruned), up to `limit`.
+    pub fn orders(&self, open_only: bool, limit: u32) -> Vec<Order> {
+        self.orders
+            .values()
+            .filter(|o| !open_only || o.status == OrderStatus::Open)
+            .take(limit.min(100) as usize)
+            .cloned()
+            .collect()
+    }
+
     pub fn leaderboard(&self) -> Vec<LeaderEntry> {
         self.leaders.clone()
     }
 
     pub fn stats(&self) -> Stats {
-        Stats { server: self.server.clone(), haggles: self.haggle_count, deals: self.deals, no_deals: self.no_deals, unrevealed: self.unrevealed }
+        Stats { server: self.server.clone(), haggles: self.haggle_count, deals: self.deals, no_deals: self.no_deals, unrevealed: self.unrevealed, deliveries: self.deliveries }
     }
 }
 
@@ -750,6 +958,8 @@ mod tests {
         c.register_agent("wu".into(), "Auntie Wu".into(), acc("wu.testnet"), AgentKind::Wholesaler, 0, 0, stock("rug", 100, 0));
         c.register_agent("ivy".into(), "Ivy".into(), acc("ivy.testnet"), AgentKind::Trader, 150, 300, vec![]);
         c.register_agent("lo".into(), "Little Lo".into(), acc("lo.testnet"), AgentKind::Runner, 50, 0, vec![]);
+        c.register_agent("deli".into(), "Mama Rosa's Deli".into(), acc("deli.testnet"), AgentKind::Customer, 500, 200, vec![]);
+        c.register_agent("cab".into(), "Checker Cab Co.".into(), acc("cab.testnet"), AgentKind::Cab, 0, 0, vec![]);
         ctx("server.testnet", 100);
         c
     }
@@ -1135,5 +1345,140 @@ mod tests {
         assert_eq!(c.goods_of(acc("zaria.testnet"), "rug".into()), 1);
         let ivy = c.agents(vec![]).into_iter().find(|a| a.id == "ivy").unwrap();
         assert_eq!(ivy.spent_today, 60, "selling doesn't count as spending");
+    }
+
+    // ---------- delivery orders ----------
+
+    /// The deli posts an order for saffron at block 100 (t = 100 s), waiting 300 s.
+    fn post(c: &mut Bazaar, id: &str, bounty: u64) {
+        ctx("deli.testnet", 100);
+        c.post_order(id.into(), "saffron".into(), bounty, 400_000, "timessq".into(), false);
+        ctx("server.testnet", 100);
+    }
+
+    /// Give the player a saffron by buying it from Zaria.
+    fn get_saffron(c: &mut Bazaar) {
+        let s = Secret { merchant_id: "zaria".into(), good_id: "saffron".into(), floor: 30, ..sell_secret() };
+        open(c, "s1", &s);
+        c.close_haggle("s1".into(), s, SALT.into(), Some(40), false);
+    }
+
+    #[test]
+    fn a_delivery_pays_the_courier_and_the_cab() {
+        let mut c = setup();
+        post(&mut c, "o1", 90);
+        assert_eq!(c.coins_of(acc("deli.testnet")), 110, "bounty locked");
+        get_saffron(&mut c);
+        c.fulfil_order("o1".into(), player(), 26);
+        assert_eq!(c.coins_of(player()), STARTER_COINS - 40 + 90 - 26);
+        assert_eq!(c.coins_of(acc("cab.testnet")), 26);
+        assert_eq!(c.goods_of(acc("deli.testnet"), "saffron".into()), 1);
+        assert_eq!(c.goods_of(player(), "saffron".into()), 0);
+        let o = c.get_order("o1".into()).unwrap();
+        assert_eq!((o.status, o.courier, o.fare), (OrderStatus::Delivered, Some(player()), 26));
+        assert_eq!(c.stats().deliveries, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "only a customer")]
+    fn only_a_customer_posts_orders() {
+        let mut c = setup();
+        c.post_order("o1".into(), "saffron".into(), 50, 400_000, "timessq".into(), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "doesn't have that good")]
+    fn you_cannot_deliver_what_you_dont_have() {
+        let mut c = setup();
+        post(&mut c, "o1", 90);
+        c.fulfil_order("o1".into(), player(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "stopped waiting")]
+    fn late_deliveries_are_refused() {
+        let mut c = setup();
+        post(&mut c, "o1", 90);
+        get_saffron(&mut c);
+        ctx("server.testnet", 401);
+        c.fulfil_order("o1".into(), player(), 0);
+    }
+
+    #[test]
+    fn missed_orders_expire_and_refund_the_customer() {
+        let mut c = setup();
+        post(&mut c, "o1", 90);
+        ctx("anyone.testnet", 401);
+        c.expire_order("o1".into());
+        assert_eq!(c.coins_of(acc("deli.testnet")), 200);
+        assert_eq!(c.get_order("o1".into()).unwrap().status, OrderStatus::Expired);
+        let deli = c.agents(vec![]).into_iter().find(|a| a.id == "deli").unwrap();
+        assert_eq!(deli.spent_today, 0, "the reservation is released");
+    }
+
+    #[test]
+    #[should_panic(expected = "still waiting")]
+    fn orders_cannot_expire_early() {
+        let mut c = setup();
+        post(&mut c, "o1", 90);
+        c.expire_order("o1".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "daily income")]
+    fn customer_income_is_capped() {
+        let mut c = setup();
+        c.pay_income("deli".into(), 300);
+        c.pay_income("deli".into(), 101);
+    }
+
+    #[test]
+    fn open_orders_are_listed_and_closed_ones_pruned() {
+        let mut c = setup();
+        post(&mut c, "o1", 50);
+        post(&mut c, "o2", 60);
+        get_saffron(&mut c);
+        c.fulfil_order("o1".into(), player(), 0);
+        assert_eq!(c.orders(true, 10).len(), 1);
+        c.prune_orders(vec!["o1".into(), "o2".into()]);
+        assert!(c.get_order("o1".into()).is_none());
+        assert!(c.get_order("o2".into()).is_some(), "open orders are never pruned");
+    }
+
+    #[test]
+    fn migrate_keeps_v3_state() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        // Write the v3 layout, as it sits on testnet today, then migrate.
+        let old = BazaarV3 {
+            owner: acc("owner.testnet"),
+            server: acc("server.testnet"),
+            haggles: LookupMap::new(StorageKey::Haggles),
+            coins: LookupMap::new(StorageKey::Coins),
+            goods: LookupMap::new(StorageKey::Goods),
+            memory: LookupMap::new(StorageKey::Memory),
+            leaders: c.leaders.clone(),
+            haggle_count: 1,
+            deals: 1,
+            no_deals: 0,
+            unrevealed: 0,
+            agents: LookupMap::new(StorageKey::Agents),
+            agent_ids: c.agent_ids.clone(),
+            agent_by_account: LookupMap::new(StorageKey::AgentByAccount),
+            cost_basis: LookupMap::new(StorageKey::CostBasis),
+            auths: LookupMap::new(StorageKey::Auths),
+            investments: LookupMap::new(StorageKey::Investments),
+        };
+        c.coins.flush();
+        c.goods.flush();
+        c.agents.flush();
+        c.haggles.flush();
+        env::state_write(&old);
+        let m = Bazaar::migrate();
+        assert_eq!(m.coins_of(player()), STARTER_COINS - 60);
+        assert_eq!(m.goods_of(player(), "rug".into()), 1);
+        assert_eq!(m.get_haggle("h1".into()).unwrap().status, Status::Deal);
+        assert_eq!(m.agents(vec!["rug".into()]).len(), 7);
+        assert_eq!(m.stats().deliveries, 0);
     }
 }
