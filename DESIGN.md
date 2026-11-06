@@ -71,7 +71,8 @@ Players never see wallets or gas:
 
 ```
 apps/web        Three.js bazaar scene + chat haggle UI (Vite; primitives + canvas textures, no external assets)
-apps/server     Haggle orchestrator: commit, NEAR AI Cloud calls, signature capture, settle
+apps/server     Haggle orchestrator: commit, NEAR AI Cloud calls, signature capture, settle;
+                a shared store (Redis on Azure, memory locally) holds live haggles and market days
 packages/core   rules.ts (accept/reject, mood, memory), secrets, commitment hashing — pure, tested
 packages/verify Offline verifier for a haggle transcript bundle (also used by the UI badge)
 contracts/      bazaar (Rust, near-sdk): commitments, settle-with-reveal, NEP-245 goods, coin balances

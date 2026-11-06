@@ -22,13 +22,76 @@ Players never see a wallet or pay gas.
 
 ## Status
 
-Day 1. Done so far:
+Done so far:
 - the deterministic rules engine and secret commitments, with a terminal haggle and a balance simulator;
 - the NEAR AI Cloud attestation verifier;
 - LLM-voiced merchants with TEE-signed replies, plus a proof bundle and an independent verifier, all working live;
-- the `bazaar` NEAR contract (commit, reveal-and-settle, public expiry of unrevealed haggles), **live on testnet at [`v2.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v2.bazaar-liars.testnet)**. Every LLM haggle commits there before the first message and reveals there when it ends.
+- the `bazaar` NEAR contract (commit, reveal-and-settle, memory, leaderboard, public expiry of unrevealed haggles), **live on testnet at [`v2.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v2.bazaar-liars.testnet)**. Every LLM haggle commits there before the first message and reveals there when it ends;
+- the web game: a Three.js bazaar where you haggle in a chat panel, call bluffs, read tells and trade between stalls, then get a reveal card and the full fair-play evidence;
+- the hosted demo on Azure Container Apps, with 2–5 server replicas sharing Azure Managed Redis.
 
-- the web game: a Three.js bazaar where you haggle in a chat panel, then get a reveal card and the full fair-play evidence. The design is in [DESIGN.md](./DESIGN.md).
+The design is in [DESIGN.md](./DESIGN.md).
+
+## Architecture
+
+```mermaid
+flowchart LR
+  P["Player's browser<br/>Three.js bazaar + chat<br/>guest id, no wallet"]
+  subgraph AZ["Azure"]
+    ING["Container Apps ingress<br/>HTTPS"]
+    S["Game server replicas, 2–5<br/>apps/server + packages/core rules"]
+    R[("Azure Managed Redis<br/>live haggles, market days,<br/>turn locks, rate limits<br/>TLS, no persistence")]
+    K[["Container App secrets<br/>NEAR AI key, server key, Redis URL"]]
+    ACR["Container Registry<br/>built by scripts/deploy-azure.sh"]
+  end
+  AI["NEAR AI Cloud<br/>Qwen in Intel TDX + NVIDIA TEE<br/>attestation + signed replies"]
+  C[("NEAR testnet<br/>v2.bazaar-liars.testnet<br/>commitments, coins, goods,<br/>memory, leaderboard")]
+  V["pnpm verify:haggle<br/>anyone, no API key"]
+
+  P -- "game + /api" --> ING --> S
+  S <-- "state, any replica" --> R
+  K -.-> S
+  ACR -. image .-> S
+  S -- "attest, read, speak" --> AI
+  S -- "open_haggle / close_haggle<br/>signed by bazaar-server.testnet" --> C
+  S -- "views: purse, memory, top traders" --> C
+  P -- "proof bundle" --> V
+  V -- "commitment, reveal, block times" --> C
+```
+
+The server is the only party that signs transactions, so players never see a wallet or pay gas. Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
+
+One haggle, end to end:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor P as Player
+  participant S as Game server
+  participant R as Redis
+  participant AI as NEAR AI TEE
+  participant C as bazaar contract
+
+  P->>S: open haggle with a merchant
+  S->>AI: fetch attestation with a fresh nonce
+  S->>S: verify TDX + NVIDIA, roll secret, commit = sha256(secret, salt)
+  S->>C: open_haggle(commitment, memory)
+  S->>R: save haggle
+  S-->>P: opening ask + commitment tx
+  loop each turn, on any replica
+    P->>S: message
+    S->>R: lock + load haggle
+    S->>AI: read the move (no secret in the request)
+    S->>S: rules engine decides: counter, final, accept, walk or caught
+    S->>AI: speak the decision (never sees the floor)
+    S->>R: save + unlock
+    S-->>P: merchant line, tell, ask
+  end
+  S->>C: close_haggle(secret, salt, price)
+  C->>C: check hash and limit, move coins + goods, update memory + leaderboard
+  S->>R: delete haggle, count it against the day
+  S-->>P: reveal card + proof bundle
+```
 
 ## Play it
 
@@ -88,10 +151,13 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ```
 apps/web         Three.js bazaar + chat haggle UI (Vite)
-apps/server      haggle API: attest → commit onchain → signed turns → reveal + settle
+apps/server      haggle API: attest → commit onchain → signed turns → reveal + settle;
+                 store.ts keeps live haggles and market days (Redis or memory)
 packages/core    rules engine, secrets, commitments
 packages/verify  offline fair-play verifier
 contracts/       bazaar contract (Rust, near-sdk)
+scripts/         NEAR AI check, Azure redeploy
+Dockerfile       one image: game + API on port 8080
 ```
 
 ## Honest limits
