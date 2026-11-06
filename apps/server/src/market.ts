@@ -10,6 +10,8 @@
  *   Every spend is signed by the agent's own key (authorize_spend / pay_agent) and capped onchain.
  * - Customers across Manhattan post delivery orders with their own signatures, funded by their
  *   (capped) daily income; missed orders are expired and refunded.
+ * - Agents shop at player-owned stalls while their owners are away: traders pick up bargains to
+ *   flip, and a customer about to give up on a delivery buys from a stall instead.
  * - Writes a news feed of what happened, with the transaction behind each line.
  */
 import { randomUUID } from "node:crypto";
@@ -17,6 +19,8 @@ import {
   AGENTS,
   BOTS,
   CUSTOMERS,
+  customerWouldBuy,
+  traderWouldBuy,
   orderTerms,
   siteById,
   GOODS,
@@ -37,7 +41,7 @@ import {
   type PlayerMemory,
   type Reason,
 } from "@bazaar/core";
-import { explorerTx, readAgents, readMemory, readOrders, type AgentSigner, type AgentView, type Ledger, type OnchainOrder } from "@bazaar/merchant";
+import { explorerTx, readAgents, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
 const GOOD_IDS = Object.keys(GOODS);
@@ -79,6 +83,7 @@ export interface MarketOrder extends OnchainOrder {
 export class Market {
   private cache: { at: number; agents: MarketAgent[] } | null = null;
   private orderCache: { at: number; orders: MarketOrder[] } | null = null;
+  private stallCache: { at: number; stalls: OnchainStall[] } | null = null;
   private rng = mulberry32(Date.now() % 2 ** 31);
 
   constructor(
@@ -117,6 +122,39 @@ export class Market {
   invalidate() {
     this.cache = null;
     this.orderCache = null;
+    this.stallCache = null;
+  }
+
+  /** Player-owned stalls (v3.3). */
+  async stalls(maxAgeMs = 3000): Promise<OnchainStall[]> {
+    if (this.stallCache && Date.now() - this.stallCache.at < maxAgeMs) return this.stallCache.stalls;
+    const stalls = await readStalls(this.ledger.network, this.ledger.contractId);
+    this.stallCache = { at: Date.now(), stalls };
+    return stalls;
+  }
+
+  /** An agent buys one unit from a player's stall, signing for the price itself. */
+  private async buyFromStall(agentId: string, stall: OnchainStall, goodId: string, price: number) {
+    const id = `s-${randomUUID()}`;
+    await this.signers[agentId].authorizeSpend(id, price);
+    const tx = await this.ledger.stallSale!({ saleId: id, slot: stall.slot, goodId });
+    this.invalidate();
+    return explorerTx(this.ledger.network, tx);
+  }
+
+  /** A trader browses the player stalls for a bargain to flip. */
+  private async shopStalls(traderId: string) {
+    const me = (await this.agents(0)).find((a) => a.id === traderId);
+    if (!me) return;
+    const budget = Math.min(me.coins, me.dailyCap - me.spentToday);
+    for (const st of await this.stalls(0)) {
+      for (const l of st.listings) {
+        if (l.qty <= 0 || !traderWouldBuy(l.price, GOODS[l.good_id]?.baseValue ?? 0, budget, this.rng)) continue;
+        const tx = await this.buyFromStall(traderId, st, l.good_id, l.price);
+        await this.say({ kind: "stall", text: `${short(traderId)} bought ${GOODS[l.good_id].name} from a player's stall (${st.slot}) for ${l.price}`, tx, agents: [traderId] });
+        return; // one purchase per visit
+      }
+    }
   }
 
   /** Delivery orders in contract storage, with where they go. */
@@ -307,6 +345,19 @@ export class Market {
     const orders = await this.orders(0);
     for (const o of orders.filter((x) => x.status === "open" && x.deadline_ms < now - 5000)) {
       const tx = await this.ledger.expireOrder!(o.id);
+      // Nobody delivered: buy it from a player's stall instead, if one has it within the bounty.
+      const stalls = await this.stalls(0);
+      const pick = stalls.flatMap((st) => st.listings.filter((l) => l.good_id === o.good_id && l.qty > 0 && customerWouldBuy(l.price, o.bounty)).map((l) => ({ st, l })))
+        .sort((a, b) => a.l.price - b.l.price)[0];
+      if (pick) {
+        try {
+          const stx = await this.buyFromStall(o.customer, pick.st, o.good_id, pick.l.price);
+          await this.say({ kind: "stall", text: `${o.customerName} gave up on a courier and bought ${o.goodName} from a player's stall for ${pick.l.price}`, tx: stx, agents: [o.customer] });
+          continue;
+        } catch (e) {
+          console.warn("customer stall purchase:", (e as Error).message);
+        }
+      }
       await this.say({ kind: "closed", text: `${o.customerName} gave up waiting for ${o.goodName}`, tx: explorerTx(this.ledger.network, tx), agents: [o.customer] });
     }
     const stale = orders.filter((x) => x.status !== "open" && x.posted_ms < now - PRUNE_AFTER_MS).map((x) => x.id);
@@ -365,5 +416,7 @@ export class Market {
     const traders = AGENTS.filter((a) => a.kind === "trader");
     const t = traders[Math.floor(this.rng() * traders.length)];
     if (t && this.rng() < 0.6) await step(`trade ${t.id}`, () => this.trade(t.id));
+    const shopper = traders[Math.floor(this.rng() * traders.length)];
+    if (shopper) await step(`stalls ${shopper.id}`, () => this.shopStalls(shopper.id));
   }
 }
