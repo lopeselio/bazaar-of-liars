@@ -15,6 +15,7 @@
  *   GET  /api/stalls?player=…&visit=1   the stall slots, and the player's own stall (with what it
  *                                       earned since their last visit)
  *   POST /api/stalls/{licence|stock|withdraw|collect} {player,…}  run your own stall
+ *   POST /api/dockwork {player,x,z}     a broke player works a shift at Pier 34 for the wholesaler
  *
  * State: live haggles, market days and rate limits sit in a Store (store.ts): Redis when
  * REDIS_URL is set, so any number of replicas can serve the same haggle; memory otherwise.
@@ -25,7 +26,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, CANAL_ORIGIN, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, BROKE_BELOW, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { Market } from "./market.js";
 import {
@@ -275,6 +276,30 @@ async function deliverOrder(id: string, body: Record<string, unknown>) {
   await store.del(`job:${player}`);
   await market.onDelivered(o, fare, mode, tx);
   return { bounty: o.bounty, fare, net: o.bounty - fare, mode, metres, seconds: Math.round(elapsed / 1000), msToSpare: o.deadline_ms - Date.now(), txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
+}
+
+// ---------- dock work ----------
+
+async function dockWork(body: Record<string, unknown>) {
+  if (!market || !ledger?.payWages || !signers?.wu) throw new HttpError(404, "dock work needs the agent economy");
+  const player = String(body.player ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (Math.hypot(num(body.x) - DOCK.x, num(body.z) - DOCK.z) > DOCK_REACH) throw new HttpError(409, "Walk to the docks at the west end of Canal Street first.");
+  const p = await purse(player);
+  if (p.coins >= BROKE_BELOW) throw new HttpError(409, `Auntie Wu only takes on workers who are broke (under ${BROKE_BELOW} coins).`);
+  // Auntie Wu signs for the wage herself; the contract checks the player is broke and hasn't worked today.
+  const id = `w-${Date.now().toString(36)}-${player.slice(6, 12)}`;
+  let tx: string;
+  try {
+    await signers.wu.authorizeSpend(id, DOCK_WAGE);
+    tx = await ledger.payWages({ wageId: id, player });
+  } catch (e) {
+    const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
+    throw new HttpError(409, m ? m[1] : "Auntie Wu has no work right now. Try again.");
+  }
+  market.invalidate();
+  await store.pushNews({ t: Date.now(), kind: "hire", text: `Auntie Wu hired a broke player to unload crates at Pier 34 for ${DOCK_WAGE}`, tx: explorerTx(ledger.network, tx), agents: ["wu"] });
+  return { wage: DOCK_WAGE, txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
 }
 
 // ---------- player stalls ----------
@@ -623,6 +648,7 @@ createServer(async (req, res) => {
       const q = new URL(url, "http://x").searchParams;
       return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
     }
+    if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(await readJson(req)));
     const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect)$/);
     if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], await readJson(req)));
     const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
