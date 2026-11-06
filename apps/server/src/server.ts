@@ -204,6 +204,8 @@ interface Job {
 }
 const DROP_RADIUS_M = 45;
 const MODE_RANK: Record<TravelMode, number> = { foot: 0, bike: 1, cab: 2, heli: 3 };
+/** A contract refusal ("you've already worked a shift today") as a sentence for the player. */
+const sentence = (m: string) => `${m.charAt(0).toUpperCase()}${m.slice(1)}${/[.!?]$/.test(m) ? "" : "."}`;
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
 
 async function listOrders(player: string) {
@@ -295,7 +297,7 @@ async function dockWork(body: Record<string, unknown>) {
     tx = await ledger.payWages({ wageId: id, player });
   } catch (e) {
     const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
-    throw new HttpError(409, m ? m[1] : "Auntie Wu has no work right now. Try again.");
+    throw new HttpError(409, m ? sentence(m[1]) : "Auntie Wu has no work right now. Try again.");
   }
   market.invalidate();
   await store.pushNews({ t: Date.now(), kind: "hire", text: `Auntie Wu hired a broke player to unload crates at Pier 34 for ${DOCK_WAGE}`, tx: explorerTx(ledger.network, tx), agents: ["wu"] });
@@ -357,7 +359,7 @@ async function stallAction(action: string, body: Record<string, unknown>) {
     if (e instanceof HttpError) throw e;
     // Contract refusals ("you don't have a stall", "that slot is taken", …) are the player's to read.
     const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
-    throw new HttpError(409, m ? m[1] : "The street office refused that. Try again.");
+    throw new HttpError(409, m ? sentence(m[1]) : "The street office refused that. Try again.");
   }
   market.invalidate();
   if (action === "licence") await store.pushNews({ t: Date.now(), kind: "stall", text: `A player opened a stall on Canal Street (${String(body.slot)})`, tx: explorerTx(ledger.network, tx), agents: [] });
