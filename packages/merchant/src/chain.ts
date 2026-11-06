@@ -57,6 +57,13 @@ export interface Ledger {
   invest?(a: { player: string; agentId: string; amount: number }): Promise<string>;
   /** v3: a merchant uses up a good it bought. */
   consume?(a: { agentId: string; goodId: string; qty: number }): Promise<string>;
+  /** v3.1: a customer's business brings in coins (capped per day by the contract). */
+  payIncome?(a: { agentId: string; amount: number }): Promise<string>;
+  /** v3.1: a player delivered; pays the bounty, and any fare to the cab company. */
+  fulfilOrder?(a: { orderId: string; player: string; fare: number }): Promise<string>;
+  /** v3.1: refund an order past its deadline (anyone may). */
+  expireOrder?(orderId: string): Promise<string>;
+  pruneOrders?(orderIds: string[]): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -97,6 +104,10 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
       call("close_haggle", { haggle_id: a.haggleId, secret: a.secret, salt: a.salt, deal_price: a.dealPrice, lowballed: a.lowballed }, "FINAL"),
     invest: (a) => call("invest", { player: a.player, agent_id: a.agentId, amount: a.amount }, "FINAL"),
     consume: (a) => call("consume", { agent_id: a.agentId, good_id: a.goodId, qty: a.qty }),
+    payIncome: (a) => call("pay_income", { agent_id: a.agentId, amount: a.amount }),
+    fulfilOrder: (a) => call("fulfil_order", { order_id: a.orderId, player: a.player, fare: a.fare }, "FINAL"),
+    expireOrder: (orderId) => call("expire_order", { order_id: orderId }),
+    pruneOrders: (orderIds) => call("prune_orders", { order_ids: orderIds }),
   };
 }
 
@@ -108,6 +119,8 @@ export interface AgentSigner {
   authorizeSpend(haggleId: string, max: number): Promise<string>;
   /** Pay another agent (hire it). */
   payAgent(to: string, amount: number, memo: string): Promise<string>;
+  /** Customers only: post a delivery order and lock its bounty. */
+  postOrder(a: { orderId: string; goodId: string; bounty: number; deadlineMs: number; site: string; express: boolean }): Promise<string>;
 }
 
 export function agentSigner(cfg: { network: Network; contractId: string; account: string; privateKey?: string }): AgentSigner {
@@ -130,6 +143,8 @@ export function agentSigner(cfg: { network: Network; contractId: string; account
     account: cfg.account,
     authorizeSpend: (haggleId, max) => call("authorize_spend", { haggle_id: haggleId, max }),
     payAgent: (to, amount, memo) => call("pay_agent", { to, amount, memo }),
+    postOrder: (a) =>
+      call("post_order", { order_id: a.orderId, good_id: a.goodId, bounty: a.bounty, deadline_ms: a.deadlineMs, site: a.site, express: a.express }),
   };
 }
 
@@ -259,4 +274,24 @@ export interface AgentView {
 export async function readAgents(network: Network, contractId: string, goodIds: string[]): Promise<AgentView[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<AgentView[]>(contractId, "agents", { good_ids: goodIds }, { finality: "optimistic" })) ?? [];
+}
+
+export interface OnchainOrder {
+  id: string;
+  customer: string;
+  good_id: string;
+  bounty: number;
+  deadline_ms: number;
+  site: string;
+  express: boolean;
+  status: "open" | "delivered" | "expired";
+  posted_ms: number;
+  courier: string | null;
+  fare: number;
+}
+
+/** Delivery orders still in contract storage (v3.1). */
+export async function readOrders(network: Network, contractId: string, openOnly = false): Promise<OnchainOrder[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<OnchainOrder[]>(contractId, "orders", { open_only: openOnly, limit: 100 }, { finality: "optimistic" })) ?? [];
 }
