@@ -5,15 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "node --env-file=../../.env --import tsx --watch src/server.ts",
-    "start": "node --env-file-if-exists=../../.env --import tsx src/server.ts"
+    "start": "node --env-file-if-exists=../../.env --import tsx src/server.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@bazaar/core": "workspace:*",
-    "@bazaar/merchant": "workspace:*"
+    "@bazaar/merchant": "workspace:*",
+    "redis": "6.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

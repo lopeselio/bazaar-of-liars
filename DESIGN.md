@@ -27,7 +27,7 @@ When an NPC's AI can lie, players can't tell a clever bluff from the developer r
 - **Two sides, one engine.** A buying merchant is a selling merchant in a mirror: prices map `x ↦ 2C − x` around its ceiling C, so every rule, tell, claim and test applies in both directions. Fuzz tests check "never sells below the floor" and "never pays above the ceiling".
 - **Trading.** Farrukh sells rugs and buys lamps, Zaria sells saffron and buys rugs, Tobin sells lamps and buys saffron. Sell floors are 0.75–1.05× base value and buy ceilings 0.95–1.35×, so trading pays if you read people well.
 - **Memory.** `grudge` (lowballs, max 5) worsens the opening by 8% each; `loyalty` (deals, max 5) improves it by 2% each. Both live in the contract, go into the commitment, and are checked against the contract's own record at open.
-- **Days and leaderboard.** Six haggles per market day (a client-side session goal), a sundown summary, and an onchain top 10 by peak purse (peaks only rise, so the list is exact).
+- **Days and leaderboard.** Six haggles per market day, kept by the server per player (opening a haggle after sundown is refused until the player starts the next day), a sundown summary, and an onchain top 10 by peak purse (peaks only rise, so the list is exact).
 
 ## Fair-play protocol (the core NEAR feature)
 
@@ -47,7 +47,7 @@ When an NPC's AI can lie, players can't tell a clever bluff from the developer r
    - the displayed text is exactly `present(signed text)`;
    - the deal is at or above the floor.
 
-**Privacy (a Privacy track requirement):** the server keeps haggle state in memory only and stores nothing after a haggle ends. The bundle goes to the player.
+**Privacy (a Privacy track requirement):** a live haggle's state, including its secret and salt, is held only until the haggle is revealed onchain, then deleted. The hosted demo keeps it in Azure Managed Redis, with persistence off and TLS on, so any server replica can serve the next turn and a restart doesn't drop a game. It's never written to disk. Locally it stays in the server's memory. The bundle goes to the player.
 
 **What this proves:**
 - the secret didn't change mid-haggle;

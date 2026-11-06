@@ -1,6 +1,6 @@
 import "./style.css";
 import { Bazaar, type StallLook } from "./scene";
-import { api, type Check, type Ending, type MerchantInfo, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "./api";
+import { api, type Check, type Day, type Ending, type MerchantInfo, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "./api";
 
 // ---------- looks (original designs, one per merchant) ----------
 
@@ -15,7 +15,6 @@ const NEED_TEXT: Record<Side, Record<string, string>> = {
   sell: { rent_due: "Rent due tonight", restocking: "Cash to restock", comfortable: "In no hurry", hoarding: "Loved this piece" },
   buy: { rent_due: "A customer waiting", restocking: "Empty shelf", comfortable: "Could do without", hoarding: "A collector" },
 };
-const HAGGLES_PER_DAY = 6;
 /** "Old Farrukh" → "Farrukh", "Zaria the Spice-Seller" → "Zaria". */
 const shortName = (name: string) => name.replace(/^Old /, "").split(" ")[0];
 
@@ -65,12 +64,17 @@ function playerId() {
 const PLAYER = playerId();
 let me: PlayerView | null = null;
 let merchants: MerchantInfo[] = [];
-const goodValue = (id: string) => merchants.flatMap((m) => [m.good, m.buys]).find((g) => g.id === id)?.baseValue ?? 0;
-const worth = (p: PlayerView) => p.coins + Object.entries(p.goods).reduce((s, [g, n]) => s + n * goodValue(g), 0);
+
+function showPurse(p: PlayerView) {
+  me = p;
+  day = p.day;
+  renderDay();
+}
 
 async function refreshPurse(bump = false) {
   try {
-    me = await api.player(PLAYER);
+    showPurse(await api.player(PLAYER));
+    if (!me) return me;
     $("coins").textContent = String(me.coins);
     $("goods").innerHTML = Object.entries(me.goods)
       .filter(([, n]) => n > 0)
@@ -88,26 +92,11 @@ async function refreshPurse(bump = false) {
   return me;
 }
 
-// ---------- market day (a session goal; balances themselves live onchain) ----------
+// ---------- market day (kept by the server, like balances) ----------
 
-interface Day {
-  n: number;
-  left: number;
-  startWorth: number | null;
-}
-function loadDay(): Day {
-  try {
-    const d = JSON.parse(store.get("bazaar.day") ?? "");
-    if (typeof d.n === "number" && typeof d.left === "number") return d;
-  } catch {
-    /* new player */
-  }
-  return { n: 1, left: HAGGLES_PER_DAY, startWorth: null };
-}
-let day = loadDay();
-const saveDay = () => store.set("bazaar.day", JSON.stringify(day));
+let day: Day | null = null;
 function renderDay() {
-  $("day").innerHTML = `Day <b>${day.n}</b> · ${day.left} haggle${day.left === 1 ? "" : "s"} before sundown`;
+  $("day").innerHTML = day ? `Day <b>${day.n}</b> · ${day.left} haggle${day.left === 1 ? "" : "s"} before sundown` : "";
 }
 
 async function leaderboardHtml() {
@@ -124,11 +113,11 @@ async function leaderboardHtml() {
 
 async function sundown() {
   const p = await refreshPurse();
-  const end = p ? worth(p) : 0;
-  const start = day.startWorth ?? end;
+  const end = p?.worth ?? 0;
+  const start = day?.startWorth ?? end;
   const profit = end - start;
   $("s-title").textContent = profit > 0 ? `A good day: +${profit} coins` : profit < 0 ? `A hard day: ${profit} coins` : "You broke even";
-  $("s-eyebrow").textContent = `Sundown · day ${day.n}`;
+  $("s-eyebrow").textContent = `Sundown · day ${day?.n ?? 1}`;
   $("s-facts").innerHTML = `
     <div><span>Started at</span><strong>${start}</strong></div>
     <div><span>Ended at</span><strong>${end}</strong></div>
@@ -239,7 +228,7 @@ function pick(id: string) {
   setEnabled(false);
   $("panel").hidden = false;
 
-  if (day.left <= 0) {
+  if (day && day.left <= 0) {
     leaveStall();
     void sundown();
     return;
@@ -282,10 +271,6 @@ async function start(side: Side) {
     clearTimeout(t);
     if (!current || current.m.id !== m.id) return;
     current.opened = opened;
-    if (day.startWorth === null && me) {
-      day.startWorth = worth(me);
-      saveDay();
-    }
     steps([
       { ...s[0], state: "done" },
       { ...s[1], state: "done" },
@@ -377,9 +362,10 @@ async function say(text: string) {
     current.ending = r.end;
     setClaim(null);
     addSys("Revealing the secret onchain…");
-    day.left = Math.max(0, day.left - 1);
-    saveDay();
-    renderDay();
+    if (r.end.day) {
+      day = r.end.day;
+      renderDay();
+    }
     setTimeout(() => showReveal(r.end!), 900);
     void refreshPurse(true);
     return;
@@ -396,7 +382,7 @@ function leaveStall() {
   const ended = !!current?.ending;
   current = null;
   bazaar.overview();
-  if (ended && day.left === 0) void sundown();
+  if (ended && day?.left === 0) void sundown();
 }
 
 // ---------- reveal ----------
@@ -544,11 +530,13 @@ $("traders").addEventListener("click", async () => {
 });
 $("b-close").addEventListener("click", () => ($("board").hidden = true));
 $("s-next").addEventListener("click", async () => {
-  const p = await refreshPurse();
-  day = { n: day.n + 1, left: HAGGLES_PER_DAY, startWorth: p ? worth(p) : null };
-  saveDay();
-  renderDay();
-  $("sundown").hidden = true;
+  try {
+    await api.nextDay(PLAYER);
+    await refreshPurse();
+    $("sundown").hidden = true;
+  } catch (e) {
+    toast((e as Error).message);
+  }
 });
 $("enter").addEventListener("click", () => {
   $("intro").hidden = true;
@@ -589,12 +577,7 @@ async function boot() {
     }
   };
   if (!store.get("bazaar.seenIntro")) $("intro").hidden = false;
-  renderDay();
   await refreshPurse();
-  if (day.startWorth === null && me?.known) {
-    day.startWorth = worth(me);
-    saveDay();
-  }
-  if (day.left <= 0) void sundown();
+  if (day && day.left <= 0) void sundown();
 }
 void boot();

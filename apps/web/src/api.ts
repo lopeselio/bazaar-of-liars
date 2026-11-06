@@ -20,11 +20,23 @@ export interface Check {
 export type Tell = "relaxed" | "firm" | "nervous" | "irritated";
 export type Action = "counter" | "final" | "accept" | "walk" | "left" | null;
 
+/** A market day, kept by the server: a fixed number of haggles, then sundown. */
+export interface Day {
+  n: number;
+  left: number;
+  perDay: number;
+  /** Purse + goods at the start of the day. */
+  startWorth: number;
+}
+
 export interface PlayerView {
   id: string;
   known: boolean;
   coins: number;
   goods: Record<string, number>;
+  /** Coins plus goods at their base value. */
+  worth: number;
+  day: Day;
   onchain: boolean;
   network?: string;
   contractId?: string;
@@ -39,6 +51,7 @@ export interface Opened {
   commitment: string;
   openingAsk: number;
   budget: number;
+  day: Day;
   openTx: string | null;
   openTxUrl: string | null;
   attestation: { model: string; nonce: string; verifiedAt: string; signers: string[]; checks: Check[] };
@@ -64,6 +77,8 @@ export interface Ending {
     closeError: string | null;
   } | null;
   checks: Check[];
+  /** The day after this haggle was counted. */
+  day: Day | null;
   bundle: unknown;
 }
 
@@ -98,4 +113,5 @@ export const api = {
   open: (merchantId: string, player: string, side: Side) => call<Opened>("/api/haggle", { merchantId, player, side }),
   leaderboard: () => call<{ leaders: { player: string; peak: number }[] }>("/api/leaderboard"),
   turn: (haggleId: string, text: string) => call<TurnOut>(`/api/haggle/${haggleId}/turn`, { text }),
+  nextDay: (player: string) => call<PlayerView>("/api/day/next", { player }),
 };

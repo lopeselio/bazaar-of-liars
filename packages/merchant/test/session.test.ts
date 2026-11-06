@@ -351,3 +351,34 @@ describe("claim presentation", () => {
     expect(present("*sighs* {PRICE}.", { ...d, price: 40, statedFloor: 74 }, undefined, "buy")).toBe("*sighs* 40. I can't pay more than 74.");
   });
 });
+
+describe("snapshot + restore (shared store across replicas)", () => {
+  it("a haggle resumed from JSON after every turn still settles and verifies", async () => {
+    const llm = fakeLlm();
+    const chain = fakeChain();
+    const first = new HaggleSession(llm, fakeAttestor, MODEL, MERCHANTS[2], 1234, { ledger: chain.ledger, player: "guest.test" });
+    await first.open();
+    // Each turn runs on a "different replica": only the JSON survives, in-flight signature fetches don't.
+    let snap = JSON.stringify(first.snapshot());
+    for (const l of ["10", "15", "take"]) {
+      const s = HaggleSession.restore(JSON.parse(snap), llm, fakeAttestor, chain.ledger);
+      if (s.status !== "open") break;
+      await s.turn(l);
+      snap = JSON.stringify(s.snapshot());
+    }
+    const last = HaggleSession.restore(JSON.parse(snap), llm, fakeAttestor, chain.ledger);
+    expect(last.id).toBe(first.id);
+    expect(last.status).toBe("deal");
+    await last.close();
+    const b = await last.bundle();
+    expect(b.turns.every((t) => [t.extraction, t.speech].every((c) => !c || c.signature))).toBe(true);
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok)).toEqual([]);
+  });
+
+  it("refuses to restore an onchain haggle without its ledger", async () => {
+    const chain = fakeChain();
+    const s = new HaggleSession(fakeLlm(), fakeAttestor, MODEL, MERCHANTS[2], 1, { ledger: chain.ledger, player: "guest.test" });
+    await s.open();
+    expect(() => HaggleSession.restore(s.snapshot(), fakeLlm(), fakeAttestor)).toThrow(/ledger/);
+  });
+});

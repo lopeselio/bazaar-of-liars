@@ -4,12 +4,13 @@
  *   turn()  → [signed] read the player → rules engine decides → [signed] merchant speaks
  *   bundle()→ everything a third party needs to replay and verify the haggle
  *
- * Privacy: the session holds state in memory only. Nothing is written server-side;
- * the proof bundle is handed to the player.
+ * State is plain data: snapshot() / HaggleSession.restore() let a server keep live haggles in a
+ * shared store, so any replica can serve the next turn. The proof bundle is handed to the player.
  */
 import { randomUUID } from "node:crypto";
 import {
   GOODS,
+  MERCHANTS,
   acceptAsk,
   callBluff,
   commit,
@@ -58,8 +59,29 @@ export interface TurnResult {
   refused?: { reason: "budget"; budget: number; price: number };
 }
 
+/** Everything needed to resume a haggle on another process. Holds the secret and salt: keep it private. */
+export interface SessionSnapshot {
+  v: 1;
+  id: string;
+  openedAt: string;
+  model: string;
+  merchantId: string;
+  seed: number;
+  side: Side;
+  memory: PlayerMemory;
+  player: string | null;
+  state: HaggleState;
+  salt: string;
+  commitment: string;
+  attestation: Awaited<ReturnType<Attestor["attest"]>>;
+  turns: TurnRecord[];
+  lines: Line[];
+  left: boolean;
+  chain: ChainRecord | null;
+}
+
 export class HaggleSession {
-  readonly id = randomUUID();
+  id: string = randomUUID();
   private state!: HaggleState;
   private salt = newSalt();
   private commitment = "";
@@ -68,7 +90,7 @@ export class HaggleSession {
   private lines: Line[] = [];
   private pendingSigs: Promise<void>[] = [];
   private left = false;
-  readonly openedAt = new Date().toISOString();
+  openedAt = new Date().toISOString();
   private chain: ChainRecord | null = null;
 
   constructor(
@@ -84,6 +106,50 @@ export class HaggleSession {
     /** What this merchant remembers about the player (must match the contract's record). */
     private memory: PlayerMemory = { lowballs: 0, deals: 0 },
   ) {}
+
+  /** Plain-JSON state for a shared store. Signatures still in flight are fetched again by bundle(). */
+  snapshot(): SessionSnapshot {
+    return {
+      v: 1,
+      id: this.id,
+      openedAt: this.openedAt,
+      model: this.model,
+      merchantId: this.merchant.id,
+      seed: this.seed,
+      side: this.side,
+      memory: this.memory,
+      player: this.onchain?.player ?? null,
+      state: this.state,
+      salt: this.salt,
+      commitment: this.commitment,
+      attestation: this.attestation,
+      turns: this.turns,
+      lines: this.lines,
+      left: this.left,
+      chain: this.chain,
+    };
+  }
+
+  /** Resume a snapshot. Pass the same ledger the haggle was opened with (or none if it was offchain). */
+  static restore(snap: SessionSnapshot, llm: LlmClient, attestor: Attestor, ledger?: Ledger): HaggleSession {
+    if (snap.v !== 1) throw new Error(`unknown session snapshot v${snap.v}`);
+    const merchant = MERCHANTS.find((m) => m.id === snap.merchantId);
+    if (!merchant) throw new Error(`unknown merchant ${snap.merchantId}`);
+    if (snap.chain && !ledger) throw new Error("this haggle is onchain: restore it with its ledger");
+    const onchain = snap.chain && ledger ? { ledger, player: snap.chain.player } : undefined;
+    const s = new HaggleSession(llm, attestor, snap.model, merchant, snap.seed, onchain, snap.side, snap.memory);
+    s.id = snap.id;
+    s.openedAt = snap.openedAt;
+    s.state = snap.state;
+    s.salt = snap.salt;
+    s.commitment = snap.commitment;
+    s.attestation = snap.attestation;
+    s.turns = snap.turns;
+    s.lines = snap.lines;
+    s.left = snap.left;
+    s.chain = snap.chain;
+    return s;
+  }
 
   get good() {
     return GOODS[this.side === "sell" ? this.merchant.goodId : this.merchant.buysGoodId];
@@ -229,6 +295,13 @@ export class HaggleSession {
   /** Reveal + proof. Call after the haggle ends (and after close(), if onchain). */
   async bundle(): Promise<ProofBundle> {
     await Promise.all(this.pendingSigs);
+    // A restored session (or a flaky fetch) can leave signatures missing: fetch those now.
+    const missing = this.turns.flatMap((t) => [t.extraction, t.speech]).filter((c): c is SignedCall => !!c && !c.signature);
+    await Promise.all(
+      missing.map(async (c) => {
+        c.signature = await this.llm.signature(c.chatId, this.model);
+      }),
+    );
     return {
       version: "bazaar-proof-v1",
       haggleId: this.id,
