@@ -117,7 +117,7 @@ export function initJobs(d: JobsDeps) {
           .map((o) => {
             const dist = Math.hypot(p.x - o.x, p.z - o.z) * 1.25;
             const mine = job?.orderId === o.id;
-            return `<li class="${mine ? "mine" : ""} ${o.express ? "express" : ""}">
+            return `<li class="${mine ? "mine" : ""} ${o.express ? "express" : ""} ${o.needsLevel ? "locked" : ""}">
               <div class="bz-o-good">${d.goodIcon[o.good_id] ?? "📦"}</div>
               <div class="bz-o-main">
                 <b>${esc(o.goodName)} → ${esc(o.customerName)}</b>
@@ -125,7 +125,7 @@ export function initJobs(d: JobsDeps) {
                 <span class="bz-o-fare">cab ≈ ${fareEstimate("cab", dist)} · heli ≈ ${fareEstimate("heli", dist)}</span>
               </div>
               <div class="bz-o-side"><b>${o.bounty}</b><time data-deadline="${o.deadline_ms}">${clock(o.deadline_ms - now())}</time>
-                ${mine ? `<span class="bz-o-on">ACTIVE</span>` : `<button type="button" data-take="${o.id}">Take</button>`}</div>
+                ${mine ? `<span class="bz-o-on">ACTIVE</span>` : o.needsLevel ? `<span class="bz-o-lock" title="Earn street cred to unlock">🔒 Level ${o.needsLevel}</span>` : `<button type="button" data-take="${o.id}">Take</button>`}</div>
             </li>`;
           })
           .join("")

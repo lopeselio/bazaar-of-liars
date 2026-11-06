@@ -10,6 +10,7 @@ import "./style.css";
 import { api, type Ending, type MarketAgent, type MerchantInfo, type NewsItem, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "../../web/src/api";
 import { animateMerchant, buildStall, type StallLook } from "../../web/src/scene";
 import { initJobs } from "./jobs";
+import { initCred } from "./cred";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -200,6 +201,8 @@ if (!store.get("bazaar.city.arrived")) {
 
 // ---------- HUD ----------
 
+const renderCred = initCred($("bz-hud"));
+
 async function refreshPurse(bump = false) {
   try {
     me = await api.player(PLAYER);
@@ -212,6 +215,7 @@ async function refreshPurse(bump = false) {
     .map(([g, n]) => `<i>${GOOD_ICON[g] ?? "•"}${n}</i>`)
     .join("");
   $("bz-day").innerHTML = `Day <b>${me.day.n}</b> · ${me.day.left}/${me.day.perDay} haggles left`;
+  renderCred(me.cred);
   if (bump) {
     const p = document.querySelector(".bz-purse")!;
     p.classList.remove("bump");
