@@ -36,30 +36,35 @@ The design is in [DESIGN.md](./DESIGN.md).
 
 ```mermaid
 flowchart TB
-  P["Player's browser<br/>Three.js bazaar + chat<br/>guest id, no wallet"]
+  P["Player's browser"]
   subgraph AZ["Azure"]
-    ING["Container Apps ingress<br/>HTTPS"]
-    S["Game server replicas, 2–5<br/>apps/server + packages/core rules"]
-    R[("Azure Managed Redis<br/>live haggles, market days,<br/>turn locks, rate limits<br/>TLS, no persistence")]
-    K[["Container App secrets<br/>NEAR AI key, server key, Redis URL"]]
-    ACR["Container Registry<br/>built by scripts/deploy-azure.sh"]
+    direction TB
+    S["Game server, 2-5 replicas"]
+    R[("Azure Managed Redis")]
   end
-  AI["NEAR AI Cloud<br/>Qwen in Intel TDX + NVIDIA TEE<br/>attestation + signed replies"]
-  C[("NEAR testnet<br/>v2.bazaar-liars.testnet<br/>commitments, coins, goods,<br/>memory, leaderboard")]
-  V["pnpm verify:haggle<br/>anyone, no API key"]
+  AI["NEAR AI Cloud TEE"]
+  C[("NEAR testnet contract")]
+  V["pnpm verify:haggle"]
 
-  P -- "game + /api" --> ING --> S
-  S <-- "state, any replica" --> R
-  K -.-> S
-  ACR -. image .-> S
-  S -- "attest, read, speak" --> AI
-  S -- "open_haggle / close_haggle<br/>signed by bazaar-server.testnet" --> C
-  S -- "views: purse, memory, top traders" --> C
-  P -- "proof bundle" --> V
-  V -- "commitment, reveal, block times" --> C
+  P -->|play| S
+  S <-->|haggle state| R
+  S -->|attest, read, speak| AI
+  S -->|commit, reveal, settle| C
+  P -->|proof bundle| V
+  V -->|check| C
 ```
 
-The server is the only party that signs transactions, so players never see a wallet or pay gas. Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
+| Piece | What it is | What it does |
+|---|---|---|
+| Player's browser | Three.js bazaar + chat (`apps/web`), a guest id, no wallet | Plays, then downloads the proof bundle |
+| Game server | `apps/server` + the rules engine in `packages/core`, on Azure Container Apps (2–5 replicas, image built in Azure Container Registry by `scripts/deploy-azure.sh`) | Attests the model, commits the secret, runs turns, reveals and settles. The only party that signs transactions, so players never pay gas |
+| Azure Managed Redis | TLS, access key, persistence off | Holds live haggles (with their secret until revealed), market days, turn locks and rate limits, so any replica can serve the next turn |
+| Container App secrets | NEAR AI key, `bazaar-server.testnet` key, Redis URL | Never in the image or the repo |
+| NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
+| NEAR testnet | [`v2.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v2.bazaar-liars.testnet) | Commitments, reveals, coins, goods, merchant memory, top traders |
+| Verifier | `pnpm verify:haggle`, anyone, no API key | Replays the bundle and checks it against the chain |
+
+Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
 
 One haggle, end to end:
 
