@@ -42,6 +42,11 @@
 //! the price (less a 10% street commission, burned) goes to the stall's till. Constants match
 //! packages/core stalls.ts.
 //!
+//! ## Dock work (v3.4)
+//! A broke player (fewer than 20 coins) can work one shift a day for the wholesaler. The
+//! wholesaler signs for the wage itself (`authorize_spend`), the server calls `pay_wages`, and the
+//! contract checks the player is broke and hasn't worked today. No coins are created.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -335,6 +340,8 @@ pub const LICENCE_PRICE: u64 = 150;
 pub const LICENCE_XP: u64 = 120;
 pub const STALL_COMMISSION_PCT: u64 = 10;
 pub const MAX_STALL_PRICE: u32 = 500;
+pub const DOCK_WAGE: u64 = 40;
+pub const BROKE_BELOW: u64 = 20;
 
 /// The v3.2 state layout, read once by `migrate`.
 #[near(serializers = [borsh])]
@@ -760,6 +767,29 @@ impl Bazaar {
                 self.orders.remove(&id);
             }
         }
+    }
+
+    // ---------- dock work ----------
+
+    /// Server: pay a broke player a day's dock wage from the wholesaler's purse. The wholesaler
+    /// signed `authorize_spend(wage_id, ≥ DOCK_WAGE)` first. Once per player per UTC day.
+    pub fn pay_wages(&mut self, wage_id: String, player: AccountId) {
+        self.require_server();
+        let auth = self.auths.remove(&wage_id).unwrap_or_else(|| env::panic_str("the wholesaler hasn't authorized this wage"));
+        let boss = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("only an agent pays wages"));
+        require!(boss.kind == AgentKind::Wholesaler, "only the wholesaler hires dock workers");
+        require!(auth.max >= DOCK_WAGE, "the authorization doesn't cover a wage");
+        require!(self.agent_of(&player).is_none(), "agents don't work the docks");
+        require!(self.coins_of(player.clone()) < BROKE_BELOW, "dock work is for players who are broke");
+        // The once-a-day record lives in the per-day income ledger, keyed "wage#player".
+        let key = format!("wage#{player}");
+        let day = today();
+        require!(self.income.get(&key).is_none_or(|(d, _)| *d != day), "you've already worked a shift today");
+        self.income.insert(key, (day, DOCK_WAGE));
+        self.charge_cap(&boss.id, DOCK_WAGE as i64 - auth.max as i64);
+        self.add_coins(&auth.agent, -(DOCK_WAGE as i64));
+        self.add_coins(&player, DOCK_WAGE as i64);
+        emit("wages_paid", json!({ "wage_id": wage_id, "player": player, "employer": boss.id, "amount": DOCK_WAGE }));
     }
 
     // ---------- player stalls ----------
@@ -1877,5 +1907,59 @@ mod tests {
         c.release_stall(player());
         assert_eq!(c.goods_of(player(), "saffron".into()), 1);
         assert!(c.stall_of(player()).is_none());
+    }
+
+    // ---------- dock work ----------
+
+    /// Wu (with a cap and coins) signs for a wage.
+    fn wu_signs(c: &mut Bazaar, id: &str) {
+        ctx("owner.testnet", 100);
+        c.register_agent("wu".into(), "Auntie Wu".into(), acc("wu.testnet"), AgentKind::Wholesaler, 400, 0, vec![]);
+        ctx("farrukh.testnet", 100);
+        c.pay_agent("wu".into(), 90, "lot".into());
+        ctx("wu.testnet", 100);
+        c.authorize_spend(id.into(), DOCK_WAGE);
+        ctx("server.testnet", 100);
+    }
+
+    #[test]
+    fn a_broke_player_works_a_shift_for_the_wholesaler() {
+        let mut c = setup();
+        c.set_coins(&player(), 5);
+        wu_signs(&mut c, "w1");
+        c.pay_wages("w1".into(), player());
+        assert_eq!(c.coins_of(player()), 45);
+        assert_eq!(c.coins_of(acc("wu.testnet")), 50);
+    }
+
+    #[test]
+    #[should_panic(expected = "for players who are broke")]
+    fn only_broke_players_get_dock_work() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        wu_signs(&mut c, "w1");
+        c.pay_wages("w1".into(), player());
+    }
+
+    #[test]
+    #[should_panic(expected = "already worked a shift today")]
+    fn one_shift_a_day() {
+        let mut c = setup();
+        c.set_coins(&player(), 0);
+        wu_signs(&mut c, "w1");
+        c.pay_wages("w1".into(), player());
+        c.set_coins(&player(), 0);
+        ctx("wu.testnet", 100);
+        c.authorize_spend("w2".into(), DOCK_WAGE);
+        ctx("server.testnet", 100);
+        c.pay_wages("w2".into(), player());
+    }
+
+    #[test]
+    #[should_panic(expected = "hasn't authorized this wage")]
+    fn the_server_cannot_pay_wages_from_the_wholesalers_purse_alone() {
+        let mut c = setup();
+        c.set_coins(&player(), 0);
+        c.pay_wages("w1".into(), player());
     }
 }
