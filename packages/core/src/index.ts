@@ -6,3 +6,4 @@ export * from "./catalog.js";
 export * from "./bots.js";
 export * from "./play.js";
 export * from "./economy.js";
+export * from "./orders.js";
