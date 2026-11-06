@@ -22,7 +22,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, CANAL_ORIGIN, GOODS, MERCHANTS, fare as fareFor, impliedMode, routeMetres, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, CANAL_ORIGIN, GOODS, MERCHANTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { Market } from "./market.js";
 import {
@@ -35,6 +35,7 @@ import {
   ledgerFromEnv,
   nearAiAttestor,
   readPlayer,
+  readCred,
   agentSignersFromEnv,
   verifyBundle,
   type Ledger,
@@ -161,10 +162,16 @@ async function dayOf(player: string, w: number): Promise<DayRecord> {
   return fresh;
 }
 
+const utcDay = () => Math.floor(Date.now() / 86_400_000);
+async function credOf(player: string): Promise<CredView | null> {
+  if (!ledger) return null;
+  return credView(await readCred(ledger.network, ledger.contractId, player).catch(() => ({ xp: 0, streak: 0, best_streak: 0, last_day: 0 })), utcDay());
+}
+
 async function playerView(player: string) {
-  const p = await purse(player);
+  const [p, cred] = await Promise.all([purse(player), credOf(player)]);
   const w = worth(p);
-  return { ...p, worth: w, day: { ...(await dayOf(player, w)), perDay: HAGGLES_PER_DAY } };
+  return { ...p, worth: w, cred, day: { ...(await dayOf(player, w)), perDay: HAGGLES_PER_DAY } };
 }
 
 async function invest(body: Record<string, unknown>) {
@@ -198,9 +205,17 @@ const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : N
 async function listOrders(player: string) {
   if (!market) return { orders: [], job: null, now: Date.now() };
   const now = Date.now();
-  const orders = (await market.orders()).filter((o) => o.status === "open" && o.deadline_ms > now);
+  const cred = PLAYER_RE.test(player) ? await credOf(player) : null;
+  const level = cred?.level ?? 1;
+  // Each order says whether this player's level can take it yet.
+  const orders = (await market.orders())
+    .filter((o) => o.status === "open" && o.deadline_ms > now)
+    .map((o) => {
+      const c = canTake(level, o);
+      return { ...o, needsLevel: c.ok ? null : c.needs };
+    });
   const job = PLAYER_RE.test(player) ? await store.getJSON<Job>(`job:${player}`) : null;
-  return { orders, job: job && orders.some((o) => o.id === job.orderId) ? job : null, now };
+  return { orders, job: job && orders.some((o) => o.id === job.orderId) ? job : null, now, level };
 }
 
 async function takeOrder(id: string, body: Record<string, unknown>) {
@@ -212,6 +227,8 @@ async function takeOrder(id: string, body: Record<string, unknown>) {
   if (Number.isNaN(x) || Number.isNaN(z)) throw new HttpError(400, "where are you?");
   const o = (await market.orders(0)).find((x) => x.id === id);
   if (!o || o.status !== "open" || o.deadline_ms <= Date.now()) throw new HttpError(409, "That order is gone.");
+  const gate = canTake((await credOf(player))?.level ?? 1, o);
+  if (!gate.ok) throw new HttpError(403, `Reach street cred level ${gate.needs} to take ${o.express ? "express jobs" : `jobs at ${o.siteName}`}.`);
   const job: Job = { orderId: id, takenAt: Date.now(), from: { x, z } };
   await store.putJSON(`job:${player}`, job, Math.max(60_000, o.deadline_ms - Date.now() + 60_000));
   return { job, order: o };
@@ -304,6 +321,10 @@ async function finish(id: string, l: LiveRecord, session = restore(l)) {
     }
   });
   // What each tell meant: how far the merchant really was from its limit.
+  // Catching a merchant in a bluff is street cred only the server sees; the contract caps it per day.
+  const caught = calls.filter((c) => c.result === "caught").length;
+  if (caught && ledger?.awardCred)
+    await ledger.awardCred({ player: l.player, xp: caught * XP.caughtBluff, reason: "caught_bluff" }).catch((e) => console.warn("award_cred:", (e as Error).message));
   const tells = bundle.turns.flatMap((t, i) =>
     t.decision && t.decision.action !== "accept" && t.decision.action !== "walk"
       ? [{ turn: i + 1, tell: t.decision.tell, gap: Math.abs(t.decision.price - secret.floor) }]
