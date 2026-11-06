@@ -29,6 +29,18 @@ export interface Day {
   startWorth: number;
 }
 
+/** Street cred, kept onchain by the bazaar contract. */
+export interface Cred {
+  xp: number;
+  level: number;
+  title: string;
+  levelXp: number;
+  nextXp: number;
+  streak: number;
+  bestStreak: number;
+  activeToday: boolean;
+}
+
 export interface PlayerView {
   id: string;
   known: boolean;
@@ -37,6 +49,7 @@ export interface PlayerView {
   /** Coins plus goods at their base value. */
   worth: number;
   day: Day;
+  cred: Cred | null;
   onchain: boolean;
   network?: string;
   contractId?: string;
@@ -146,6 +159,8 @@ export interface Order {
   x: number;
   z: number;
   express: boolean;
+  /** Street cred level needed to take it, or null if this player can. */
+  needsLevel: number | null;
 }
 export interface Job {
   orderId: string;
@@ -173,7 +188,7 @@ export const api = {
   turn: (haggleId: string, text: string) => call<TurnOut>(`/api/haggle/${haggleId}/turn`, { text }),
   nextDay: (player: string) => call<PlayerView>("/api/day/next", { player }),
   market: () => call<{ agents: MarketAgent[]; news: NewsItem[]; onchain: boolean; contractId?: string }>("/api/market"),
-  orders: (player: string) => call<{ orders: Order[]; job: Job | null; now: number }>(`/api/orders?player=${encodeURIComponent(player)}`),
+  orders: (player: string) => call<{ orders: Order[]; job: Job | null; now: number; level: number }>(`/api/orders?player=${encodeURIComponent(player)}`),
   takeOrder: (id: string, player: string, x: number, z: number) => call<{ job: Job; order: Order }>(`/api/orders/${id}/take`, { player, x, z }),
   deliver: (id: string, player: string, x: number, z: number, mode: TravelMode) =>
     call<Delivered>(`/api/orders/${id}/deliver`, { player, x, z, mode }),
