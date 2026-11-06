@@ -9,3 +9,4 @@ export * from "./economy.js";
 export * from "./orders.js";
 export * from "./cred.js";
 export * from "./stalls.js";
+export * from "./wages.js";
