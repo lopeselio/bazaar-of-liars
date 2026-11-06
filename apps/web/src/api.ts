@@ -180,6 +180,31 @@ export interface Delivered {
   player: PlayerView;
 }
 
+export interface Listing {
+  good_id: string;
+  qty: number;
+  price: number;
+}
+/** A player-owned stall on Canal Street, settled by the contract. */
+export interface OwnStall {
+  slot: string;
+  owner: string;
+  listings: Listing[];
+  till: number;
+  sold: number;
+  earned: number;
+  opened_ms: number;
+}
+export interface StallsView {
+  slots: { slot: string; owner: string | null; mine: boolean; listings: Listing[]; sold: number }[];
+  mine: OwnStall | null;
+  /** What the player's stall did since their last visit. */
+  away?: { sold: number; earned: number } | null;
+  licencePrice: number;
+  licenceLevel: number;
+}
+type StallResult = { ok: true; txUrl: string; stalls: StallsView; player: PlayerView };
+
 export const api = {
   merchants: () => call<{ merchants: MerchantInfo[]; model: string; onchain: { network: string; contractId: string } | null }>("/api/merchants"),
   player: (id: string) => call<PlayerView>(`/api/player?id=${encodeURIComponent(id)}`),
@@ -192,5 +217,10 @@ export const api = {
   takeOrder: (id: string, player: string, x: number, z: number) => call<{ job: Job; order: Order }>(`/api/orders/${id}/take`, { player, x, z }),
   deliver: (id: string, player: string, x: number, z: number, mode: TravelMode) =>
     call<Delivered>(`/api/orders/${id}/deliver`, { player, x, z, mode }),
+  stalls: (player: string, visit = false) => call<StallsView>(`/api/stalls?player=${encodeURIComponent(player)}${visit ? "&visit=1" : ""}`),
+  buyLicence: (player: string, slot: string) => call<StallResult>("/api/stalls/licence", { player, slot }),
+  stockStall: (player: string, goodId: string, qty: number, price: number) => call<StallResult>("/api/stalls/stock", { player, goodId, qty, price }),
+  withdrawStock: (player: string, goodId: string, qty: number) => call<StallResult>("/api/stalls/withdraw", { player, goodId, qty }),
+  collectTill: (player: string) => call<StallResult>("/api/stalls/collect", { player }),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };
