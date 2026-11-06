@@ -54,6 +54,10 @@ export interface Store {
   /** A counter that forgets after `ttlMs` of no hits (recent demand). */
   bump(key: string, ttlMs: number): Promise<number>;
   count(key: string): Promise<number>;
+  /** Small JSON records (a player's delivery job, say), expiring after `ttlMs`. */
+  getJSON<T>(key: string): Promise<T | null>;
+  putJSON(key: string, value: unknown, ttlMs: number): Promise<void>;
+  del(key: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -78,8 +82,19 @@ export function memoryStore(): Store {
   const days = new Map<string, string>();
   let feed: NewsItem[] = [];
   const counters = new Map<string, { n: number; until: number }>();
+  const kv = new Map<string, { v: string; until: number }>();
   return {
     kind: "memory",
+    async getJSON<T>(key: string) {
+      const e = kv.get(key);
+      return e && e.until > Date.now() ? (JSON.parse(e.v) as T) : null;
+    },
+    async putJSON(key, value, ttlMs) {
+      kv.set(key, { v: JSON.stringify(value), until: Date.now() + ttlMs });
+    },
+    async del(key) {
+      kv.delete(key);
+    },
     async pushNews(item, max = 50) {
       feed = [item, ...feed].slice(0, max);
     },
@@ -228,6 +243,16 @@ export async function redisStore(url: string, prefix = "{bazaar}:"): Promise<Sto
     },
     async count(key) {
       return Number((await client.get(k("n", key))) ?? 0);
+    },
+    async getJSON<T>(key: string) {
+      const raw = await client.get(k("kv", key));
+      return raw ? (JSON.parse(raw) as T) : null;
+    },
+    async putJSON(key, value, ttlMs) {
+      await client.set(k("kv", key), JSON.stringify(value), { expiration: { type: "PX", value: ttlMs } });
+    },
+    async del(key) {
+      await client.del(k("kv", key));
     },
     async close() {
       await client.quit();

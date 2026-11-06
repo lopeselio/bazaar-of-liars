@@ -76,4 +76,12 @@ describe.each(backends)("%s store", (_name, make) => {
     expect(await s.count("sales:x")).toBe(2);
     expect(await s.count("sales:y")).toBe(0);
   });
+
+  it("keeps small JSON records", async () => {
+    const s = await ready;
+    await s.putJSON("job:p", { orderId: "o1", at: 5 }, 60_000);
+    expect(await s.getJSON("job:p")).toEqual({ orderId: "o1", at: 5 });
+    await s.del("job:p");
+    expect(await s.getJSON("job:p")).toBeNull();
+  });
 });
