@@ -9,6 +9,9 @@
  *   POST /api/day/next {player}         after sundown, start the next market day
  *   GET  /api/market                    Canal Street's agents (purse, stock, policy) and the street news
  *   POST /api/invest {player,agentId,amount} put coins into an agent (say, a broke merchant)
+ *   GET  /api/orders?player=guest-…     open delivery orders across Manhattan, and the player's job
+ *   POST /api/orders/:id/take {player,x,z}   take a delivery job (one at a time)
+ *   POST /api/orders/:id/deliver {player,x,z,mode}  hand it over at the drop site
  *
  * State: live haggles, market days and rate limits sit in a Store (store.ts): Redis when
  * REDIS_URL is set, so any number of replicas can serve the same haggle; memory otherwise.
@@ -19,7 +22,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, GOODS, MERCHANTS, type Side } from "@bazaar/core";
+import { AGENTS, CANAL_ORIGIN, GOODS, MERCHANTS, fare as fareFor, impliedMode, routeMetres, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { Market } from "./market.js";
 import {
@@ -179,6 +182,79 @@ async function invest(body: Record<string, unknown>) {
   return { ok: true, txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
 }
 
+// ---------- delivery jobs ----------
+
+interface Job {
+  orderId: string;
+  takenAt: number;
+  from: { x: number; z: number };
+}
+const DROP_RADIUS_M = 45;
+const MODE_RANK: Record<TravelMode, number> = { foot: 0, bike: 1, cab: 2, heli: 3 };
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+
+async function listOrders(player: string) {
+  if (!market) return { orders: [], job: null, now: Date.now() };
+  const now = Date.now();
+  const orders = (await market.orders()).filter((o) => o.status === "open" && o.deadline_ms > now);
+  const job = PLAYER_RE.test(player) ? await store.getJSON<Job>(`job:${player}`) : null;
+  return { orders, job: job && orders.some((o) => o.id === job.orderId) ? job : null, now };
+}
+
+async function takeOrder(id: string, body: Record<string, unknown>) {
+  if (!market) throw new HttpError(404, "deliveries need the agent economy");
+  const player = String(body.player ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  const x = num(body.x);
+  const z = num(body.z);
+  if (Number.isNaN(x) || Number.isNaN(z)) throw new HttpError(400, "where are you?");
+  const o = (await market.orders(0)).find((x) => x.id === id);
+  if (!o || o.status !== "open" || o.deadline_ms <= Date.now()) throw new HttpError(409, "That order is gone.");
+  const job: Job = { orderId: id, takenAt: Date.now(), from: { x, z } };
+  await store.putJSON(`job:${player}`, job, Math.max(60_000, o.deadline_ms - Date.now() + 60_000));
+  return { job, order: o };
+}
+
+/**
+ * The player says they're at the drop site. Positions come from the player's browser, so the
+ * server checks what it can: they're within reach of the site, and the time since they took the
+ * job fits the distance. The travel mode (and so the fare) comes from that average speed, not
+ * from what the browser claims, unless the claim is the dearer one.
+ */
+async function deliverOrder(id: string, body: Record<string, unknown>) {
+  if (!market || !ledger?.fulfilOrder) throw new HttpError(404, "deliveries need the agent economy");
+  const player = String(body.player ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  const job = await store.getJSON<Job>(`job:${player}`);
+  if (!job || job.orderId !== id) throw new HttpError(409, "Take the job first.");
+  const o = (await market.orders(0)).find((x) => x.id === id);
+  if (!o || o.status !== "open") throw new HttpError(409, "Someone else got there first.");
+  if (o.deadline_ms <= Date.now()) throw new HttpError(409, `${o.customerName} stopped waiting.`);
+  const x = num(body.x);
+  const z = num(body.z);
+  if (Math.hypot(x - o.x, z - o.z) > DROP_RADIUS_M) throw new HttpError(409, `You're not at ${o.siteName} yet.`);
+  const me = await purse(player);
+  if (!(me.goods[o.good_id] > 0)) throw new HttpError(409, `You don't have any ${o.goodName}. Buy one on Canal Street.`);
+
+  // Two legs the server can time: from where the job was taken, and from the player's last haggle
+  // on Canal Street. Both must be possible; the faster one sets the fare.
+  const legs = [{ metres: routeMetres(job.from, o), ms: Date.now() - job.takenAt }];
+  const canal = await store.getJSON<{ at: number }>(`canal:${player}`);
+  if (canal && canal.at > job.takenAt - 30 * 60_000) legs.push({ metres: routeMetres(CANAL_ORIGIN, o), ms: Date.now() - canal.at });
+  const modes = legs.map((l) => impliedMode(l.metres, l.ms));
+  if (modes.some((m) => m === null)) throw new HttpError(409, "Nothing in this city gets there that fast.");
+  const implied = (modes as TravelMode[]).reduce((a, b) => (MODE_RANK[b] > MODE_RANK[a] ? b : a));
+  const metres = Math.max(...legs.map((l) => l.metres));
+  const elapsed = Date.now() - job.takenAt;
+  const claimed = (["foot", "bike", "cab", "heli"] as const).find((m) => m === body.mode);
+  const mode = claimed && MODE_RANK[claimed] > MODE_RANK[implied] ? claimed : implied;
+  const fare = Math.min(o.bounty, fareFor(mode, metres));
+  const tx = await ledger.fulfilOrder({ orderId: id, player, fare });
+  await store.del(`job:${player}`);
+  await market.onDelivered(o, fare, mode, tx);
+  return { bounty: o.bounty, fare, net: o.bounty - fare, mode, metres, seconds: Math.round(elapsed / 1000), msToSpare: o.deadline_ms - Date.now(), txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
+}
+
 async function nextDay(body: Record<string, unknown>) {
   const player = String(body.player ?? "");
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
@@ -197,6 +273,8 @@ async function finish(id: string, l: LiveRecord, session = restore(l)) {
   const d = await store.getDay(l.player);
   const day = d ? { ...d, left: Math.max(0, d.left - 1) } : null;
   if (day) await store.putDay(l.player, day, DAY_TTL_MS);
+  // The player was at a Canal Street stall just now: deliveries are timed from here too.
+  await store.putJSON(`canal:${l.player}`, { at: Date.now() }, 24 * 3_600_000);
   const chain = await session.close();
   const bundle = await session.bundle();
   if (market && bundle.outcome.status === "deal" && bundle.outcome.dealPrice !== null)
@@ -451,6 +529,10 @@ createServer(async (req, res) => {
       return send(res, 200, { agents: await market.agents(), news: await market.news(25), onchain: true, contractId: ledger!.contractId });
     }
     if (req.method === "POST" && url === "/api/invest") return send(res, 200, await invest(await readJson(req)));
+    if (req.method === "GET" && url.startsWith("/api/orders"))
+      return send(res, 200, await listOrders(new URL(url, "http://x").searchParams.get("player") ?? ""));
+    const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
+    if (req.method === "POST" && om) return send(res, 200, await (om[2] === "take" ? takeOrder : deliverOrder)(om[1], await readJson(req)));
     const m = url.match(/^\/api\/haggle\/([0-9a-f-]{36})\/turn$/);
     if (req.method === "POST" && m) return send(res, 200, await turn(m[1], await readJson(req)));
     if (url.startsWith("/api/")) throw new HttpError(404, "not found");
