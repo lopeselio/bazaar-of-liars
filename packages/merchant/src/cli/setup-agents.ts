@@ -5,8 +5,8 @@
  *
  * For each agent in packages/core AGENTS:
  * 1. Create `<id>.<contract>` as a sub-account of the contract, funded for gas.
- * 2. Give it ONE key: a function-call key that may only call `authorize_spend` and `pay_agent` on
- *    the contract, with a small gas allowance. There is no full-access key, so the agent's key can
+ * 2. Give it ONE key: a function-call key that may only call `authorize_spend` and `pay_agent`
+ *    (customers: also `post_order`) on the contract, with a small gas allowance. There is no full-access key, so the agent's key can
  *    never move NEAR or call anything else.
  * 3. Save that key to ~/.near-credentials/<network>/<account>.json (never to the repo).
  * 4. Register the agent with the contract: kind, daily spending cap, opening purse and stock.
@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Near, generateKey } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
-import { AGENTS, DAILY_CAP, GOODS, type AgentDef } from "@bazaar/core";
+import { AGENTS, CUSTOMERS, DAILY_CAP, GOODS, type AgentDef } from "@bazaar/core";
 
 const network = (process.env.NEAR_NETWORK ?? "testnet") as "testnet";
 const contract = process.env.BAZAAR_CONTRACT_ID;
@@ -37,8 +37,11 @@ const OPENING: Record<string, { coins: number; stock: [string, number, number][]
   ivy: { coins: 250, stock: [] },
   rex: { coins: 250, stock: [] },
   lo: { coins: 0, stock: [] },
+  ...Object.fromEntries(CUSTOMERS.map((c) => [c.id, { coins: 300, stock: [] as [string, number, number][] }])),
+  cab: { coins: 0, stock: [] },
 };
-const KIND = { merchant: "merchant", wholesaler: "wholesaler", trader: "trader", runner: "runner" } as const;
+const KIND = { merchant: "merchant", wholesaler: "wholesaler", trader: "trader", runner: "runner", customer: "customer", cab: "cab" } as const;
+const METHODS = (a: AgentDef) => (a.kind === "customer" ? ["authorize_spend", "pay_agent", "post_order"] : ["authorize_spend", "pay_agent"]);
 
 async function exists(account: string) {
   const r = await fetch(RPC, {
@@ -60,7 +63,7 @@ async function createAgentAccount(a: AgentDef) {
     .transaction(contract!)
     .createAccount(account)
     .transfer(account, "0.12 NEAR")
-    .addKey(key.publicKey.toString(), { type: "functionCall", receiverId: contract!, methodNames: ["authorize_spend", "pay_agent"], allowance: "0.1 NEAR" })
+    .addKey(key.publicKey.toString(), { type: "functionCall", receiverId: contract!, methodNames: METHODS(a), allowance: "0.1 NEAR" })
     .send({ waitUntil: "FINAL" });
   mkdirSync(credDir, { recursive: true });
   const file = join(credDir, `${account}.json`);
