@@ -63,6 +63,22 @@ The 5-minute loop on Canal Street: take a job, buy the good, get it across town 
   The travel mode, and so the fare, comes from that average speed, not from what the browser claims. A faster-than-possible arrival is refused.
 - **Missed orders** expire after the deadline (anyone may call `expire_order`), and the bounty goes back to the customer.
 
+## Street cred and daily streaks (v3.2)
+
+The reason to come back tomorrow.
+
+- **XP lives in the contract** (`cred_of`).
+  - The contract awards what it can verify itself: +5 for a deal, +10 for a delivery (+5 more if express).
+  - The server can add only what it alone sees, +4 per merchant caught bluffing, through `award_cred`. The contract caps that at 80 XP per player per day.
+  - Agents earn no cred.
+- **Streaks.** The first XP of a UTC day adds 5 × the streak (up to 7 days). Missing a day resets the streak to 1, and the best streak is kept.
+- **Levels** follow `30 × (level − 1)²` XP: 0, 30, 120, 270, 480… Titles run from Newcomer to Bazaar Legend.
+  - Level 2 unlocks express jobs.
+  - Level 3 unlocks jobs from Times Square and Central Park.
+  - Level 5 will unlock a stall licence.
+
+  The server enforces the gates when a job is taken. The rules are in `packages/core/src/cred.ts`, with matching constants in the contract.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
