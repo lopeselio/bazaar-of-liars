@@ -36,15 +36,15 @@ The design is in [DESIGN.md](./DESIGN.md).
 
 ```mermaid
 flowchart TB
-  P["Player's browser"]
+  P["Player's browser&nbsp;&nbsp;&nbsp;"]
   subgraph AZ["Azure"]
     direction TB
-    S["Game server, 2-5 replicas"]
-    R[("Azure Managed Redis")]
+    S["Game servers x2-5&nbsp;&nbsp;&nbsp;"]
+    R[("Managed Redis&nbsp;&nbsp;&nbsp;")]
   end
-  AI["NEAR AI Cloud TEE"]
-  C[("NEAR testnet contract")]
-  V["pnpm verify:haggle"]
+  AI["NEAR AI TEE&nbsp;&nbsp;&nbsp;"]
+  C[("NEAR contract&nbsp;&nbsp;&nbsp;")]
+  V["Verifier&nbsp;&nbsp;&nbsp;"]
 
   P -->|play| S
   S <-->|haggle state| R
