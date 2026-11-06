@@ -123,7 +123,11 @@ export function memoryStore(): Store {
 
 const UNLOCK_LUA = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
 
-export async function redisStore(url: string, prefix = "bazaar:"): Promise<Store> {
+/**
+ * `prefix` carries a {hash tag} so every key lands in one slot: Azure Managed Redis is clustered,
+ * and a MULTI across slots (the live record + its activity index) is refused. One slot is plenty here.
+ */
+export async function redisStore(url: string, prefix = "{bazaar}:"): Promise<Store> {
   const client = createClient({ url, socket: { reconnectStrategy: (n) => Math.min(n * 200, 5000) } });
   client.on("error", (e) => console.error("redis:", (e as Error).message));
   await client.connect();

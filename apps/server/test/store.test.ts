@@ -16,7 +16,7 @@ const rec = (id: string, lastActive: number): LiveRecord => ({
 
 const backends: [string, () => Promise<Store>][] = [["memory", async () => memoryStore()]];
 const url = process.env.TEST_REDIS_URL;
-if (url) backends.push(["redis", () => redisStore(url, `test-${randomUUID()}:`)]);
+if (url) backends.push(["redis", () => redisStore(url, `{test-${randomUUID()}}:`)]);
 
 describe.each(backends)("%s store", (_name, make) => {
   const ready = make();
