@@ -1,4 +1,5 @@
 import type { Good, Merchant } from "./types.js";
+import { CUSTOMERS } from "./orders.js";
 
 export const GOODS: Record<string, Good> = {
   rug: { id: "rug", name: "Silk Rug", baseValue: 60 },
@@ -49,7 +50,7 @@ export const MERCHANTS: Merchant[] = [
 ];
 
 /** Who's who in Canal Street's agent economy. Each one has its own NEAR account (see contracts/bazaar). */
-export type AgentKind = "merchant" | "wholesaler" | "trader" | "runner";
+export type AgentKind = "merchant" | "wholesaler" | "trader" | "runner" | "customer" | "cab";
 export interface AgentDef {
   id: string;
   name: string;
@@ -80,4 +81,6 @@ export const AGENTS: AgentDef[] = [
   { id: "ivy", name: "Ivy the Flipper", kind: "trader", blurb: "Buys low at one stall, sells high at another. Calls bluffs.", bot: "sharp" },
   { id: "rex", name: "Rex Two-Coats", kind: "trader", blurb: "A patient trader who splits the difference.", bot: "splitter" },
   { id: "lo", name: "Little Lo", kind: "runner", blurb: "Hauls lots from the docks for a fee" },
+  ...CUSTOMERS.map((c) => ({ id: c.id, name: c.name, kind: "customer" as const, blurb: c.blurb })),
+  { id: "cab", name: "Checker Cab Co.", kind: "cab", blurb: "Earns the fare when you take a cab or a helicopter to a delivery" },
 ];
