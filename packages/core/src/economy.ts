@@ -46,7 +46,7 @@ export const runnerFee = (qty: number) => 3 + qty;
 /** Most a merchant will pay per unit at wholesale, as a share of the street value. */
 export const WHOLESALE_BID_MAX = 0.7;
 /** Daily spending cap written into each agent's onchain policy. */
-export const DAILY_CAP: Record<string, number> = { merchant: 400, trader: 600, wholesaler: 0, runner: 50, customer: 500, cab: 0 };
+export const DAILY_CAP: Record<string, number> = { merchant: 400, trader: 600, wholesaler: 400, runner: 50, customer: 500, cab: 0 };
 /** Most coins a customer's business brings in per day: the money that funds its bounties. */
 export const CUSTOMER_INCOME_PER_DAY = 400;
 
