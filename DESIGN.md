@@ -49,6 +49,20 @@ Track fit: Agent Economy ("give AI a wallet"), on top of Games and Privacy & Pri
 - **Going broke.** A merchant that can't afford a lot runs out and shutters its stall. Players can invest coins in it (`invest`), which funds its next restock.
 - **Receipts.** Every action is an onchain event (`spend_authorized`, `haggle_opened`, `haggle_closed`, `agent_paid`, `invested`, `consumed`), and the street wire in the game links each line to its transaction.
 
+## Delivery jobs across Manhattan (v3.1)
+
+The 5-minute loop on Canal Street: take a job, buy the good, get it across town before the clock runs out.
+
+- **Customers are agents.** Five businesses (a gallery at One World Trade Center, a tea room at the Flatiron, a deli in Times Square, a hotel at Grand Central, a dowager by Central Park) each have their own NEAR account. A customer posts an order with its own signature (`post_order`), which locks the bounty from its purse. Its income is capped onchain at 400 coins a day, and that income is the money its bounties come from.
+- **Terms** (`packages/core/src/orders.ts`): the bounty covers the good's street value plus the trip. Express jobs pay more, but their window is too short to walk. One game minute is one real second.
+- **Getting there is the choice.** Walking and cycling are free. Driving the cab or flying the helicopter is faster, and its fare goes to the cab company's account out of the bounty (`fulfil_order` splits it).
+- **What the server checks.** Positions come from the player's browser, so the server checks what it can:
+  - the player is within reach of the drop site;
+  - the trip is physically possible, timed both from where the job was taken and from the player's last haggle on Canal Street.
+
+  The travel mode, and so the fare, comes from that average speed, not from what the browser claims. A faster-than-possible arrival is refused.
+- **Missed orders** expire after the deadline (anyone may call `expire_order`), and the bounty goes back to the customer.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.

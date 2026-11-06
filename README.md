@@ -62,7 +62,7 @@ flowchart TB
 | Container App secrets | NEAR AI key, `bazaar-server.testnet` key, the agents' keys (`AGENT_KEYS`), Redis URL | Never in the image or the repo |
 | NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
 | NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods, merchant memory, top traders, and the agents' purses, stock and spending caps |
-| Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo` `.v3.bazaar-liars.testnet` | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` on the contract, nothing else |
+| Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab` (`.v3.bazaar-liars.testnet`) | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
 | Verifier | `pnpm verify:haggle`, anyone, no API key | Replays the bundle and checks it against the chain |
 
 Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
@@ -124,6 +124,8 @@ The same game, set on Canal Street in a walkable New York, where every trader is
 3. Walk up to Farrukh's stall with WASD and press **F**. The panel shows he's an **AI agent** with his own account (`farrukh.v3.bazaar-liars.testnet`, linked), his purse, his shelf, what each rug cost him and how much of his daily spending cap he's used.
 4. Choose **Buy the Silk Rug**. Under the asking price you'll see why he prices it that way today ("Only 1 left", "2 sold recently"). Haggle with the quick buttons or by typing, as in the bazaar. Your coins go to his own account.
 5. If a stall is sold out or broke, its panel offers **Invest 20 / Invest 50** to fund its next restock.
+6. Press **J** (or **📋 Jobs**) for the delivery board: customers around Manhattan want goods from Canal Street, for example a silk rug at One World Trade Center or saffron at Times Square. Each one has locked its bounty onchain and shows a countdown. Click **Take**. A bar at the top points you there, and glowing beacons mark every drop site.
+7. Buy the good at a stall, then get there before the clock runs out: walk (**1**) or cycle (**3**) for free, or drive the cab (**2**) or fly (**4**) and pay a fare out of the bounty. At the door, press **F**. The receipt shows the bounty, the fare, what you earned and the delivery transaction. Arriving impossibly fast is refused.
 
 The rules the agents follow, and what they can and can't do with their keys, are in [DESIGN.md](./DESIGN.md#agent-economy-on-canal-street-v3).
 
@@ -133,11 +135,11 @@ The city is [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob (M
 
 Live haggles, market days and rate limits sit in a shared store: Redis when `REDIS_URL` is set, the server's memory otherwise. With Redis, any number of replicas can serve the same haggle (a per-haggle lock stops two of them playing the same turn) and a restart doesn't drop a game in progress. A turn can take 40 seconds, so the server runs as always-on containers, not serverless functions. The `Dockerfile` serves the game and the API on port 8080; secrets come from the host's environment (`NEARAI_API_KEY`, `SERVER_PRIVATE_KEY`), never from the image. To try it locally, run `docker build -t bazaar-liars .`, then `docker run -p 8080:8080 --env-file .env -v ~/.near-credentials:/home/node/.near-credentials:ro bazaar-liars`, and open http://localhost:8080.
 
-The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2–5 replicas) backed by Azure Managed Redis, with the keys and the Redis URL stored as Container App secrets. To check the store against a real Redis, run `docker run -d -p 6390:6379 redis:7-alpine`, then `TEST_REDIS_URL=redis://localhost:6390 pnpm --filter @bazaar/server test`. To ship a new version, run `scripts/deploy-azure.sh`. It builds the image in Azure Container Registry, rolls the app and prints the URL.
+The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2–5 replicas) backed by Azure Managed Redis, with the keys and the Redis URL stored as Container App secrets. To check the store against a real Redis, run `docker run -d -p 6390:6379 redis:7-alpine`, then `TEST_REDIS_URL=redis://localhost:6390 pnpm --filter @bazaar/server test`. The agents act only in the deployment that sets `MARKET_TICK_MS` (the hosted demo uses `40000`), so a local `pnpm dev` against the same contract reads the market without running the agents twice. To ship a new version, run `scripts/deploy-azure.sh`. It builds the image in Azure Container Registry, rolls the app and prints the URL.
 
 ## Try the pieces
 
-1. Run `pnpm install`, then `pnpm test`. You should see 78 tests pass, including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
+1. Run `pnpm install`, then `pnpm test`. You should see 85 tests pass, including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer (e.g. `40`), claim a competitor's price (`40 saw 35`), call a claimed minimum (`liar`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor. `sharp` (calls bluffs unless the merchant looks firm) should beat both `caller` (calls everything) and `splitter` (never calls) against every merchant. Calling blindly only pays against heavy bluffers like Farrukh.
 4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
@@ -158,7 +160,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 33 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 42 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;
