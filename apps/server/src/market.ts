@@ -8,12 +8,17 @@
  *     merchants use up goods they bought, so they want more;
  *     the rival traders buy at one stall and sell at another.
  *   Every spend is signed by the agent's own key (authorize_spend / pay_agent) and capped onchain.
+ * - Customers across Manhattan post delivery orders with their own signatures, funded by their
+ *   (capped) daily income; missed orders are expired and refunded.
  * - Writes a news feed of what happened, with the transaction behind each line.
  */
 import { randomUUID } from "node:crypto";
 import {
   AGENTS,
   BOTS,
+  CUSTOMERS,
+  orderTerms,
+  siteById,
   GOODS,
   MERCHANTS,
   WHOLESALER,
@@ -32,13 +37,18 @@ import {
   type PlayerMemory,
   type Reason,
 } from "@bazaar/core";
-import { explorerTx, readAgents, readMemory, type AgentSigner, type AgentView, type Ledger } from "@bazaar/merchant";
+import { explorerTx, readAgents, readMemory, readOrders, type AgentSigner, type AgentView, type Ledger, type OnchainOrder } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
 const GOOD_IDS = Object.keys(GOODS);
 const DEMAND_MS = 15 * 60_000;
 const AGENT_NAME = Object.fromEntries(AGENTS.map((a) => [a.id, a.name]));
 const short = (id: string) => (AGENT_NAME[id] ?? id).replace(/^Old /, "").split(" ")[0];
+const GOOD_VALUES = Object.fromEntries(Object.values(GOODS).map((g) => [g.id, g.baseValue]));
+/** Open orders the street aims to have at any time. */
+const OPEN_ORDERS_TARGET = 5;
+/** Closed orders are pruned from contract storage after this long (their events stay onchain). */
+const PRUNE_AFTER_MS = 30 * 60_000;
 const memLevels = (m: PlayerMemory) => ({ grudge: Math.min(5, m.lowballs), loyalty: Math.min(5, m.deals) });
 
 export interface MarketAgent {
@@ -57,8 +67,18 @@ export interface MarketAgent {
   status?: "open" | "sold_out" | "broke";
 }
 
+export interface MarketOrder extends OnchainOrder {
+  customerName: string;
+  siteName: string;
+  district: string;
+  x: number;
+  z: number;
+  goodName: string;
+}
+
 export class Market {
   private cache: { at: number; agents: MarketAgent[] } | null = null;
+  private orderCache: { at: number; orders: MarketOrder[] } | null = null;
   private rng = mulberry32(Date.now() % 2 ** 31);
 
   constructor(
@@ -96,6 +116,20 @@ export class Market {
   }
   invalidate() {
     this.cache = null;
+    this.orderCache = null;
+  }
+
+  /** Delivery orders in contract storage, with where they go. */
+  async orders(maxAgeMs = 3000): Promise<MarketOrder[]> {
+    if (this.orderCache && Date.now() - this.orderCache.at < maxAgeMs) return this.orderCache.orders;
+    const raw = await readOrders(this.ledger.network, this.ledger.contractId);
+    const orders = raw.flatMap((o) => {
+      const site = siteById(o.site);
+      const c = CUSTOMERS.find((x) => x.id === o.customer);
+      return site && c ? [{ ...o, customerName: c.name, siteName: site.name, district: site.district, x: site.x, z: site.z, goodName: GOODS[o.good_id]?.name ?? o.good_id }] : [];
+    });
+    this.orderCache = { at: Date.now(), orders };
+    return orders;
   }
 
   private async holdings(agentId: string, goodId: string): Promise<Holdings> {
@@ -264,6 +298,58 @@ export class Market {
     }
   }
 
+  /**
+   * Customers keep the order board stocked: expire what's overdue, prune old closed orders, and
+   * post new ones (each customer at most one open order), topping up from daily income first.
+   */
+  private async customers() {
+    const now = Date.now();
+    const orders = await this.orders(0);
+    for (const o of orders.filter((x) => x.status === "open" && x.deadline_ms < now - 5000)) {
+      const tx = await this.ledger.expireOrder!(o.id);
+      await this.say({ kind: "closed", text: `${o.customerName} gave up waiting for ${o.goodName}`, tx: explorerTx(this.ledger.network, tx), agents: [o.customer] });
+    }
+    const stale = orders.filter((x) => x.status !== "open" && x.posted_ms < now - PRUNE_AFTER_MS).map((x) => x.id);
+    if (stale.length) await this.ledger.pruneOrders!(stale);
+
+    const open = orders.filter((x) => x.status === "open" && x.deadline_ms >= now);
+    const idle = CUSTOMERS.filter((c) => !open.some((o) => o.customer === c.id));
+    for (let n = open.length; n < OPEN_ORDERS_TARGET && idle.length; n++) {
+      const c = idle.splice(Math.floor(this.rng() * idle.length), 1)[0];
+      const t = orderTerms(this.rng, c, GOOD_VALUES);
+      const me = (await this.agents(0)).find((a) => a.id === c.id);
+      if (!me) continue;
+      if (me.coins < t.bounty) {
+        try {
+          await this.ledger.payIncome!({ agentId: c.id, amount: Math.max(t.bounty - me.coins, 100) });
+          this.invalidate();
+        } catch {
+          continue; // this customer's income is spent for today
+        }
+      }
+      const id = `o-${Date.now().toString(36)}-${c.id}`;
+      const tx = await this.signers[c.id].postOrder({ orderId: id, goodId: t.goodId, bounty: t.bounty, deadlineMs: Date.now() + t.windowMs, site: t.siteId, express: t.express });
+      this.invalidate();
+      await this.say({
+        kind: "order",
+        text: `${c.name} (${siteById(t.siteId)!.name}) wants ${GOODS[t.goodId].name}${t.express ? ", express" : ""}: pays ${t.bounty}`,
+        tx: explorerTx(this.ledger.network, tx),
+        agents: [c.id],
+      });
+    }
+  }
+
+  /** A player delivered (called by the server after fulfil_order settles). */
+  async onDelivered(o: MarketOrder, fare: number, mode: string, tx: string) {
+    this.invalidate();
+    await this.say({
+      kind: "delivery",
+      text: `A courier delivered ${o.goodName} to ${o.customerName} for ${o.bounty}${fare ? ` (${mode} fare ${fare} to Checker Cab Co.)` : ""}`,
+      tx: explorerTx(this.ledger.network, tx),
+      agents: [o.customer, ...(fare ? ["cab"] : [])],
+    });
+  }
+
   /** One round of the agents acting on their own. Errors are logged, never thrown. */
   async tick() {
     const step = async (name: string, f: () => Promise<void>) => {
@@ -275,6 +361,7 @@ export class Market {
     };
     for (const m of MERCHANTS) await step(`restock ${m.id}`, () => this.restock(m));
     await step("consume", () => this.consume());
+    await step("customers", () => this.customers());
     const traders = AGENTS.filter((a) => a.kind === "trader");
     const t = traders[Math.floor(this.rng() * traders.length)];
     if (t && this.rng() < 0.6) await step(`trade ${t.id}`, () => this.trade(t.id));
