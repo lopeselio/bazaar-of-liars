@@ -497,15 +497,18 @@ async function buyTip(informantId: string, body: Record<string, unknown>) {
   const salt = freshSalt();
   const checkMs = Date.now() + TIP_HORIZON_MS;
   const plain = describeClaim(claim);
+  // The claim and salt are saved before the sale goes onchain, so the tip can always be revealed.
+  await market.rememberTip({ id, informant: inf.id, player, claim, salt, checkMs, text: plain });
   let tx: string;
   try {
     tx = await ledger.sellTip({ tipId: id, informant: inf.id, player, commitment: tipCommitment(id, inf.id, claim, checkMs, salt), price: inf.price, checkMs });
   } catch (e) {
+    await market.forgetTip(id).catch(() => {});
     const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
     throw new HttpError(409, m ? sentence(m[1]) : `${inf.name} clams up. Try again.`);
   }
   const text = await whisper(inf, plain);
-  await market.rememberTip({ id, informant: inf.id, player, claim, salt, checkMs, text });
+  await market.setTipText(id, text).catch(() => {});
   market.invalidate();
   await store.pushNews({ t: Date.now(), kind: "rumour", text: `${inf.name} sold a player a tip`, tx: explorerTx(ledger.network, tx), agents: [] }).catch(() => {});
   return { tip: { id, informant: inf.name, text, plain, checkMs, price: inf.price }, txUrl: explorerTx(ledger.network, tx), player: await playerView(player).catch(() => null) };
