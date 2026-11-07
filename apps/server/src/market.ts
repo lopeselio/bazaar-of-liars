@@ -658,12 +658,17 @@ export class Market {
     await step("consume", () => this.consume());
     await step("customers", () => this.customers());
     const traders = AGENTS.filter((a) => a.kind === "trader");
-    if (tradersLieLow(await this.event())) {
-      await this.say({ kind: "event", text: "Ivy and Rex are lying low while the inspectors walk Canal Street", agents: traders.map((t) => t.id) });
-      return;
+    const ev = await this.event();
+    if (tradersLieLow(ev)) {
+      // Once per raid. Traders skip haggling on Canal Street, but still shop at licensed stalls.
+      if (!(await this.store.getJSON(`lielow:${ev!.id}`))) {
+        await this.store.putJSON(`lielow:${ev!.id}`, 1, 3_600_000);
+        await this.say({ kind: "event", text: "Ivy and Rex are lying low while the inspectors walk Canal Street", agents: traders.map((t) => t.id) });
+      }
+    } else {
+      const t = traders[Math.floor(this.rng() * traders.length)];
+      if (t && this.rng() < 0.6) await step(`trade ${t.id}`, () => this.trade(t.id));
     }
-    const t = traders[Math.floor(this.rng() * traders.length)];
-    if (t && this.rng() < 0.6) await step(`trade ${t.id}`, () => this.trade(t.id));
     const shopper = traders[Math.floor(this.rng() * traders.length)];
     if (shopper) await step(`stalls ${shopper.id}`, () => this.shopStalls(shopper.id));
   }
