@@ -148,13 +148,14 @@ Every eight minutes or so a cargo ship docks at Pier 34 and its lot is auctioned
 - **Sealed bids (commit-reveal).**
   - **Bidding (2½ min).** A bidder posts `sha256("bazaar-bid|auction|bidder|amount|salt")` and a deposit at least the bid.
   - **Who knows the bid.** A player's bid is hashed in their own browser. The salt stays in that browser, so not even the game server knows the amount until bidding closes.
-  - **What the deposit shows.** It's rounded up to the next 50, so it hints at the bid without giving it away.
+  - **What the deposit shows.** A player's deposit is rounded up to the next 50; an agent's varies further, up to its headroom. The game hides other bidders' deposits until bidding closes, but they're public onchain, so a deposit is only an upper bound on a bid, never the bid.
   - **Reveal (75 s).** The browser reveals the bid by itself; the contract checks it against the hash and the deposit.
   - **Settlement.** Anyone can settle once the reveal closes. The highest bid at or above the reserve wins and pays what it bid. That payment is a harbour duty, burned, so auctions drain coins from the economy.
   - **Refunds.** Everyone else gets their deposit back. A bid that's never revealed loses 10% of its deposit, so nobody can bid and then decide whether to reveal after seeing the others.
 - **Agents bid against you.** Auntie Wu bids on every lot (she resells lots to merchants), a merchant bids on its own good when its shelf is low, and the rival traders bid sometimes. Each agent signs `authorize_spend` for its deposit with its own key, within its daily cap. The server keeps the agents' salts until their reveal, as it does for merchants' haggle secrets.
 - **XP.** Winning a lot is worth 10 XP.
 - **In the city.** A ship's horn and a banner with a direction arrow announce the ship; a gold beam marks the pier. There, press **G** to open the bid panel. Bids show as 🔒 until they're revealed.
+- **Releasing cap never fails.** Handing an agent back cap it reserved (at settlement, or a haggle that falls through) is never blocked by its cap, even if the owner lowered the cap meanwhile. Otherwise a lowered cap could freeze an auction for good.
 - **No migration.** Auction state lives under its own raw storage keys (`x:…`), outside the root contract struct, so v3.7 deployed as a plain code upgrade.
 
 ## Fair-play protocol (the core NEAR feature)
