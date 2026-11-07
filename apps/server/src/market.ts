@@ -53,7 +53,7 @@ import {
   type PlayerMemory,
   type Reason,
 } from "@bazaar/core";
-import { explorerTx, readAgents, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
+import { explorerTx, readAgents, readDeedAsks, type DeedAsk, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
 const GOOD_IDS = Object.keys(GOODS);
@@ -108,6 +108,7 @@ export class Market {
   private stallCache: { at: number; stalls: OnchainStall[] } | null = null;
   private auctionCache: { at: number; auctions: OnchainAuction[] } | null = null;
   private eventCache: { at: number; event: StreetEvent | null } | null = null;
+  private deedCache: { at: number; asks: DeedAsk[] } | null = null;
   private rng = mulberry32(Date.now() % 2 ** 31);
 
   constructor(
@@ -149,6 +150,15 @@ export class Market {
     this.stallCache = null;
     this.auctionCache = null;
     this.eventCache = null;
+    this.deedCache = null;
+  }
+
+  /** Deeds on the market (v3.11). */
+  async deedAsks(maxAgeMs = 3000): Promise<DeedAsk[]> {
+    if (this.deedCache && Date.now() - this.deedCache.at < maxAgeMs) return this.deedCache.asks;
+    const asks = await readDeedAsks(this.ledger.network, this.ledger.contractId);
+    this.deedCache = { at: Date.now(), asks };
+    return asks;
   }
 
   /** Player-owned stalls (v3.3). */

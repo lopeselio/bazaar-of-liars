@@ -223,14 +223,21 @@ export interface OwnStall {
   sold: number;
   earned: number;
   opened_ms: number;
+  /** v3.11: the deed's asking price on the deed market, if listed. */
+  ask?: number | null;
+  suggestedAsk?: number;
+  /** The deed (a NEP-171 NFT) on the explorer. */
+  deedUrl?: string | null;
 }
 export interface StallsView {
-  slots: { slot: string; owner: string | null; mine: boolean; listings: Listing[]; sold: number }[];
+  slots: { slot: string; owner: string | null; mine: boolean; listings: Listing[]; sold: number; ask?: number | null; deedUrl?: string | null }[];
   mine: OwnStall | null;
   /** What the player's stall did since their last visit. */
   away?: { sold: number; earned: number } | null;
   licencePrice: number;
   licenceLevel: number;
+  deedTax?: number;
+  maxDeedPrice?: number;
 }
 type StallResult = { ok: true; txUrl: string; stalls: StallsView; player: PlayerView };
 
@@ -342,6 +349,9 @@ export const api = {
   stockStall: (player: string, goodId: string, qty: number, price: number) => call<StallResult>("/api/stalls/stock", { player, goodId, qty, price }),
   withdrawStock: (player: string, goodId: string, qty: number) => call<StallResult>("/api/stalls/withdraw", { player, goodId, qty }),
   collectTill: (player: string) => call<StallResult>("/api/stalls/collect", { player }),
+  listDeed: (player: string, price: number) => call<StallResult>("/api/stalls/list", { player, price }),
+  unlistDeed: (player: string) => call<StallResult>("/api/stalls/unlist", { player }),
+  buyDeed: (player: string, slot: string, price: number) => call<StallResult>("/api/stalls/buydeed", { player, slot, price }),
   dockWork: (player: string, x: number, z: number) => call<{ wage: number; txUrl: string; player: PlayerView }>("/api/dockwork", { player, x, z }),
   auctions: (player: string) => call<AuctionsView>(`/api/auctions?player=${encodeURIComponent(player)}`),
   bid: (id: string, player: string, commitment: string, deposit: number, x: number, z: number) =>
