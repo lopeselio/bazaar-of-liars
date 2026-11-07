@@ -140,6 +140,23 @@ Players start as guests and can sign in to get a real NEAR account, with no seed
   - The game server still signs every game transaction: signing in establishes who you are. It doesn't (yet) have you sign game moves with your NEAR Auth key.
   - Your account can use `mt_transfer` once it holds a little NEAR for gas.
 
+## Cargo ship auctions at Pier 34 (v3.7)
+
+Every eight minutes or so a cargo ship docks at Pier 34 and its lot is auctioned with sealed bids. It gives the city a timed event to run to, a way to buy in bulk that isn't haggling, and a new source of goods: until now, every good came from opening stock.
+
+- **The contract rolls the lot.** The server calls `ship_arrives` (at most once per 8 minutes). The contract picks the good, the quantity (4–10) and the reserve (half the street value) from the block's random seed, and mints the lot into its own escrow.
+- **Sealed bids (commit-reveal).**
+  - **Bidding (2½ min).** A bidder posts `sha256("bazaar-bid|auction|bidder|amount|salt")` and a deposit at least the bid.
+  - **Who knows the bid.** A player's bid is hashed in their own browser. The salt stays in that browser, so not even the game server knows the amount until bidding closes.
+  - **What the deposit shows.** It's rounded up to the next 50, so it hints at the bid without giving it away.
+  - **Reveal (75 s).** The browser reveals the bid by itself; the contract checks it against the hash and the deposit.
+  - **Settlement.** Anyone can settle once the reveal closes. The highest bid at or above the reserve wins and pays what it bid. That payment is a harbour duty, burned, so auctions drain coins from the economy.
+  - **Refunds.** Everyone else gets their deposit back. A bid that's never revealed loses 10% of its deposit, so nobody can bid and then decide whether to reveal after seeing the others.
+- **Agents bid against you.** Auntie Wu bids on every lot (she resells lots to merchants), a merchant bids on its own good when its shelf is low, and the rival traders bid sometimes. Each agent signs `authorize_spend` for its deposit with its own key, within its daily cap. The server keeps the agents' salts until their reveal, as it does for merchants' haggle secrets.
+- **XP.** Winning a lot is worth 10 XP.
+- **In the city.** A ship's horn and a banner with a direction arrow announce the ship; a gold beam marks the pier. There, press **G** to open the bid panel. Bids show as 🔒 until they're revealed.
+- **No migration.** Auction state lives under its own raw storage keys (`x:…`), outside the root contract struct, so v3.7 deployed as a plain code upgrade.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
