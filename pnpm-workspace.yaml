@@ -2,4 +2,5 @@ packages:
   - "packages/*"
   - "apps/*"
 allowBuilds:
+  browser-tabs-lock: false
   esbuild: true
