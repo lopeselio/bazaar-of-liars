@@ -23,6 +23,8 @@ describe("the rumour network", () => {
         const m = street.find((s) => s.id === claim.agent_id)!;
         const stock = claim.good_id === m.sells ? m.sellsStock : m.buysStock;
         expect(claimHolds(claim, stock)).toBe(honest);
+        // Never a claim that can't be false.
+        expect(claim.at_most || claim.n > 0).toBe(true);
       }
   });
 
