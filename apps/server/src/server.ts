@@ -42,7 +42,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { haggleHint, AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -1049,6 +1049,7 @@ async function turn(id: string, body: Record<string, unknown>, authed: string | 
     guardPlayer(l.player, authed);
     const session = restore(l);
     const t0 = Date.now();
+    const askBefore = session.ask;
     // Out of turns: walk the player out.
     const r = await session.turn(++l.turns > MAX_TURNS ? "leave" : text, l.budget);
     const out: Record<string, unknown> = {
@@ -1061,6 +1062,10 @@ async function turn(id: string, body: Record<string, unknown>, authed: string | 
       refused: r.refused ?? null,
       claim: session.claim ?? null,
       call: r.decision?.call ?? null,
+      hint:
+        r.move.kind === "offer" && r.decision?.action === "counter"
+          ? haggleHint({ side: session.side, askBefore, askAfter: session.ask, offer: r.move.price, tell: r.decision.tell, name: session.merchant.name.split(" ")[0]! })
+          : null,
       ms: Date.now() - t0,
     };
     if (r.refused) l.turns--;
