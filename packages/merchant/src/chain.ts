@@ -12,7 +12,7 @@
  */
 import { Near } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
-import type { MerchantSecret } from "@bazaar/core";
+import type { MerchantSecret, TipClaim } from "@bazaar/core";
 
 export type Network = "testnet" | "mainnet";
 
@@ -81,6 +81,10 @@ export interface Ledger {
   commitBid?(a: { auctionId: string; bidId: string; bidder: string; commitment: string; deposit: number }): Promise<string>;
   revealBid?(a: { auctionId: string; bidder: string; amount: number; salt: string }): Promise<string>;
   settleAuction?(auctionId: string): Promise<string>;
+  /** v3.8: the rumour network. */
+  sellTip?(a: { tipId: string; informant: string; player: string; commitment: string; price: number; checkMs: number }): Promise<string>;
+  resolveTip?(a: { tipId: string; claim: TipClaim; salt: string }): Promise<string>;
+  expireTip?(tipId: string): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -137,6 +141,9 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     commitBid: (a) => call("commit_bid", { auction_id: a.auctionId, bid_id: a.bidId, bidder: a.bidder, commitment: a.commitment, deposit: a.deposit }, "FINAL"),
     revealBid: (a) => call("reveal_bid", { auction_id: a.auctionId, bidder: a.bidder, amount: a.amount, salt: a.salt }, "FINAL"),
     settleAuction: (auctionId) => call("settle_auction", { auction_id: auctionId }, "FINAL"),
+    sellTip: (a) => call("sell_tip", { tip_id: a.tipId, informant: a.informant, player: a.player, commitment: a.commitment, price: a.price, check_ms: a.checkMs }, "FINAL"),
+    resolveTip: (a) => call("resolve_tip", { tip_id: a.tipId, claim: a.claim, salt: a.salt }, "FINAL"),
+    expireTip: (tipId) => call("expire_tip", { tip_id: tipId }, "FINAL"),
   };
 }
 
@@ -381,4 +388,37 @@ export interface OnchainAuction {
 export async function readAuctions(network: Network, contractId: string): Promise<OnchainAuction[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<OnchainAuction[]>(contractId, "auctions", {}, { finality: "optimistic" })) ?? [];
+}
+
+export interface OnchainTip {
+  id: string;
+  informant: string;
+  player: string;
+  commitment: string;
+  price: number;
+  sold_ms: number;
+  check_ms: number;
+  status: "pending" | "true" | "false" | "hidden";
+  claim: TipClaim | null;
+  observed: number | null;
+}
+
+export interface InformantRecord {
+  id: string;
+  sold: number;
+  truths: number;
+  lies: number;
+  hidden: number;
+}
+
+/** A player's recent tips, newest first (v3.8). */
+export async function readTips(network: Network, contractId: string, player: string): Promise<OnchainTip[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<OnchainTip[]>(contractId, "tips_of", { player }, { finality: "optimistic" })) ?? [];
+}
+
+/** Informants' public records of truths and lies (v3.8). */
+export async function readInformants(network: Network, contractId: string, ids: string[]): Promise<InformantRecord[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<InformantRecord[]>(contractId, "informants", { ids }, { finality: "optimistic" })) ?? [];
 }
