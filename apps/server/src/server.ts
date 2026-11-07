@@ -1064,7 +1064,7 @@ async function turn(id: string, body: Record<string, unknown>, authed: string | 
       call: r.decision?.call ?? null,
       hint:
         r.move.kind === "offer" && r.decision?.action === "counter"
-          ? haggleHint({ side: session.side, askBefore, askAfter: session.ask, offer: r.move.price, tell: r.decision.tell, name: session.merchant.name.split(" ")[0]! })
+          ? haggleHint({ side: session.side, askBefore, askAfter: session.ask, offer: r.move.price, tell: r.decision.tell, name: session.merchant.name.replace(/^Old /, "").split(" ")[0]! })
           : null,
       ms: Date.now() - t0,
     };
