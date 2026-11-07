@@ -22,14 +22,14 @@ The team decides these at submit time: project name, team lead, contact email, t
 
 ## Tracks
 
-Chosen: **`games`** (primary), **`privacy`**, **`agents`**. Also worth considering, since the build now covers them: **`nfts`** (stall deeds that hold a stall's stock and till, carry its earnings history and are certified cross-chain) and **`swarms`** (agents bidding against each other in sealed-bid auctions, informants, a trading economy between agents).
+Chosen: **`games`** (primary), **`privacy`**, **`agents`**, **`nfts`**. Also worth considering: **`swarms`** (agents bidding against each other in sealed-bid auctions, informants, a trading economy between agents).
 
 | Track | Why it fits | Hints it uses |
 |---|---|---|
 | Games With Real Economies | NPC merchants with wallets, a player-owned stall and deed market, an economy the agents run between visits; players never see a wallet or gas | Agent NPCs, social login (NEAR Auth), NEP-245 goods |
 | Privacy & Private AI | Every merchant line is produced by a TEE model on NEAR AI Cloud, attested (Intel TDX + NVIDIA) and signed; the model never sees the merchant's real limit, only the engine's decision and the merchant's mood; when a haggle ends the server deletes it from its store (Redis without persistence), the secret is revealed onchain for anyone to check, and the player keeps the proof | Private AI, TEE, NEAR AI Cloud |
 | Agent Economy | Agents with their own sub-accounts earn, spend, hire runners, bid in auctions and sell tips; each key can only authorize spends within an onchain daily cap | Agent commerce, function-call keys, Chain Signatures |
-| NFTs That Do Something (optional) | A deed is the stall: transferring it moves the business, the seller's stock and till go home | NEP-171, Chain Signatures |
+| NFTs That Do Something | A deed is the stall: transferring it moves the business, the seller's stock and till go home | NEP-171, Chain Signatures |
 
 ## Description (the `idea` field, 1688 of 2000 characters)
 
