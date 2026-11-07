@@ -640,6 +640,7 @@ async function send(text: string) {
   if (r.call === "caught") say("sys", "🎯 <b>Caught!</b> The price collapses.", "good");
   if (r.call === "honest") say("sys", "😤 They were telling the truth. That stung.", "bad");
   if (r.action === "final") say("sys", "That's their final price.");
+  if (r.hint) say("sys", `💡 ${esc(r.hint)}`, "hint");
   setAsk(r.ask, r.claim);
   if (r.end) return finish(r.end);
   setBusy(false);

@@ -534,6 +534,11 @@ body.focused .label {
 .sys.bad {
   color: var(--crimson);
 }
+.sys.hint {
+  font-style: italic;
+  max-width: 34em;
+  margin: 0 auto;
+}
 .typing {
   align-self: flex-start;
   display: flex;
