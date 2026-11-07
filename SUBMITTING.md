@@ -27,7 +27,7 @@ Chosen: **`games`** (primary), **`privacy`**, **`agents`**. Also worth consideri
 | Track | Why it fits | Hints it uses |
 |---|---|---|
 | Games With Real Economies | NPC merchants with wallets, a player-owned stall and deed market, an economy the agents run between visits; players never see a wallet or gas | Agent NPCs, social login (NEAR Auth), NEP-245 goods |
-| Privacy & Private AI | Every merchant line is produced by a TEE model on NEAR AI Cloud, attested (Intel TDX + NVIDIA) and signed; the model never sees the secret it bluffs about; the server deletes a haggle and its secret when it ends, and the player keeps the proof | Private AI, TEE, NEAR AI Cloud |
+| Privacy & Private AI | Every merchant line is produced by a TEE model on NEAR AI Cloud, attested (Intel TDX + NVIDIA) and signed; the model never sees the merchant's real limit, only the engine's decision and the merchant's mood; when a haggle ends the server deletes it from its store (Redis without persistence), the secret is revealed onchain for anyone to check, and the player keeps the proof | Private AI, TEE, NEAR AI Cloud |
 | Agent Economy | Agents with their own sub-accounts earn, spend, hire runners, bid in auctions and sell tips; each key can only authorize spends within an onchain daily cap | Agent commerce, function-call keys, Chain Signatures |
 | NFTs That Do Something (optional) | A deed is the stall: transferring it moves the business, the seller's stock and till go home | NEP-171, Chain Signatures |
 
@@ -47,9 +47,9 @@ Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 137 TypeScript and 122 c
 
 | Feature | Where | Proof |
 |---|---|---|
-| Commit, reveal and settle a haggle | `contracts/bazaar`, `open_haggle` / `close_haggle` | Sample haggle: [commit](https://testnet.nearblocks.io/txns/CE2w2jenWqxxkb8Vagohe9GjK9E9upqYJXoypRdpnBoq), [reveal and settle](https://testnet.nearblocks.io/txns/Dmd6wvubYuzmVfrB6m91S9bhhiodcJuTSHXPoZCwUE3p); `pnpm verify:haggle examples/sample-haggle.json` |
+| Commit, reveal and settle a haggle | `contracts/bazaar`, `open_haggle` / `close_haggle` | Sample haggle, played on the earlier `v2.bazaar-liars.testnet` (same flow as today's `v3`): [commit](https://testnet.nearblocks.io/txns/CE2w2jenWqxxkb8Vagohe9GjK9E9upqYJXoypRdpnBoq), [reveal and settle](https://testnet.nearblocks.io/txns/Dmd6wvubYuzmVfrB6m91S9bhhiodcJuTSHXPoZCwUE3p); `pnpm verify:haggle examples/sample-haggle.json` |
 | NEAR AI Cloud TEE (attestation and signed replies) | `packages/verify`, `packages/merchant` | `pnpm verify:model` (needs a key), and the attestation checks in every proof bundle |
-| Agent sub-accounts with function-call keys and daily caps | `authorize_spend`, `pay_agent` | [rex authorizes a spend](https://testnet.nearblocks.io/txns/Ahqq76i9rnJnLNkM9sogZtJxeSvLfmsNCaehjope1TiM), [a customer posts a bounty](https://testnet.nearblocks.io/txns/65P5peFBVz3xzqpNPm85Mqss3LdAzgUTAsXhow6T8kpS) |
+| Agent sub-accounts with function-call keys and daily caps | `authorize_spend`, `pay_agent`, `post_order` | [rex authorizes a spend](https://testnet.nearblocks.io/txns/Ahqq76i9rnJnLNkM9sogZtJxeSvLfmsNCaehjope1TiM), [a customer posts a bounty](https://testnet.nearblocks.io/txns/65P5peFBVz3xzqpNPm85Mqss3LdAzgUTAsXhow6T8kpS) |
 | Delivery bounty paid onchain | `fulfil_order` | [delivery](https://testnet.nearblocks.io/txns/3gct6uUPw6RQY8FMCvuArum2zCExdRLLUx3i5nfDBnnX) |
 | Sealed-bid cargo auction | `ship_arrives`, `commit_bid`, `reveal_bid`, `settle_auction` | [ship arrives](https://testnet.nearblocks.io/txns/8idyGzATAWV32yAemfj997yfEwF2bYZhjT8JxfJ3WUJ1), [settled](https://testnet.nearblocks.io/txns/5UR4SgQp2GRq53aaPvacZMo4t3S2GXXFzceMHD394HdD) |
 | Street events rolled by the contract | `start_event` | [event](https://testnet.nearblocks.io/txns/2QrBdAZCNNZy6YmXMWrF7nHS43eod5MuByxkPPcFH2W2) |
