@@ -195,6 +195,18 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2â€
 8. **No key needed:** run `pnpm check:goods`. It reads every goods balance straight from the contract's storage, page by page at one block, and checks that, for each NEP-245 token (rug, saffron, lamp), the balances add up to `mt_supply`. You should see three âœ“ lines.
 9. **No key needed:** run `pnpm verify:deed corner-1` (see step 16 of Canal Street).
 
+## Built with
+
+Listed per the hackathon's rule Q-005.
+
+- **NEAR:** [near-sdk](https://github.com/near/near-sdk-rs) 5.29 (the contract), [near-kit](https://www.npmjs.com/package/near-kit) (server transactions and reads), NEAR AI Cloud (the TEE-hosted `Qwen/Qwen3.6-35B-A3B-FP8` model and its attestation), Chain Signatures (`v1.signer-prod.testnet`), NEAR Auth (`login.testnet.fast-auth.com`, via `@auth0/auth0-spa-js`), and NEAR's published agent skills in `.claude/skills/`.
+- **Verification:** [`@phala/dcap-qvl-node`](https://www.npmjs.com/package/@phala/dcap-qvl-node) (Intel TDX quotes), [jose](https://github.com/panva/jose) (NVIDIA attestation JWTs), [ethers](https://github.com/ethers-io/ethers.js) (Ethereum signature checks).
+- **Game:** [three.js](https://threejs.org) and Vite; the city is [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob (MIT, vendored, see Canal Street above).
+- **Server and tests:** Node 22, [redis](https://github.com/redis/node-redis), tsx, TypeScript, vitest.
+- **Hosting:** Azure Container Apps, Azure Container Registry, Azure Managed Redis. **RPC:** FastNEAR, dRPC and Intea (public, from docs.near.org).
+
+The submission material (track notes, evidence links, the demo plan) is in [SUBMITTING.md](./SUBMITTING.md).
+
 ## Repo layout
 
 ```
