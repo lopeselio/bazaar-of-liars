@@ -93,6 +93,10 @@ export interface Ledger {
   /** v3.10: street events. */
   startEvent?(eventId: string): Promise<string>;
   inspect?(a: { player: string; goodIds: string[] }): Promise<string>;
+  /** v3.11: property deeds (stall licences as NEP-171 NFTs) and the deed market. */
+  listDeed?(a: { player: string; price: number }): Promise<string>;
+  unlistDeed?(player: string): Promise<string>;
+  buyDeed?(a: { buyer: string; slot: string; price: number }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -157,6 +161,9 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     releaseAuth: (authId) => call("release_auth", { auth_id: authId }),
     startEvent: (eventId) => call("start_event", { event_id: eventId }, "FINAL"),
     inspect: (a) => call("inspect", { player: a.player, good_ids: a.goodIds }, "FINAL"),
+    listDeed: (a) => call("list_deed", { player: a.player, price: a.price }, "FINAL"),
+    unlistDeed: (player) => call("unlist_deed", { player }, "FINAL"),
+    buyDeed: (a) => call("buy_deed", { buyer: a.buyer, slot: a.slot, price: a.price }, "FINAL"),
   };
 }
 
@@ -446,4 +453,16 @@ export async function readTip(network: Network, contractId: string, tipId: strin
 export async function readEvent(network: Network, contractId: string): Promise<StreetEvent | null> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<StreetEvent | null>(contractId, "street_event", {}, { finality: "optimistic" })) ?? null;
+}
+
+export interface DeedAsk {
+  slot: string;
+  owner: string;
+  price: number;
+}
+
+/** Deeds on the market (v3.11). */
+export async function readDeedAsks(network: Network, contractId: string): Promise<DeedAsk[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<DeedAsk[]>(contractId, "deed_asks", {}, { finality: "optimistic" })) ?? [];
 }
