@@ -53,6 +53,8 @@ export function initRumours(d: RumourDeps) {
   let open: string | null = null;
   let near: string | null = null;
   let buying = false;
+  /** The tip just bought, kept on screen across refreshes until the panel closes. */
+  let fresh = "";
   const seen = new Set<string>();
 
   /** Stand the informant on the nearest bit of sidewalk to its spot. */
@@ -114,6 +116,7 @@ export function initRumours(d: RumourDeps) {
       seen.add(t.id);
       if (Date.now() - t.checkMs > 10 * 60_000) continue;
       if (t.status === "true") d.toast(`${t.informant}'s tip came true (checked onchain). Worth the ${t.price}.`);
+      else if (t.status === "void") d.toast(`${t.informant}'s tip didn't count: you traded with that merchant before the check.`);
       else if (t.status === "false") {
         d.toast(`${t.informant} lied! The contract caught it and refunded your ${t.price} coins.`);
         void d.refreshPurse(true);
@@ -129,7 +132,7 @@ export function initRumours(d: RumourDeps) {
   }
 
   function tipHtml(t: TipView) {
-    const badge = t.status === "pending" ? `⏳ checks in ${clock(t.checkMs - Date.now())}` : t.status === "true" ? "✓ came true" : t.status === "false" ? `✗ a lie (stock was ${t.observed}); refunded` : "hidden; refunded";
+    const badge = t.status === "pending" ? `⏳ checks in ${clock(t.checkMs - Date.now())}` : t.status === "true" ? "✓ came true" : t.status === "false" ? `✗ a lie (stock was ${t.observed}); refunded` : t.status === "void" ? "void: you traded with that merchant" : "hidden; refunded";
     return `<li class="bz-o-empty"><b>${esc(t.informant)}</b> · ${badge}${t.text ? `<br><i>“${esc(t.text)}”</i>` : ""}${t.plain ? `<br><span class="bz-dim">${esc(t.plain)}</span>` : ""}</li>`;
   }
 
@@ -143,7 +146,7 @@ export function initRumours(d: RumourDeps) {
       <p class="bz-note">Onchain record: <b>${i.truths}</b> true · <b>${i.lies}</b> lies${i.hidden ? ` · ${i.hidden} never revealed` : ""} of ${i.sold} sold. Honesty is secret; the record is all you get.</p>
       <p class="bz-note">A tip is about the next 4 minutes. Only its hash goes onchain now. When the clock runs out the contract checks it against the merchant's real stock: a true tip is paid, a lie is refunded.</p>
       <button type="button" id="bz-rum-buy" ${coins < i.price ? "disabled" : ""}>Buy a tip · ${i.price} coins</button>
-      <div id="bz-rum-new"></div>
+      <div id="bz-rum-new">${fresh}</div>
       ${mine.length ? `<h4>Your tips from ${esc(i.name)}</h4><ul class="bz-listings">${mine.map(tipHtml).join("")}</ul>` : ""}`;
     $("bz-rum-x").addEventListener("click", close);
     $("bz-rum-buy").addEventListener("click", () => void buy(i));
@@ -157,7 +160,8 @@ export function initRumours(d: RumourDeps) {
     try {
       const p = d.cm.getActiveEntity().position;
       const r = await api.buyTip(i.id, d.player, p.x, p.z);
-      $("bz-rum-new").innerHTML = `<blockquote class="bz-whisper">“${esc(r.tip.text)}”</blockquote><p class="bz-note">${esc(r.tip.plain)} Checked onchain in ${clock(r.tip.checkMs - Date.now())}. <a href="${r.txUrl}" target="_blank" rel="noopener">sealed tx</a></p>`;
+      fresh = `<blockquote class="bz-whisper">“${esc(r.tip.text)}”</blockquote><p class="bz-note">${esc(r.tip.plain)} Checked onchain in ${clock(r.tip.checkMs - Date.now())}. <a href="${r.txUrl}" target="_blank" rel="noopener">sealed tx</a></p>`;
+      $("bz-rum-new").innerHTML = fresh;
       await d.refreshPurse(true);
       view = await api.rumours(d.player).catch(() => view);
       renderChip();
@@ -173,6 +177,7 @@ export function initRumours(d: RumourDeps) {
 
   function close() {
     open = null;
+    fresh = "";
     $("bz-rumour").hidden = true;
   }
 

@@ -274,7 +274,7 @@ export interface TipView {
   informant: string;
   price: number;
   checkMs: number;
-  status: "pending" | "true" | "false" | "hidden";
+  status: "pending" | "true" | "false" | "hidden" | "void";
   /** What the informant whispered: only for the buyer. */
   text: string | null;
   plain: string | null;
