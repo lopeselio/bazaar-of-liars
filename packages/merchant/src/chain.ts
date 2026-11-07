@@ -74,6 +74,8 @@ export interface Ledger {
   stallSale?(a: { saleId: string; slot: string; goodId: string }): Promise<string>;
   /** v3.4: a broke player's dock wage, from the wholesaler's purse (it signs first). */
   payWages?(a: { wageId: string; player: string }): Promise<string>;
+  /** v3.6: move a guest's progress to the NEAR account they signed in with. */
+  mergePlayer?(a: { from: string; to: string; merchantIds: string[]; goodIds: string[] }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -125,6 +127,7 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     collectTill: (player) => call("collect_till", { player }, "FINAL"),
     stallSale: (a) => call("stall_sale", { sale_id: a.saleId, slot: a.slot, good_id: a.goodId }),
     payWages: (a) => call("pay_wages", { wage_id: a.wageId, player: a.player }, "FINAL"),
+    mergePlayer: (a) => call("merge_player", { from: a.from, to: a.to, merchant_ids: a.merchantIds, good_ids: a.goodIds }, "FINAL"),
   };
 }
 
