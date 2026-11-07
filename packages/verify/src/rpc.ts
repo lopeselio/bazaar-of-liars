@@ -53,8 +53,10 @@ export const primaryRpc = (network: Network) => rpcUrls(network)[0]!;
 
 const refused = (status: number) => status === 408 || status === 429 || status >= 500;
 
-/** Methods that put a transaction on the chain or wait on one. */
-const isTxMethod = (body: unknown) => typeof body === "string" && /"method"\s*:\s*"(send_tx|broadcast_tx_commit|broadcast_tx_async|tx|EXPERIMENTAL_tx_status)"/.test(body);
+/** Methods that put a transaction on the chain: failover only on 429. */
+const isTxMethod = (body: unknown) => typeof body === "string" && /"method"\s*:\s*"(send_tx|broadcast_tx_commit|broadcast_tx_async)"/.test(body);
+/** Status queries for a transaction: reads (safe on any node) that may wait on the chain. */
+const isTxStatus = (body: unknown) => typeof body === "string" && /"method"\s*:\s*"(tx|EXPERIMENTAL_tx_status)"/.test(body);
 
 const discard = (r: Response | Error | null) => {
   if (r instanceof Response) r.body?.cancel().catch(() => {});
@@ -82,7 +84,7 @@ export function failover(urls: string[], base: typeof fetch = nativeFetch, now: 
       for (const u of order()) {
         let res: Response;
         try {
-          res = await base(u, { ...init, signal: init.signal ?? AbortSignal.timeout(tx ? TX_TIMEOUT_MS : READ_TIMEOUT_MS) });
+          res = await base(u, { ...init, signal: init.signal ?? AbortSignal.timeout(tx || isTxStatus(init.body) ? TX_TIMEOUT_MS : READ_TIMEOUT_MS) });
         } catch (e) {
           if (init.signal?.aborted) throw e; // the caller gave up: not the endpoint's fault
           cool(u);
