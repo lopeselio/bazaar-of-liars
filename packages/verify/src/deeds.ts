@@ -55,7 +55,7 @@ export function checkDeedCertificate(cert: DeedCertificate, a: { contractId: str
   return checks;
 }
 
-const RPC: Record<string, string> = { testnet: "https://rpc.testnet.near.org", mainnet: "https://rpc.mainnet.near.org" };
+const RPC: Record<string, string> = { testnet: process.env.NEAR_RPC_URL ?? "https://rpc.testnet.fastnear.com", mainnet: process.env.NEAR_RPC_URL ?? "https://rpc.mainnet.fastnear.com" };
 
 async function view<T>(network: string, account: string, method: string, args: object): Promise<T> {
   const r = await fetch(RPC[network], {
