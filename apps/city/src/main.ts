@@ -15,6 +15,7 @@ import { initOwnStalls } from "./ownstalls";
 import { initDocks } from "./docks";
 import { initAuctions } from "./auctions";
 import { initRumours } from "./rumours";
+import { initRoutes } from "./routes";
 import { currentPlayer, initLogin } from "./login";
 
 interface Bridge {
@@ -239,7 +240,7 @@ void refreshPurse();
 
 let agents: Record<string, MarketAgent> = {};
 let seenNews = 0;
-const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫", order: "📮", delivery: "✅", stall: "🏪", auction: "⚓", rumour: "🕵️" };
+const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫", order: "📮", delivery: "✅", stall: "🏪", auction: "⚓", rumour: "🕵️", route: "📈" };
 const ago = (t: number) => {
   const s = Math.max(1, Math.round((Date.now() - t) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
@@ -338,6 +339,23 @@ initRumours({
   me: () => me,
   refreshPurse,
   toast,
+  busy: () => !!current,
+});
+
+// ---------- price boards and trade routes across the city ----------
+
+initRoutes({
+  scene: bridge.scene,
+  camera: () => bridge.cameraSystem.camera,
+  player: PLAYER,
+  cm,
+  frame: bridge.frame,
+  me: () => me,
+  refreshPurse,
+  toast,
+  burst,
+  goodIcon: GOOD_ICON,
+  goodName: (id) => merchants.flatMap((m) => [m.good, m.buys]).find((g) => g.id === id)?.name ?? id,
   busy: () => !!current,
 });
 
