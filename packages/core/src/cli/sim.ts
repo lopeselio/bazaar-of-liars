@@ -10,7 +10,7 @@ import { playSecret, playSession } from "../play.js";
 import { GOODS } from "../catalog.js";
 import { rollBuySecret, rollSellSecret, type Holdings } from "../economy.js";
 
-const short = (name: string) => name.split(" ")[0]!;
+const short = (name: string) => name.replace(/^Old /, "").split(" ")[0]!;
 
 const arg = (name: string, dflt: number) => {
   const i = process.argv.indexOf(`--${name}`);
