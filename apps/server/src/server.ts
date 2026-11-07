@@ -759,13 +759,25 @@ async function stallAction(action: string, body: Record<string, unknown>) {
       const key = `certify:${player}`;
       const token = await store.lock(key, 5 * 60_000);
       if (!token) throw new HttpError(429, "Your deed was certified a moment ago. Try again in a few minutes.");
+      // The transaction succeeds even when the MPC network doesn't answer (the contract logs it and
+      // stores nothing), and the RPC can time out while the signature still lands. So the answer
+      // is whether a newer certificate is there afterwards.
+      const before = (await readDeedCertificate(ledger.network, ledger.contractId, own.slot).catch(() => null))?.block_height ?? 0;
+      let sent: string | null = null;
+      let failure: unknown = null;
       try {
-        tx = await ledger.certifyDeed(own.slot);
+        sent = await ledger.certifyDeed(own.slot);
       } catch (e) {
-        await store.unlock(key, token).catch(() => {});
-        throw e;
+        failure = e;
       }
       certCache.delete(own.slot);
+      const after = await readDeedCertificate(ledger.network, ledger.contractId, own.slot).catch(() => null);
+      if (!after || after.block_height <= before || after.owner !== player) {
+        await store.unlock(key, token).catch(() => {});
+        if (failure) throw failure;
+        throw new HttpError(502, "NEAR's MPC network didn't answer in time. Try again in a minute.");
+      }
+      tx = sent ?? "";
       news = `A stall deed on Canal Street (${own.slot}) was certified on Ethereum by NEAR's MPC network`;
     } else if (action === "buydeed") {
       if (!ledger.buyDeed) throw new HttpError(404, "the deed market isn't open");
