@@ -21,6 +21,16 @@ const PUBLIC: Record<Network, string[]> = {
   mainnet: ["https://rpc.mainnet.fastnear.com", "https://near.drpc.org", "https://rpc.intea.rs"],
 };
 
+/**
+ * Archival endpoints, for history a regular node has pruned (a transaction or block older than
+ * a few days). FastNEAR's answers today; NEAR's own is listed on docs.near.org but rate limited.
+ */
+const ARCHIVAL: Record<Network, string[]> = {
+  testnet: ["https://archival-rpc.testnet.fastnear.com", "https://archival-rpc.testnet.near.org"],
+  mainnet: ["https://archival-rpc.mainnet.fastnear.com", "https://archival-rpc.mainnet.near.org"],
+};
+export const archivalRpcUrls = (network: Network) => ARCHIVAL[network];
+
 /** fetch as it was before installRpcFailover, so a failover never wraps another. */
 const nativeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
