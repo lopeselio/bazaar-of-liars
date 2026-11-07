@@ -106,13 +106,15 @@ export function rollSellSecret(rng: Rng, merchant: Merchant, good: Good, h: Hold
 /**
  * The ceiling a merchant commits to when buying one unit of the good it wants.
  * It wants the good more when it has few, and can never commit more than it can pay.
+ * Pitched so a trade route pays for a player who haggles well at both ends (pnpm sim: about
+ * +5% a round trip when calling bluffs) and loses for one who takes every price (about −25%).
  * `escrow` is what the contract locks from the merchant's purse for this haggle.
  */
 export function buyCeiling(good: Good, h: Holdings, rng: Rng) {
   const reasons: Reason[] = [{ label: `Street value of ${good.name}`, effect: String(good.baseValue) }];
   const want = h.stock === 0 ? 1.2 : h.stock === 1 ? 1.08 : 1 - 0.06 * Math.min(4, h.stock - 1);
   reasons.push({ label: h.stock === 0 ? "Has none and wants one" : `Already has ${h.stock}`, effect: pct(want) });
-  const noise = 0.85 + 0.2 * rng();
+  const noise = 1.3 + 0.3 * rng();
   const escrow = Math.floor(h.coins * MAX_PURSE_SHARE);
   let ceiling = Math.round(good.baseValue * want * noise);
   if (ceiling > escrow) {
@@ -127,7 +129,7 @@ export function rollBuySecret(rng: Rng, merchant: Merchant, good: Good, h: Holdi
   if (ceiling < 2) return null; // too broke to buy anything
   const need: Need = h.stock === 0 ? "rent_due" : h.stock >= 3 ? "hoarding" : pickWeighted(rng, [["restocking", 2], ["comfortable", 2]]);
   const seed = Math.floor(rng() * 2 ** 31);
-  const opening = 0.55 + 0.2 * rng() - 0.15 * merchant.personality.bluff;
+  const opening = 0.7 + 0.15 * rng() - 0.1 * merchant.personality.bluff;
   return {
     secret: { side: "buy", merchantId: merchant.id, goodId: good.id, floor: ceiling, need, seed, listPrice: Math.max(1, Math.round(ceiling * opening)), ...memoryLevels(memory) },
     reasons,
