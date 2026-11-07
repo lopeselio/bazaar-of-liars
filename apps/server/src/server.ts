@@ -104,7 +104,9 @@ if (market && MARKET_TICK_MS > 0)
     }
   }, MARKET_TICK_MS).unref();
 // The harbour runs on a shorter beat than the street: bid and reveal windows are minutes long.
-if (market && MARKET_TICK_MS > 0)
+// On by default wherever the agents act; HARBOUR_TICK_MS overrides (0 turns it off).
+const HARBOUR_TICK_MS = Number(process.env.HARBOUR_TICK_MS ?? (MARKET_TICK_MS > 0 ? 10_000 : 0));
+if (market && HARBOUR_TICK_MS > 0)
   setInterval(async () => {
     const token = await store.lock("harbour-tick", 60_000).catch(() => null);
     if (!token) return;
@@ -115,7 +117,7 @@ if (market && MARKET_TICK_MS > 0)
     } finally {
       await store.unlock("harbour-tick", token);
     }
-  }, 10_000).unref();
+  }, HARBOUR_TICK_MS).unref();
 
 const restore = (rec: LiveRecord) => HaggleSession.restore(rec.snap, llm, attestor, ledger ?? undefined);
 
