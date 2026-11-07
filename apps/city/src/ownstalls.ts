@@ -5,6 +5,9 @@
  * licence (150 coins, burned), stock the stall with goods they own and set prices. While they're
  * away, agents buy from it (each purchase signed by the agent and settled onchain) and the
  * takings wait in the till. Coming back, the player sees what it earned and collects.
+ *
+ * Each licence is a deed: a NEP-171 NFT the owner holds (and sees in a NEAR wallet). An owner can
+ * put the deed up for sale; any player without a stall can buy it, no street cred needed.
  */
 import * as THREE from "three";
 import { api, type OwnStall, type PlayerView, type StallsView } from "../../web/src/api";
@@ -88,8 +91,8 @@ export function initOwnStalls(d: OwnStallsDeps) {
         kind === "free"
           ? `<b>Stall for licence</b><span>Level ${view.licenceLevel} · ${view.licencePrice} coins</span>`
           : kind === "mine"
-            ? `<b>Your stall</b><span>${forSale} for sale · till ${mine()?.till ?? 0}</span>`
-            : `<b>${esc(v!.owner!)}'s stall</b><span>${forSale} for sale · ${v!.sold} sold</span>`;
+            ? `<b>Your stall</b><span>${forSale} for sale · till ${mine()?.till ?? 0}${v?.ask ? ` · deed listed at ${v.ask}` : ""}</span>`
+            : `<b>${esc(v!.owner!)}'s stall</b><span>${v?.ask ? `📜 Deed for sale · ${v.ask}` : `${forSale} for sale · ${v!.sold} sold`}</span>`;
     }
   }
 
@@ -145,6 +148,7 @@ export function initOwnStalls(d: OwnStallsDeps) {
       const why = hasOne ? "You already have a stall." : lvl < view!.licenceLevel ? `Reach street cred level ${view!.licenceLevel} first (you're level ${lvl}).` : (me?.coins ?? 0) < view!.licencePrice ? `You need ${view!.licencePrice} coins.` : "";
       p.innerHTML = `${head}
         <p class="bz-note">Own this stall. Stock it with goods you own and set your prices. While you're away, rival traders and customers buy from it, and the takings wait in the till. The street keeps 10% of each sale.</p>
+        <p class="bz-note">📜 The licence is a deed: an NFT on NEAR that you own and can sell later.</p>
         <button type="button" id="bz-licence" ${why ? "disabled" : ""}>Buy the licence · ${view!.licencePrice} coins</button>
         ${why ? `<p class="bz-note">${why}</p>` : ""}`;
       $("bz-licence")?.addEventListener("click", () => void act(() => api.buyLicence(d.player, s.slot), "The stall is yours. Stock it and set your prices."));
@@ -166,7 +170,13 @@ export function initOwnStalls(d: OwnStallsDeps) {
             <span class="bz-price">at <input type="number" min="1" max="500" value="${st.listings.find((l) => l.good_id === g)?.price ?? Math.round(d.goodValue(g) * 0.9)}" data-for="${g}" /></span>
             <button type="button" data-stock="${g}">Put 1 out</button></li>`).join("") || `<li class="bz-o-empty">You have no goods. Buy some from the merchants.</li>`
         }</ul>
-        <p class="bz-note">Traders snap up anything priced under street value. Customers whose deliveries nobody brought buy too, up to their bounty.</p>`;
+        <p class="bz-note">Traders snap up anything priced under street value. Customers whose deliveries nobody brought buy too, up to their bounty.</p>
+        ${deedHtml(st)}`;
+      $("bz-deed-list")?.addEventListener("click", () => {
+        const price = Math.floor(Number(p.querySelector<HTMLInputElement>("#bz-deed-price")!.value));
+        void act(() => api.listDeed(d.player, price), `Your deed is on the market at ${price}.`);
+      });
+      $("bz-deed-unlist")?.addEventListener("click", () => void act(() => api.unlistDeed(d.player), "Your deed is off the market."));
       $("bz-collect").addEventListener("click", () => void act(() => api.collectTill(d.player), `Collected ${st.till} coins.`));
       p.querySelectorAll<HTMLButtonElement>("button[data-price]").forEach((b) =>
         b.addEventListener("click", () => {
@@ -188,10 +198,39 @@ export function initOwnStalls(d: OwnStallsDeps) {
     } else {
       p.innerHTML = `${head}
         <ul class="bz-listings">${v.listings.map((l) => `<li><span>${d.goodIcon[l.good_id] ?? "📦"} ${esc(d.goodName(l.good_id))} × ${l.qty}</span><b>${l.price}</b></li>`).join("") || `<li class="bz-o-empty">Nothing on sale.</li>`}</ul>
-        <p class="bz-note">Another player's stall. Agents buy from it while they're away.</p>`;
+        <p class="bz-note">Another player's stall. Agents buy from it while they're away.</p>
+        ${v.ask ? buyDeedHtml(v.ask) : ""}
+        ${v.deedUrl ? `<p class="bz-note"><a href="${v.deedUrl}" target="_blank" rel="noopener">📜 See the deed onchain</a></p>` : ""}`;
+      const price = v.ask;
+      $("bz-deed-buy")?.addEventListener("click", () => price && void act(() => api.buyDeed(d.player, s.slot, price), `The deed is yours: ${s.slot} is your stall now. Stock it and set your prices.`));
     }
     $("bz-own-x").addEventListener("click", close);
   }
+  /** The owner's deed: list it, reprice it, or take it off the market. */
+  function deedHtml(st: OwnStall) {
+    const tax = view?.deedTax ?? 5;
+    const link = st.deedUrl ? ` <a href="${st.deedUrl}" target="_blank" rel="noopener">See it onchain</a>.` : "";
+    return `<h4>📜 Your deed</h4>
+      <p class="bz-note">This stall's deed is an NFT you own (token <b>${esc(st.slot)}</b>), so it shows in a NEAR wallet.${link}</p>
+      ${
+        st.ask
+          ? `<p class="bz-note">On the market at <b>${st.ask}</b> coins. If it sells you keep ${st.ask - Math.floor((st.ask * tax) / 100)}, and your stock and till come back to you.</p>
+             <div class="bz-price">Reprice at <input type="number" id="bz-deed-price" min="1" max="${view?.maxDeedPrice ?? 5000}" value="${st.ask}" /> <button type="button" id="bz-deed-list">Reprice</button> <button type="button" id="bz-deed-unlist">Take it off the market</button></div>`
+          : `<p class="bz-note">Sell it to another player. The buyer gets the empty stall; your stock and till come back to you. The street keeps ${tax}%.</p>
+             <div class="bz-price">Ask <input type="number" id="bz-deed-price" min="1" max="${view?.maxDeedPrice ?? 5000}" value="${st.suggestedAsk ?? view?.licencePrice ?? 150}" /> <button type="button" id="bz-deed-list">Put the deed up for sale</button></div>`
+      }`;
+  }
+
+  /** Another player's deed on the market. */
+  function buyDeedHtml(ask: number) {
+    const me = d.me();
+    const why = mine() ? "You already have a stall. Sell yours first." : (me?.coins ?? 0) < ask ? `You need ${ask} coins.` : "";
+    return `<h4>📜 Deed for sale</h4>
+      <p class="bz-note">The owner is selling this stall's deed, an NFT on NEAR. Buy it and the stall is yours: no street cred needed.</p>
+      <button type="button" id="bz-deed-buy" ${why ? "disabled" : ""}>Buy the deed · ${ask} coins</button>
+      ${why ? `<p class="bz-note">${why}</p>` : ""}`;
+  }
+
   function openPanel(s: Slot) {
     open = s;
     d.cm.resetInput();
@@ -232,7 +271,7 @@ export function initOwnStalls(d: OwnStallsDeps) {
       $("bz-own-prompt").hidden = !near || !!open || d.busy();
       if (near) {
         const sv = view?.slots.find((x) => x.slot === near!.slot);
-        $("bz-own-prompt-text").textContent = !sv?.owner ? "Look at this stall for licence" : sv.mine ? "Run your stall" : `Browse ${sv.owner}'s stall`;
+        $("bz-own-prompt-text").textContent = !sv?.owner ? "Look at this stall for licence" : sv.mine ? "Run your stall" : `Browse ${sv.owner}'s stall${sv.ask ? " (deed for sale)" : ""}`;
       }
     }
   });
