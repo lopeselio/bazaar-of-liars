@@ -519,7 +519,12 @@ async function buyTip(informantId: string, body: Record<string, unknown>) {
 
 // ---------- price boards and trade routes ----------
 
-const priced = (p: number | null, m: number) => (p === null ? null : Math.round(p * m));
+/** A price after an event's multiplier, within the contract's 1–500 range (null if that's impossible). */
+const priced = (p: number | null, m: number) => {
+  if (p === null) return null;
+  const v = Math.round(p * m);
+  return v > MAX_STALL_PRICE ? (p <= MAX_STALL_PRICE ? MAX_STALL_PRICE : null) : v;
+};
 
 /** Every board with its live prices: Wu's from her stock and cost, buyers' from distance and how much they've bought today. */
 async function pricedBoards(): Promise<(PricedBoard & { stock: Record<string, number> })[]> {
@@ -629,11 +634,8 @@ async function raidCheck(player: string, goods: Record<string, number>) {
   const e = await market.event();
   if (!eventActive(e) || e.kind !== "raid") return null;
   if ((await store.getJSON<number>(`seized:${e.id}:${player}`)) !== null) return null;
-  // Contract decides (it knows about licences); this only skips a pointless call.
-  if (raidSeizes(goods) === 0) {
-    await store.putJSON(`seized:${e.id}:${player}`, 0, 3_600_000);
-    return null;
-  }
+  // Nothing over the limit: no call, and no mark either, so buying more later still gets inspected.
+  if (raidSeizes(goods) === 0) return null;
   try {
     const tx = await ledger.inspect({ player, goodIds: GOOD_IDS });
     market.invalidate();
