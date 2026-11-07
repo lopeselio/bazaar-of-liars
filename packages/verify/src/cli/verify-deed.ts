@@ -8,8 +8,8 @@
 import { verifyDeedOnchain } from "../deeds.js";
 
 const slot = process.argv[2] ?? "corner-1";
-const network = process.env.NEAR_NETWORK ?? "testnet";
-const contractId = process.env.BAZAAR_CONTRACT_ID ?? "v3.bazaar-liars.testnet";
+const network = process.env.NEAR_NETWORK || "testnet";
+const contractId = process.env.BAZAAR_CONTRACT_ID || "v3.bazaar-liars.testnet";
 
 const r = await verifyDeedOnchain(network, contractId, slot);
 console.log(`Deed ${slot} on ${contractId} (${network})`);
