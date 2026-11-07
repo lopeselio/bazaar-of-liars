@@ -123,6 +123,10 @@ describe("parsing and presentation", () => {
     expect(present("Hmm, no.", d)).toBe("Hmm, no. [30 coins] Not a coin below 25.");
     // The player offered exactly the claimed limit: echoing their offer isn't stating the claim.
     expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25)).toBe("25? You wound me. 30. It is the lowest I could ever go. Not a coin below 25.");
+    // Bundles recorded before this rule rendered it without the claim; the verifier accepts both.
+    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25, "sell", true)).toBe("25? You wound me. 30. It is the lowest I could ever go.");
+    // A claim the model wrote out itself isn't repeated.
+    expect(present("{OFFER}? {PRICE}, and not below {CLAIM}.", d, 25)).toBe("25? 30, and not below 25.");
   });
 
   it("a {CLAIM} outside a bluffing counter is blanked", () => {
