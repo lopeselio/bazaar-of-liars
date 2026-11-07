@@ -935,6 +935,7 @@ impl Bazaar {
     pub fn register_agent(&mut self, id: String, name: String, account: AccountId, kind: AgentKind, daily_cap: u64, coins: u64, stock: Vec<(String, u32, u32)>) {
         self.require_owner();
         require!(is_id(&id), "agent id must be [a-z0-9_-]{1,64}");
+        require!(self.stall_slot_of(&account).is_none(), "that account holds a stall deed");
         if let Some(a) = self.agents.get(&id).cloned() {
             require!(a.account == account, "an agent keeps its account");
             self.agents.insert(id, Agent { name, daily_cap, ..a });
@@ -1446,6 +1447,7 @@ impl Bazaar {
         let from = st.owner.clone();
         require!(&from != to, "that account already owns this deed");
         require!(self.agent_of(to).is_none(), "agents don't hold deeds");
+        require!(to != &env::current_account_id() && to != &self.server && to != &self.owner, "the street office doesn't hold deeds");
         require!(self.stall_slot_of(to).is_none(), "that account already has a stall");
         for l in &st.listings {
             self.move_goods(&env::current_account_id(), &from, &l.good_id, l.qty, "deed changed hands");
@@ -1490,9 +1492,16 @@ impl Bazaar {
     /// NEP-171 resolve: if the receiver asked to return the deed (or its call failed), give it
     /// back, unless it has moved on or the old owner has a stall again. True if the receiver kept it.
     #[private]
-    pub fn nft_resolve_transfer(&mut self, owner_id: AccountId, receiver_id: AccountId, token_id: String, approved_account_ids: Option<std::collections::HashMap<AccountId, u64>>, #[callback_result] give_back: Result<bool, PromiseError>) -> bool {
+    pub fn nft_resolve_transfer(&mut self, owner_id: AccountId, receiver_id: AccountId, token_id: String, approved_account_ids: Option<std::collections::HashMap<AccountId, u64>>) -> bool {
         let _ = approved_account_ids;
-        if matches!(give_back, Ok(false)) {
+        // Read the receiver's answer by hand: anything but a plain `false` (a failure, an empty or
+        // malformed return) means "give it back", and this callback must never panic.
+        let keep = env::promise_result_checked(0, 16).ok().and_then(|b| near_sdk::serde_json::from_slice::<bool>(&b).ok()) == Some(false);
+        self.resolve_deed(owner_id, receiver_id, token_id, keep)
+    }
+
+    fn resolve_deed(&mut self, owner_id: AccountId, receiver_id: AccountId, token_id: String, receiver_keeps: bool) -> bool {
+        if receiver_keeps {
             return true;
         }
         let still_theirs = self.stalls.get(&token_id).is_some_and(|st| st.owner == receiver_id);
@@ -3670,13 +3679,13 @@ mod tests {
         let _ = c.nft_transfer_call(bob(), "corner-1".into(), None, None, "".into());
         assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, bob());
         ctx("alice.near", 100);
-        assert!(!c.nft_resolve_transfer(player(), bob(), "corner-1".into(), None, Ok(true)));
+        assert!(!c.resolve_deed(player(), bob(), "corner-1".into(), false));
         assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, player());
         // A receiver that keeps it.
         one_yocto("player.testnet");
         let _ = c.nft_transfer_call(bob(), "corner-1".into(), None, None, "".into());
         ctx("alice.near", 100);
-        assert!(c.nft_resolve_transfer(player(), bob(), "corner-1".into(), None, Ok(false)));
+        assert!(c.resolve_deed(player(), bob(), "corner-1".into(), true));
         assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, bob());
     }
 
@@ -3708,5 +3717,23 @@ mod tests {
         // …then a guest with a stall signs in as it.
         ctx("server.testnet", 100);
         c.merge_player(player(), acc("fresh.testnet"), vec![], vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "the street office doesn't hold deeds")]
+    fn a_deed_cannot_be_locked_in_the_contract() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("player.testnet");
+        c.nft_transfer(env::current_account_id(), "corner-1".into(), None, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "holds a stall deed")]
+    fn a_deed_holder_cannot_become_an_agent() {
+        let mut c = setup();
+        licensed(&mut c);
+        ctx("owner.testnet", 100);
+        c.register_agent("sly".into(), "Sly".into(), player(), AgentKind::Trader, 100, 0, vec![]);
     }
 }
