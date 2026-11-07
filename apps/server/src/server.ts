@@ -21,6 +21,8 @@
  *   POST /api/auctions/:id/reveal {player,amount,salt}           open it once bidding closes
  *   GET  /api/rumours?player=…          informants, their onchain records of truths and lies, and your tips
  *   POST /api/rumours/:informant/buy {player,x,z}  buy a tip (only its hash goes onchain)
+ *   GET  /api/boards                    price boards across the city (live prices) and the best route
+ *   POST /api/boards/:id/trade {player,goodId,x,z}  buy one at Wu's docks board, or sell one to a buyer uptown
  *   GET  /api/auth/config               the NEAR Auth (Auth0) tenant the browser signs in with
  *   POST /api/auth/session {idToken}    verify a NEAR Auth login; returns the player's NEAR account + session
  *   POST /api/auth/link {guest}         (signed in) bring a guest's progress to the account
@@ -37,7 +39,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -514,6 +516,75 @@ async function buyTip(informantId: string, body: Record<string, unknown>) {
   return { tip: { id, informant: inf.name, text, plain, checkMs, price: inf.price }, txUrl: explorerTx(ledger.network, tx), player: await playerView(player).catch(() => null) };
 }
 
+// ---------- price boards and trade routes ----------
+
+/** Every board with its live prices: Wu's from her stock and cost, buyers' from distance and how much they've bought today. */
+async function pricedBoards(): Promise<(PricedBoard & { stock: Record<string, number> })[]> {
+  if (!market) return [];
+  const agents = await market.agents();
+  return Promise.all(
+    BOARDS.map(async (b) => {
+      const a = agents.find((x) => x.id === b.agentId);
+      const prices: Record<string, number | null> = {};
+      for (const g of b.goods) {
+        const base = GOODS[g]?.baseValue ?? 0;
+        prices[g] =
+          b.kind === "sells"
+            ? // costBasis is rounded to whole coins; the half covers the rounding, so the contract's no-loss check passes.
+              askPrice(base, a?.stock[g] ?? 0, (a?.costBasis[g] ?? 0) + 0.5)
+            : bidPrice(base, b, await store.count(`board:${b.id}:${g}`));
+      }
+      return { ...b, prices, stock: Object.fromEntries(b.goods.map((g) => [g, a?.stock[g] ?? 0])) };
+    }),
+  );
+}
+
+async function boardsView() {
+  const boards = await pricedBoards();
+  return { boards, best: bestRoute(boards), reach: BOARD_REACH };
+}
+
+async function boardTrade(id: string, body: Record<string, unknown>) {
+  if (!market || !ledger?.buyFromBoard || !signers) throw new HttpError(404, "boards need the agent economy");
+  const board = boardById(id);
+  if (!board) throw new HttpError(404, "no such board");
+  const player = String(body.player ?? "");
+  const goodId = String(body.goodId ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
+  if (!board.goods.includes(goodId)) throw new HttpError(400, `${board.name} doesn't trade that.`);
+  if (Math.hypot(num(body.x) - board.x, num(body.z) - board.z) > BOARD_REACH) throw new HttpError(409, `Walk to ${board.name} (${board.district}) to trade there.`);
+  const p = await purse(player);
+  if (!p.known) throw new HttpError(409, "Make your first deal on Canal Street before trading across town.");
+  const price = (await pricedBoards()).find((b) => b.id === id)?.prices[goodId] ?? null;
+  if (price === null) throw new HttpError(409, board.kind === "sells" ? "Auntie Wu is keeping the rest of that for the merchants." : `${board.name} has had enough of that today.`);
+  let tx: string;
+  try {
+    if (board.kind === "sells") {
+      if (p.coins < price) throw new HttpError(402, `That's ${price}; you have ${p.coins}.`);
+      tx = await ledger.buyFromBoard({ player, agentId: board.agentId, goodId, price });
+    } else {
+      if ((p.goods[goodId] ?? 0) < 1) throw new HttpError(409, `You don't have any ${GOODS[goodId].name} to sell.`);
+      const buyer = (await market.agents(0)).find((a) => a.id === board.agentId);
+      // A buyer short of coins draws on its (capped) daily income first.
+      if (buyer && buyer.coins < price) await ledger.payIncome!({ agentId: board.agentId, amount: Math.max(price - buyer.coins, 60) }).catch(() => {});
+      const saleId = `q-${Date.now().toString(36)}-${randomInt(1e6).toString(36)}`;
+      await signers[board.agentId].authorizeSpend(saleId, price);
+      tx = await ledger.sellToBoard!({ saleId, player, goodId });
+      await store.bump(`board:${id}:${goodId}`, 24 * 3_600_000);
+    }
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
+    throw new HttpError(409, m ? sentence(m[1]) : "The trade didn't go through. Try again.");
+  }
+  market.invalidate();
+  const good = GOODS[goodId].name;
+  await store
+    .pushNews({ t: Date.now(), kind: "route", text: board.kind === "sells" ? `A player bought ${good} off Auntie Wu's board for ${price}` : `A player sold ${good} to ${board.name} (${board.district}) for ${price}`, tx: explorerTx(ledger.network, tx), agents: [board.agentId] })
+    .catch(() => {});
+  return { ok: true, price, txUrl: explorerTx(ledger.network, tx), boards: await boardsView().catch(() => null), player: await playerView(player).catch(() => null) };
+}
+
 // ---------- player stalls ----------
 
 const shortPlayer = (p: string) => p.slice(0, 12);
@@ -911,6 +982,9 @@ createServer(async (req, res) => {
       return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
     }
     if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(body));
+    if (req.method === "GET" && url === "/api/boards") return send(res, 200, await boardsView());
+    const bm = url.match(/^\/api\/boards\/([a-z0-9_-]{1,64})\/trade$/);
+    if (req.method === "POST" && bm) return send(res, 200, await boardTrade(bm[1], body));
     if (req.method === "GET" && url.startsWith("/api/rumours")) return send(res, 200, await rumoursView(new URL(url, "http://x").searchParams.get("player") ?? "", authed));
     const rm = url.match(/^\/api\/rumours\/([a-z0-9_-]{1,64})\/buy$/);
     if (req.method === "POST" && rm) return send(res, 200, await buyTip(rm[1], body));
