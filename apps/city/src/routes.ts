@@ -168,6 +168,7 @@ export function initRoutes(d: RouteDeps) {
 
   function close() {
     open = null;
+    near = null; // re-evaluated next frame, which brings the prompt back
     $("bz-boardp").hidden = true;
   }
 
@@ -176,6 +177,7 @@ export function initRoutes(d: RouteDeps) {
     if (e.code === "KeyT" && near && !open) {
       e.preventDefault();
       open = near;
+      $("bz-board-prompt").hidden = true;
       $("bz-boardp").hidden = false;
       renderPanel(near);
     } else if (e.code === "Escape" && open) close();
