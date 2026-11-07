@@ -48,7 +48,7 @@ import {
   type PlayerMemory,
   type Reason,
 } from "@bazaar/core";
-import { explorerTx, readAgents, readAuctions, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
+import { explorerTx, readAgents, readAuctions, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
 const GOOD_IDS = Object.keys(GOODS);
@@ -85,6 +85,16 @@ export interface MarketOrder extends OnchainOrder {
   x: number;
   z: number;
   goodName: string;
+}
+
+export interface TipSecret {
+  id: string;
+  informant: string;
+  player: string;
+  claim: TipClaim;
+  salt: string;
+  checkMs: number;
+  text: string;
 }
 
 export class Market {
@@ -524,16 +534,45 @@ export class Market {
 
   // ---------- the rumour network ----------
 
-  /** A tip sold: remember its claim and salt (server-side only) until its check time. */
-  async rememberTip(t: { id: string; informant: string; player: string; claim: TipClaim; salt: string; checkMs: number; text: string }) {
+  /** Change the pending-tips list under a short lock, so a sale and a resolve never overwrite each other. */
+  private async editPending(f: (ids: string[]) => string[]) {
+    for (let i = 0; i < 20; i++) {
+      const token = await this.store.lock("tips-pending", 10_000);
+      if (!token) {
+        await new Promise((r) => setTimeout(r, 150));
+        continue;
+      }
+      try {
+        const ids = (await this.store.getJSON<string[]>("tips:pending")) ?? [];
+        await this.store.putJSON("tips:pending", f(ids).slice(-200), 24 * 3_600_000);
+        return;
+      } finally {
+        await this.store.unlock("tips-pending", token);
+      }
+    }
+    throw new Error("the tips list is busy");
+  }
+
+  /**
+   * Remember a tip's claim and salt (server-side only) until its check time. Called before the
+   * sale goes onchain, so a crash can't leave a sold tip that nobody can reveal.
+   */
+  async rememberTip(t: TipSecret) {
     await this.store.putJSON(`tip:${t.id}`, t, 2 * 3_600_000);
-    const pending = (await this.store.getJSON<string[]>("tips:pending")) ?? [];
-    await this.store.putJSON("tips:pending", [...pending.filter((x) => x !== t.id), t.id].slice(-200), 24 * 3_600_000);
+    await this.editPending((ids) => [...ids.filter((x) => x !== t.id), t.id]);
+  }
+  async forgetTip(id: string) {
+    await this.editPending((ids) => ids.filter((x) => x !== id));
+    await this.store.del(`tip:${id}`);
+  }
+  async setTipText(id: string, text: string) {
+    const t = await this.tipSecret(id);
+    if (t) await this.store.putJSON(`tip:${id}`, { ...t, text }, 2 * 3_600_000);
   }
 
   /** What a player was told, for their own tips. */
   async tipSecret(id: string) {
-    return this.store.getJSON<{ id: string; informant: string; player: string; claim: TipClaim; salt: string; checkMs: number; text: string }>(`tip:${id}`);
+    return this.store.getJSON<TipSecret>(`tip:${id}`);
   }
 
   /** Reveal every tip whose check time has come; the contract checks it against real stock. */
@@ -541,37 +580,39 @@ export class Market {
     const pending = (await this.store.getJSON<string[]>("tips:pending")) ?? [];
     if (!pending.length) return;
     const now = Date.now();
-    const left: string[] = [];
+    const done: string[] = [];
     for (const id of pending) {
       const t = await this.tipSecret(id);
-      if (!t) continue;
-      if (now < t.checkMs + 1500) {
-        left.push(id);
+      if (!t) {
+        done.push(id);
         continue;
       }
+      if (now < t.checkMs + 1500) continue;
       try {
         if (now >= t.checkMs + TIP_RESOLVE_WINDOW_MS) await this.ledger.expireTip!(id);
         else {
           const tx = await this.ledger.resolveTip!({ tipId: id, claim: t.claim, salt: t.salt });
           const inf = informantById(t.informant);
-          // The outcome is public now; the claim was revealed onchain with it.
-          const stock = (await this.agents(0)).find((a) => a.id === t.claim.agent_id)?.stock[t.claim.good_id];
-          const holds = stock === undefined ? null : t.claim.at_most ? stock <= t.claim.n : stock >= t.claim.n;
+          // Report what the contract decided, not a fresh read of the stock.
+          const onchain = await readTip(this.ledger.network, this.ledger.contractId, id).catch(() => null);
+          const how = onchain?.status === "false" ? "was a lie: the buyer got their money back" : onchain?.status === "void" ? "didn't count: the buyer traded with the merchant" : "came true";
           await this.say({
             kind: "rumour",
-            text: `${inf?.name ?? t.informant}'s tip about ${short(t.claim.agent_id)}'s ${GOODS[t.claim.good_id]?.name ?? t.claim.good_id} ${holds === false ? "was a lie: the buyer got their money back" : "came true"}`,
+            text: `${inf?.name ?? t.informant}'s tip about ${short(t.claim.agent_id)}'s ${GOODS[t.claim.good_id]?.name ?? t.claim.good_id} ${how}`,
             tx: explorerTx(this.ledger.network, tx),
             agents: [t.claim.agent_id],
           });
         }
         this.invalidate();
+        done.push(id);
       } catch (e) {
         const m = (e as Error).message;
         console.error(`rumour ${id}:`, m);
-        if (!/already resolved|unknown tip/.test(m)) left.push(id);
+        if (/already resolved|unknown tip/.test(m)) done.push(id);
       }
     }
-    await this.store.putJSON("tips:pending", left, 24 * 3_600_000);
+    // Tips sold meanwhile were added to the list; only take out what was handled here.
+    if (done.length) await this.editPending((ids) => ids.filter((x) => !done.includes(x)));
   }
 
   /** One round of the agents acting on their own. Errors are logged, never thrown. */
