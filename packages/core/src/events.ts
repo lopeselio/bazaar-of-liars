@@ -2,7 +2,7 @@
  * Street events: every twelve minutes or so something happens on the street, and the contract
  * rolls what it is.
  *
- * - Festival: buyers across town pay a quarter more and customers post more delivery orders.
+ * - Festival: buyers across town pay a quarter more, for goods at their boards and for deliveries.
  * - Shortage of one good: it costs 30% more at the docks and buyers pay 40% more for it.
  * - Inspector raid on Canal Street: an unlicensed player who haggles there while it's on loses
  *   whatever they carry above 5 of any good (the contract confiscates it). Rival traders lie low.
@@ -38,10 +38,8 @@ export function askMultiplier(e: StreetEvent | null | undefined, goodId: string,
   return eventActive(e, now) && e.kind === "shortage" && e.good_id === goodId ? 1.3 : 1;
 }
 
-/** Extra open delivery orders customers aim for, and how much more they pay. */
-export function orderBoost(e: StreetEvent | null | undefined, now = Date.now()): { extraOrders: number; bounty: number } {
-  return eventActive(e, now) && e.kind === "festival" ? { extraOrders: 3, bounty: 1.25 } : { extraOrders: 0, bounty: 1 };
-}
+/** How much more customers pay for a delivery. */
+export const bountyMultiplier = (e: StreetEvent | null | undefined, now = Date.now()) => (eventActive(e, now) && e.kind === "festival" ? 1.25 : 1);
 
 /** Rival traders lie low while the inspectors are about. */
 export const tradersLieLow = (e: StreetEvent | null | undefined, now = Date.now()) => eventActive(e, now) && e.kind === "raid";
@@ -50,7 +48,7 @@ export const tradersLieLow = (e: StreetEvent | null | undefined, now = Date.now(
 export const raidSeizes = (goods: Record<string, number>) => Object.values(goods).reduce((s, n) => s + Math.max(0, n - RAID_LIMIT), 0);
 
 export function eventHeadline(e: StreetEvent, goodName: (id: string) => string): string {
-  if (e.kind === "festival") return "🎉 Street festival! Buyers across town pay 25% more, and customers want more deliveries.";
+  if (e.kind === "festival") return "🎉 Street festival! Buyers across town pay 25% more, for goods and for deliveries.";
   if (e.kind === "shortage") return `📉 ${goodName(e.good_id)} shortage! It costs 30% more at the docks and buyers pay 40% more for it.`;
   return `🚨 Inspectors on Canal Street! Unlicensed traders who haggle there lose anything over ${RAID_LIMIT} of a good.`;
 }
