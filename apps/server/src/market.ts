@@ -417,28 +417,43 @@ export class Market {
     return auctions;
   }
 
-  /** Agents that might bid on a lot: Auntie Wu, the merchants, and the rival traders. */
+  /**
+   * Agents that might bid on a lot: Auntie Wu, the merchants, and the rival traders. Each agent
+   * decides once per lot, and one agent failing doesn't stop the others.
+   */
   private async agentBids(a: OnchainAuction) {
     const agents = await this.agents(0);
     for (const def of AGENTS.filter((x) => ["wholesaler", "merchant", "trader"].includes(x.kind))) {
       const me = agents.find((x) => x.id === def.id);
       const signer = this.signers[def.id];
-      if (!me || !signer || a.bids.some((b) => b.bidder === signer.account)) continue;
+      const flag = `bidded:${a.id}:${def.id}`;
+      if (!me || !signer || a.bids.some((b) => b.bidder === signer.account) || (await this.store.getJSON(flag))) continue;
+      await this.store.putJSON(flag, 1, 3_600_000);
+      const capLeft = me.dailyCap - me.spentToday;
       const amount = agentBid(
-        { kind: def.kind, sells: MERCHANTS.find((m) => m.id === def.id)?.goodId, stock: me.stock[a.good_id] ?? 0, coins: me.coins, capLeft: me.dailyCap - me.spentToday },
+        { kind: def.kind, sells: MERCHANTS.find((m) => m.id === def.id)?.goodId, stock: me.stock[a.good_id] ?? 0, coins: me.coins, capLeft },
         { goodId: a.good_id, qty: a.qty, reserve: a.reserve, baseValue: GOOD_VALUES[a.good_id] ?? 0 },
         this.rng,
       );
       if (amount === null) continue;
-      const deposit = Math.min(depositFor(amount, a.reserve, me.coins), me.dailyCap - me.spentToday);
+      // Deposits are hidden while bidding is open, but vary them anyway: anywhere from the usual
+      // round figure up to the agent's headroom.
+      const room = Math.min(me.coins, capLeft);
+      const base = Math.min(depositFor(amount, a.reserve, me.coins), room);
+      const deposit = base + Math.floor(this.rng() * Math.max(0, room - base) * 0.5);
       const salt = newSalt();
       const bidId = `b-${randomUUID()}`;
-      // The salt is the agent's secret until the reveal; it waits in the store, never onchain.
-      await this.store.putJSON(`bid:${a.id}:${def.id}`, { amount, salt }, 3_600_000);
-      await signer.authorizeSpend(bidId, deposit);
-      const tx = await this.ledger.commitBid!({ auctionId: a.id, bidId, bidder: signer.account, commitment: bidCommitment(a.id, signer.account, amount, salt), deposit });
-      this.invalidate();
-      await this.say({ kind: "auction", text: `${short(def.id)} sealed a bid on the ${GOODS[a.good_id].name} lot (deposit ${deposit})`, tx: explorerTx(this.ledger.network, tx), agents: [def.id] });
+      try {
+        // The salt is the agent's secret until the reveal; it waits in the store, never onchain.
+        await this.store.putJSON(`bid:${a.id}:${def.id}`, { amount, salt }, 3_600_000);
+        await signer.authorizeSpend(bidId, deposit);
+        const tx = await this.ledger.commitBid!({ auctionId: a.id, bidId, bidder: signer.account, commitment: bidCommitment(a.id, signer.account, amount, salt), deposit });
+        this.invalidate();
+        await this.say({ kind: "auction", text: `${short(def.id)} sealed a bid on the ${GOODS[a.good_id].name} lot`, tx: explorerTx(this.ledger.network, tx), agents: [def.id] });
+      } catch (e) {
+        // An authorization nothing used stays counted against the agent's cap until tomorrow.
+        console.error(`harbour bid ${def.id}:`, (e as Error).message);
+      }
     }
   }
 
@@ -448,8 +463,12 @@ export class Market {
       const id = Object.keys(this.signers).find((k) => this.signers[k].account === b.bidder);
       const sealed = id ? await this.store.getJSON<{ amount: number; salt: string }>(`bid:${a.id}:${id}`) : null;
       if (!sealed) continue;
-      await this.ledger.revealBid!({ auctionId: a.id, bidder: b.bidder, amount: sealed.amount, salt: sealed.salt });
-      this.invalidate();
+      try {
+        await this.ledger.revealBid!({ auctionId: a.id, bidder: b.bidder, amount: sealed.amount, salt: sealed.salt });
+        this.invalidate();
+      } catch (e) {
+        console.error(`harbour reveal ${id}:`, (e as Error).message);
+      }
     }
   }
 
@@ -464,10 +483,7 @@ export class Market {
       try {
         if (now < a.bids_close_ms - 20_000) {
           // Agents sit on their hands for a moment, so a player gets a chance to bid first.
-          if (now >= a.opened_ms + 25_000 && !(await this.store.getJSON(`bidded:${a.id}`))) {
-            await this.store.putJSON(`bidded:${a.id}`, 1, 3_600_000);
-            await this.agentBids(a);
-          }
+          if (now >= a.opened_ms + 25_000) await this.agentBids(a);
         } else if (now >= a.bids_close_ms && now < a.reveal_close_ms) {
           await this.agentReveals(a);
         } else if (now >= a.reveal_close_ms + 2000) {
