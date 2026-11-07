@@ -111,10 +111,39 @@ export interface TurnOut {
   end?: Ending;
 }
 
+/** A NEAR Auth session: the player's NEAR account and the server's token for it. */
+export interface Session {
+  account: string;
+  publicKey: string;
+  token: string;
+  exp: number;
+}
+const SESSION_KEY = "bazaar.session";
+export function loadSession(): Session | null {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "null") as Session | null;
+    return s && s.exp > Date.now() ? s : null;
+  } catch {
+    return null;
+  }
+}
+export function saveSession(s: Session | null) {
+  try {
+    if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* private mode: the session lasts this page only */
+  }
+}
+
 async function call<T>(path: string, body?: unknown): Promise<T> {
+  const session = loadSession();
   const res = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(session ? { authorization: `Bearer ${session.token}` } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const j = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -206,6 +235,9 @@ export interface StallsView {
 type StallResult = { ok: true; txUrl: string; stalls: StallsView; player: PlayerView };
 
 export const api = {
+  authConfig: () => call<{ domain: string; clientId: string }>("/api/auth/config"),
+  startSession: (idToken: string) => call<Session & { player: PlayerView }>("/api/auth/session", { idToken }),
+  linkGuest: (guest: string) => call<{ ok: true; player: PlayerView }>("/api/auth/link", { guest }),
   merchants: () => call<{ merchants: MerchantInfo[]; model: string; onchain: { network: string; contractId: string } | null }>("/api/merchants"),
   player: (id: string) => call<PlayerView>(`/api/player?id=${encodeURIComponent(id)}`),
   open: (merchantId: string, player: string, side: Side) => call<Opened>("/api/haggle", { merchantId, player, side }),
