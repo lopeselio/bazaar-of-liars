@@ -168,7 +168,7 @@ export function initAuctions(d: AuctionDeps) {
     try {
       const r = await api.reveal(l.id, d.player, s.amount, s.salt);
       saveSealed(l.id, { ...s, revealed: true });
-      view = r.auctions;
+      view = r.auctions ?? view;
       d.toast(`Your sealed bid of ${s.amount} is open. The lot settles in ${clock(l.revealClose - Date.now())}.`);
     } catch (e) {
       d.toast((e as Error).message);
@@ -205,7 +205,7 @@ export function initAuctions(d: AuctionDeps) {
       const mine = l.bids.find((b) => b.mine);
       const bids = l.bids.length
         ? `<ul class="bz-listings">${l.bids
-            .map((b) => `<li><span>${b.mine ? "🫵 " : b.agent ? "🤖 " : "🧑 "}${esc(b.who)}</span><span class="bz-dim">deposit ${b.deposit}</span><b>${b.amount === null ? "🔒 sealed" : b.amount}</b></li>`)
+            .map((b) => `<li><span>${b.mine ? "🫵 " : b.agent ? "🤖 " : "🧑 "}${esc(b.who)}</span><span class="bz-dim">${b.deposit === null ? "deposit hidden" : `deposit ${b.deposit}`}</span><b>${b.amount === null ? "🔒 sealed" : b.amount}</b></li>`)
             .join("")}</ul>`
         : `<p class="bz-note">No bids yet.</p>`;
       const suggested = Math.max(l.reserve, Math.round(l.reserve * 1.25));
@@ -257,16 +257,23 @@ export function initAuctions(d: AuctionDeps) {
       const commitment = await sha256Hex(`bazaar-bid|${l.id}|${d.player}|${amount}|${salt}`);
       const p = d.cm.getActiveEntity().position;
       const r = await api.bid(l.id, d.player, commitment, depositFor(amount, l.reserve, coins), p.x, p.z);
-      view = r.auctions;
+      view = r.auctions ?? view;
       d.toast("Bid sealed onchain. Nobody, not even the game server, can see it until bidding closes.");
       await d.refreshPurse(true);
     } catch (e) {
-      try {
-        localStorage.removeItem(sealedKey(l.id));
-      } catch {
-        /* nothing was saved */
-      }
-      d.toast((e as Error).message);
+      // Only forget the salt if the bid really didn't land: a bid onchain without its salt can't
+      // be revealed, and would lose 10% of its deposit.
+      const landed = await api
+        .auctions(d.player)
+        .then((v) => ((view = v), v.lot?.id === l.id && v.lot.bids.some((b) => b.mine)))
+        .catch(() => true);
+      if (!landed)
+        try {
+          localStorage.removeItem(sealedKey(l.id));
+        } catch {
+          /* nothing was saved */
+        }
+      d.toast(landed ? "Your bid is sealed onchain." : (e as Error).message);
     } finally {
       sending = false;
       render();
