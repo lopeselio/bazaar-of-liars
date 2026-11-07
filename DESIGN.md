@@ -215,6 +215,15 @@ Stall licences used to be a row in the contract. Now each one is a deed: a NEP-1
 - **What moves with it.** The slot only. When a deed changes hands by sale, wallet transfer or sign-in, the stall's stock and till go home with the old owner, and the new owner starts with an empty stall. Nobody holds two stalls: the contract refuses a transfer to an account that already has one, and refuses a sign-in merge that would stack two.
 - **No migration.** Asks live under raw `x:deedask:` storage keys, and the deed itself is the existing stall record.
 
+## Deeds certified on Ethereum (v3.12): Chain Signatures
+
+A deed lives on NEAR, but its owner can prove it on any EVM chain, with no bridge and no gas there.
+
+- **The key.** NEAR's MPC network (`v1.signer-prod.testnet`) derives a secp256k1 key for (`v3.bazaar-liars.testnet`, path `bazaar-deeds`). Only that contract can ask for signatures with it. Its Ethereum address, `0x4bbca4FD4b5887426F5D86F588f36091A9b1c3a9` on testnet, comes from the signer's `derived_public_key` view, and anyone can recompute it.
+- **The certificate.** `certify_deed(slot)` (the owner, or the server for them; 1 yoctoNEAR for the signer) builds `Bazaar of Liars deed corner-1 (NEAR contract v3.bazaar-liars.testnet) is owned by <owner> as of NEAR block <n>.`, hashes it as an EIP-191 personal message, and calls the signer's `sign` (`payload_v2: {Ecdsa}`, `domain_id: 0`). The callback turns the answer (`big_r`, `s`, `recovery_id`) into an ordinary 65-byte Ethereum signature and stores it (`deed_certificate`). A failed or timed-out signature stores nothing and never panics.
+- **Checking it.** `ecrecover(hash, v, r, s)` on any EVM chain returns the bazaar's address, so a Solidity contract can accept "this wallet owns a Canal Street stall" with one `require`. In the game, the server checks it with ethers before showing ✓. `pnpm verify:deed` checks it with nothing but chain reads. A certificate is dated (the NEAR block), so a verifier should also check `nft_token` for the current owner, as `verify:deed` does.
+- **No migration.** Certificates live under raw `x:cert:` keys.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
