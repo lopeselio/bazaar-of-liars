@@ -14,3 +14,4 @@ export * from "./auctions.js";
 export * from "./rumours.js";
 export * from "./routes.js";
 export * from "./events.js";
+export * from "./hints.js";
