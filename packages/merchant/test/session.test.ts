@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { Wallet } from "ethers";
 import { MERCHANTS, type PlayerMemory, type Side } from "@bazaar/core";
 import { sha256Hex, type ChatSignature } from "@bazaar/verify";
-import { HaggleSession, verifyBundle, type ChainReader, type Ledger, type OnchainHaggle, parseMove, present, quickMove, wordsToNumber, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
+import { HaggleSession, verifyBundle, type ChainReader, type Ledger, type OnchainHaggle, type TxInfo, parseMove, present, quickMove, wordsToNumber, type Attestor, type ChatRequest, type LlmClient, type ProofBundle } from "../src/index.js";
 
 const MODEL = "test/model";
 const tee = Wallet.createRandom();
@@ -215,7 +215,7 @@ describe("walk-away lines", () => {
 /** In-memory stand-in for the bazaar contract + RPC. */
 function fakeChain(opts: { openDelayMs?: number } = {}) {
   const haggles = new Map<string, OnchainHaggle>();
-  const txs = new Map<string, number>();
+  const txs = new Map<string, TxInfo>();
   let n = 0;
   const ledger: Ledger = {
     network: "testnet",
@@ -224,13 +224,21 @@ function fakeChain(opts: { openDelayMs?: number } = {}) {
     async open(a) {
       haggles.set(a.haggleId, { player: a.player, side: a.side, grudge: a.grudge, loyalty: a.loyalty, merchant_id: a.merchantId, good_id: a.goodId, commitment: a.commitment, opened_block: 1, status: "open", price: null, secret: null, salt: null });
       const tx = `tx${n++}`;
-      txs.set(tx, Date.now() + (opts.openDelayMs ?? 0));
+      txs.set(tx, {
+        blockTimeMs: Date.now() + (opts.openDelayMs ?? 0),
+        signerId: "server.test",
+        receiverId: "bazaar.test",
+        calls: [{ method: "open_haggle", args: { haggle_id: a.haggleId, commitment: a.commitment, player: a.player } }],
+        ok: true,
+      });
       return tx;
     },
     async close(a) {
       const h = haggles.get(a.haggleId)!;
       Object.assign(h, { status: a.dealPrice === null ? "no_deal" : "deal", price: a.dealPrice, secret: { ...a.secret }, salt: a.salt });
-      return `tx${n++}`;
+      const tx = `tx${n++}`;
+      txs.set(tx, { blockTimeMs: Date.now(), signerId: "server.test", receiverId: "bazaar.test", calls: [{ method: "close_haggle", args: { haggle_id: a.haggleId } }], ok: true });
+      return tx;
     },
   };
   const reader: ChainReader = {
@@ -238,10 +246,10 @@ function fakeChain(opts: { openDelayMs?: number } = {}) {
       return haggles.get(id) ?? null;
     },
     async txInfo(_n, hash) {
-      return { blockTimeMs: txs.get(hash)!, signerId: "server.test", receiverId: "bazaar.test" };
+      return txs.get(hash)!;
     },
   };
-  return { ledger, reader, haggles };
+  return { ledger, reader, haggles, txs };
 }
 
 async function playOnchain(lines: string[], chain = fakeChain()) {
@@ -270,6 +278,24 @@ describe("onchain commit + settle", () => {
   it("detects a commitment posted after the merchant started talking", async () => {
     const { b, chain } = await playOnchain(["10", "take"], fakeChain({ openDelayMs: 60_000 }));
     expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok).map((c) => c.id)).toContain("chain.order");
+  });
+
+  it("detects an openTx that isn't this haggle's own open_haggle", async () => {
+    // Point the bundle at an earlier, real server-to-contract transaction: another haggle's open.
+    const chain = fakeChain();
+    const other = await playOnchain(["10", "take"], chain);
+    const { b } = await playOnchain(["10", "take"], chain);
+    const failed = (bundle: ProofBundle) => verifyBundle(bundle, { ...opts, chain: chain.reader }).then((cs) => cs.filter((c) => !c.ok).map((c) => c.id));
+    expect(await failed(b)).toEqual([]);
+    expect(await failed({ ...b, chain: { ...b.chain!, openTx: other.b.chain!.openTx } })).toContain("chain.opentx");
+    // ...or at this haggle's own close.
+    expect(await failed({ ...b, chain: { ...b.chain!, openTx: b.chain!.closeTx! } })).toContain("chain.opentx");
+  });
+
+  it("detects an open_haggle transaction that failed", async () => {
+    const { b, chain } = await playOnchain(["10", "take"]);
+    chain.txs.get(b.chain!.openTx)!.ok = false;
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok).map((c) => c.id)).toContain("chain.opentx");
   });
 
   it("detects a bundle whose reveal differs from the onchain one", async () => {
