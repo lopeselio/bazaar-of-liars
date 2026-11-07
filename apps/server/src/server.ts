@@ -679,7 +679,7 @@ createServer(async (req, res) => {
   try {
     const body: Record<string, unknown> = req.method === "POST" && url.startsWith("/api/") ? await readJson(req) : {};
     guardPlayer(body.player, authed);
-    if (req.method === "GET" && url === "/api/auth/config") return send(res, 200, { domain: auth.domain, clientId: auth.clientId });
+    if (req.method === "GET" && url === "/api/auth/config") return send(res, 200, { domain: auth.domain, clientId: auth.clientId, origins: auth.origins });
     if (req.method === "POST" && url === "/api/auth/session") return send(res, 200, await startSession(body));
     if (req.method === "POST" && url === "/api/auth/link") return send(res, 200, await linkGuest(body, authed));
     if (req.method === "GET" && url === "/api/merchants")

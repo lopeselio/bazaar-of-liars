@@ -24,6 +24,11 @@ export interface AuthConfig {
   rpc: string;
   sessionSecret: Buffer;
   sessionTtlMs: number;
+  /**
+   * Origins the Auth0 client lets sign in (its allowed callback URLs). NEAR Auth's shared testnet
+   * client only allows http://localhost:3000; a hosted domain needs NEAR Auth to add it.
+   */
+  origins: string[];
 }
 
 export const NEAR_AUTH_TESTNET = {
@@ -45,6 +50,7 @@ export function authFromEnv(env = process.env): AuthConfig {
     rpc: env.NEAR_AUTH_RPC ?? NEAR_AUTH_TESTNET.rpc,
     sessionSecret: secret ? Buffer.from(secret) : randomBytes(32),
     sessionTtlMs: 30 * 24 * 3_600_000,
+    origins: (env.NEAR_AUTH_ORIGINS ?? "http://localhost:3000").split(",").map((o) => o.trim()).filter(Boolean),
   };
 }
 
