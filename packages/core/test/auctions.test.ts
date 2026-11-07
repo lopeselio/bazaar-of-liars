@@ -26,5 +26,8 @@ describe("cargo ship auctions", () => {
     expect(agentBid({ kind: "merchant", sells: "rug", stock: 0, coins: 1000, capLeft: 400 }, lot, rng)).toBeNull();
     expect(agentBid({ kind: "merchant", sells: "saffron", stock: 9, coins: 1000, capLeft: 400 }, lot, rng)).toBeNull();
     expect(agentBid({ kind: "runner", stock: 0, coins: 1000, capLeft: 400 }, lot, rng)).toBeNull();
+    // Headroom for a deposit above the bid.
+    const tight = agentBid({ kind: "wholesaler", stock: 0, coins: 1000, capLeft: 130 }, lot, mulberry32(1));
+    expect(tight).toBe(110);
   });
 });

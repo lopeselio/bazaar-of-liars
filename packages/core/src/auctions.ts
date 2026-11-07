@@ -55,7 +55,9 @@ export function agentBid(
   if (a.kind === "merchant" && (a.sells !== lot.goodId || a.stock > 3)) return null;
   if (a.kind === "trader" && rng() < 0.5) return null;
   const value = Math.round(lot.baseValue * lot.qty * share * (0.9 + 0.15 * rng()));
-  const budget = Math.min(a.coins, a.capLeft);
+  // Keep headroom under the purse and cap, so the deposit can round up past the bid instead of
+  // equalling it (a deposit equal to the bid would give the bid away).
+  const budget = Math.floor(Math.min(a.coins, a.capLeft) * 0.85);
   const bid = Math.min(value, budget);
   return bid >= lot.reserve ? bid : null;
 }
