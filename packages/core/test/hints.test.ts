@@ -13,7 +13,14 @@ describe("haggle hints", () => {
   });
   it("warns about the mood when an irritated merchant got a far-off offer", () => {
     expect(haggleHint({ ...base, askAfter: 90, tell: "irritated" })).toMatch(/losing patience/);
-    expect(haggleHint({ ...base, offer: 85, askAfter: 99, tell: "irritated" })).toMatch(/barely moved/);
+    expect(haggleHint({ ...base, offer: 85, askAfter: 99, tell: "irritated" })).toMatch(/barely moved \(1 coin\)\. Hold your price/);
+  });
+  it("says nothing when the merchant looks firm (near its limit, so not budging is honest)", () => {
+    expect(haggleHint({ ...base, askAfter: 100, tell: "firm" })).toBeNull();
+  });
+  it("handles a missing tell and an irritated buyer", () => {
+    expect(haggleHint({ ...base, askAfter: 99, tell: null })).toMatch(/barely moved/);
+    expect(haggleHint({ side: "buy", askBefore: 30, offer: 60, askAfter: 33, tell: "irritated", name: "Zaria" })).toMatch(/losing patience/);
   });
   it("mirrors for a player selling to a buying merchant", () => {
     const sell = { side: "buy" as const, askBefore: 30, offer: 60, tell: "relaxed" as const, name: "Zaria" };
