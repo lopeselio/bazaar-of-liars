@@ -13,7 +13,7 @@
 import { Near } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
 import type { MerchantSecret, StreetEvent, TipClaim } from "@bazaar/core";
-import { installRpcFailover, primaryRpc, type DeedCertificate, type Network } from "@bazaar/verify";
+import { archivalRpcUrls, installRpcFailover, primaryRpc, type DeedCertificate, type Network } from "@bazaar/verify";
 
 export type { Network };
 
@@ -255,16 +255,39 @@ export interface ChainReader {
   txInfo(network: Network, txHash: string, signerId: string): Promise<{ blockTimeMs: number; signerId: string; receiverId: string }>;
 }
 
-async function rpc<T>(network: Network, method: string, params: unknown): Promise<T> {
-  const res = await fetch(RPC[network], {
+/** Errors that mean "this node no longer has it": ask an archival node instead. */
+const PRUNED = new Set(["UNKNOWN_TRANSACTION", "UNKNOWN_BLOCK", "GARBAGE_COLLECTED_BLOCK", "TIMEOUT_ERROR"]);
+
+async function rpcAt<T>(url: string, method: string, params: unknown): Promise<T> {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: "bazaar", method, params }),
   });
-  const j = (await res.json()) as { result?: T; error?: { message?: string; cause?: { name?: string } } };
-  if (!j.result) throw new Error(`${method}: ${j.error?.cause?.name ?? j.error?.message ?? res.status}`);
+  const j = (await res.json().catch(() => ({}))) as { result?: T; error?: { message?: string; cause?: { name?: string } } };
+  if (!j.result) throw Object.assign(new Error(`${method}: ${j.error?.cause?.name ?? j.error?.message ?? res.status}`), { cause: j.error?.cause?.name });
   return j.result;
 }
+
+/** A keyless read: the regular RPC first, then archival nodes for history it has pruned. */
+async function rpc<T>(network: Network, method: string, params: unknown): Promise<T> {
+  try {
+    return await rpcAt<T>(RPC[network], method, params);
+  } catch (e) {
+    if (!PRUNED.has(String((e as Error & { cause?: unknown }).cause))) throw e;
+    let last = e;
+    for (const url of archivalRpcUrls(network)) {
+      try {
+        return await rpcAt<T>(url, method, params);
+      } catch (err) {
+        last = err;
+      }
+    }
+    throw last;
+  }
+}
+
+type TxResult = { transaction: { signer_id: string; receiver_id: string }; transaction_outcome?: { block_hash: string } };
 
 export const nearReader: ChainReader = {
   async getHaggle(network, contractId, haggleId) {
@@ -272,11 +295,11 @@ export const nearReader: ChainReader = {
     return (await near.view<OnchainHaggle | null>(contractId, "get_haggle", { haggle_id: haggleId })) ?? null;
   },
   async txInfo(network, txHash, signerId) {
-    const tx = await rpc<{ transaction: { signer_id: string; receiver_id: string }; transaction_outcome: { block_hash: string } }>(
-      network,
-      "tx",
-      { tx_hash: txHash, sender_account_id: signerId, wait_until: "EXECUTED_OPTIMISTIC" },
-    );
+    // Don't wait: a node asked to wait for a transaction it has pruned waits until it times out.
+    // A transaction still executing has no outcome yet; only then wait for it.
+    let tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "NONE" });
+    if (!tx.transaction_outcome) tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "EXECUTED_OPTIMISTIC" });
+    if (!tx.transaction_outcome) throw new Error("tx: no outcome yet");
     const block = await rpc<{ header: { timestamp_nanosec: string } }>(network, "block", { block_id: tx.transaction_outcome.block_hash });
     return {
       blockTimeMs: Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n),
