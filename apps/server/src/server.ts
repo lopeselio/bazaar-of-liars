@@ -19,6 +19,8 @@
  *   GET  /api/auctions?player=…         the cargo ship lot at Pier 34 (sealed bids) and recent results
  *   POST /api/auctions/:id/bid {player,commitment,deposit,x,z}  seal a bid (hashed in the browser)
  *   POST /api/auctions/:id/reveal {player,amount,salt}           open it once bidding closes
+ *   GET  /api/rumours?player=…          informants, their onchain records of truths and lies, and your tips
+ *   POST /api/rumours/:informant/buy {player,x,z}  buy a tip (only its hash goes onchain)
  *   GET  /api/auth/config               the NEAR Auth (Auth0) tenant the browser signs in with
  *   POST /api/auth/session {idToken}    verify a NEAR Auth login; returns the player's NEAR account + session
  *   POST /api/auth/link {guest}         (signed in) bring a guest's progress to the account
@@ -35,7 +37,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -50,6 +52,8 @@ import {
   nearAiAttestor,
   readPlayer,
   readCred,
+  readInformants,
+  readTips,
   agentSignersFromEnv,
   verifyBundle,
   type Ledger,
@@ -404,6 +408,107 @@ async function auctionAction(id: string, action: string, body: Record<string, un
   market.invalidate();
   const [auctions, me] = await Promise.all([auctionsView(player).catch(() => null), playerView(player).catch(() => null)]);
   return { ok: true, txUrl: explorerTx(ledger.network, tx), auctions, player: me };
+}
+
+// ---------- the rumour network ----------
+
+const tipRng = mulberry32(Date.now() % 2 ** 31);
+
+async function rumoursView(player: string, authed: string | null) {
+  // A NEAR account's tips are only shown to that account's session.
+  const owner = !isAccountPlayer(player) || authed === player;
+  const records = ledger ? await readInformants(ledger.network, ledger.contractId, INFORMANTS.map((i) => i.id)).catch(() => []) : [];
+  const informants = INFORMANTS.map((i) => {
+    const r = records.find((x) => x.id === i.id) ?? { sold: 0, truths: 0, lies: 0, hidden: 0 };
+    // Honesty stays secret: the record is all anyone gets.
+    return { id: i.id, name: i.name, where: i.where, x: i.x, z: i.z, price: i.price, sold: r.sold, truths: r.truths, lies: r.lies, hidden: r.hidden };
+  });
+  let tips: unknown[] = [];
+  if (ledger && PLAYER_RE.test(player)) {
+    const mine = await readTips(ledger.network, ledger.contractId, player).catch(() => []);
+    tips = await Promise.all(
+      mine.map(async (t) => {
+        const secret = market ? await market.tipSecret(t.id) : null;
+        return {
+          id: t.id,
+          informant: informantById(t.informant)?.name ?? t.informant,
+          price: t.price,
+          checkMs: t.check_ms,
+          status: t.status,
+          // The buyer sees what they were told; everyone else only sees it once it resolves.
+          text: owner && secret?.player === player ? secret.text : null,
+          plain: t.claim ? describeClaim(t.claim) : owner && secret?.player === player ? describeClaim(secret.claim) : null,
+          observed: t.observed,
+          commitment: t.commitment,
+        };
+      }),
+    );
+  }
+  return { informants, tips, reach: INFORMANT_REACH };
+}
+
+function describeClaim(c: { agent_id: string; good_id: string; at_most: boolean; n: number }) {
+  const m = MERCHANTS.find((x) => x.id === c.agent_id);
+  const good = GOODS[c.good_id];
+  return plainClaim(c, { merchant: m?.name ?? c.agent_id, good: good ? good.name : c.good_id, sells: m?.goodId === c.good_id });
+}
+
+/** The informant puts the claim in their own words, with the private model; the facts are fixed. */
+async function whisper(inf: (typeof INFORMANTS)[number], plain: string): Promise<string> {
+  if (!KEY || !MODEL) return plain;
+  try {
+    const { content } = await llm.complete(
+      {
+        model: MODEL,
+        messages: [
+          { role: "system", content: `You are ${inf.name}, ${inf.voice}, an informant in New York's Chinatown. Whisper the tip you're given to the player in one or two short sentences, in character. Keep every fact exactly as given: the merchant, the good, the number, and "at most" vs "at least". Don't add facts. No stage directions.` },
+          { role: "user", content: `The tip: ${plain}` },
+        ],
+        max_tokens: 120,
+        temperature: 0.8,
+        chat_template_kwargs: { enable_thinking: false },
+      },
+      8000,
+    );
+    const text = content.trim().replace(/^"|"$/g, "");
+    return text.length > 10 && text.length < 500 ? text : plain;
+  } catch {
+    return plain;
+  }
+}
+
+async function buyTip(informantId: string, body: Record<string, unknown>) {
+  if (!market || !ledger?.sellTip) throw new HttpError(404, "rumours need the agent economy");
+  const inf = informantById(informantId);
+  if (!inf) throw new HttpError(404, "no such informant");
+  const player = String(body.player ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
+  if (Math.hypot(num(body.x) - inf.x, num(body.z) - inf.z) > INFORMANT_REACH) throw new HttpError(409, `Find ${inf.name} at ${inf.where} first.`);
+  const p = await purse(player);
+  if (!p.known) throw new HttpError(409, "Make your first deal on Canal Street before buying tips.");
+  if (p.coins < inf.price) throw new HttpError(402, `${inf.name} wants ${inf.price} coins; you have ${p.coins}.`);
+  const agents = await market.agents(0);
+  const stock = MERCHANTS.map((m) => {
+    const a = agents.find((x) => x.id === m.id);
+    return { id: m.id, sells: m.goodId, sellsStock: a?.stock[m.goodId] ?? 0, buys: m.buysGoodId, buysStock: a?.stock[m.buysGoodId] ?? 0 };
+  });
+  const { claim } = makeClaim(tipRng, inf, stock);
+  const id = `tip-${Date.now().toString(36)}-${randomInt(1e6).toString(36)}`;
+  const salt = freshSalt();
+  const checkMs = Date.now() + TIP_HORIZON_MS;
+  const plain = describeClaim(claim);
+  let tx: string;
+  try {
+    tx = await ledger.sellTip({ tipId: id, informant: inf.id, player, commitment: tipCommitment(id, inf.id, claim, checkMs, salt), price: inf.price, checkMs });
+  } catch (e) {
+    const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
+    throw new HttpError(409, m ? sentence(m[1]) : `${inf.name} clams up. Try again.`);
+  }
+  const text = await whisper(inf, plain);
+  await market.rememberTip({ id, informant: inf.id, player, claim, salt, checkMs, text });
+  market.invalidate();
+  await store.pushNews({ t: Date.now(), kind: "rumour", text: `${inf.name} sold a player a tip`, tx: explorerTx(ledger.network, tx), agents: [] }).catch(() => {});
+  return { tip: { id, informant: inf.name, text, plain, checkMs, price: inf.price }, txUrl: explorerTx(ledger.network, tx), player: await playerView(player).catch(() => null) };
 }
 
 // ---------- player stalls ----------
@@ -803,6 +908,9 @@ createServer(async (req, res) => {
       return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
     }
     if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(body));
+    if (req.method === "GET" && url.startsWith("/api/rumours")) return send(res, 200, await rumoursView(new URL(url, "http://x").searchParams.get("player") ?? "", authed));
+    const rm = url.match(/^\/api\/rumours\/([a-z0-9_-]{1,64})\/buy$/);
+    if (req.method === "POST" && rm) return send(res, 200, await buyTip(rm[1], body));
     if (req.method === "GET" && url.startsWith("/api/auctions")) return send(res, 200, await auctionsView(new URL(url, "http://x").searchParams.get("player") ?? ""));
     const am = url.match(/^\/api\/auctions\/([a-z0-9_-]{1,64})\/(bid|reveal)$/);
     if (req.method === "POST" && am) return send(res, 200, await auctionAction(am[1], am[2], body));
