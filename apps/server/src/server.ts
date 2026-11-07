@@ -23,6 +23,7 @@
  *   POST /api/rumours/:informant/buy {player,x,z}  buy a tip (only its hash goes onchain)
  *   GET  /api/boards                    price boards across the city (live prices) and the best route
  *   POST /api/boards/:id/trade {player,goodId,x,z}  buy one at Wu's docks board, or sell one to a buyer uptown
+ *   GET  /api/event?player=…           the current street event (festival, shortage, raid), and what a raid took from you
  *   GET  /api/auth/config               the NEAR Auth (Auth0) tenant the browser signs in with
  *   POST /api/auth/session {idToken}    verify a NEAR Auth login; returns the player's NEAR account + session
  *   POST /api/auth/link {guest}         (signed in) bring a guest's progress to the account
@@ -39,7 +40,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -518,10 +519,12 @@ async function buyTip(informantId: string, body: Record<string, unknown>) {
 
 // ---------- price boards and trade routes ----------
 
+const priced = (p: number | null, m: number) => (p === null ? null : Math.round(p * m));
+
 /** Every board with its live prices: Wu's from her stock and cost, buyers' from distance and how much they've bought today. */
 async function pricedBoards(): Promise<(PricedBoard & { stock: Record<string, number> })[]> {
   if (!market) return [];
-  const agents = await market.agents();
+  const [agents, event] = await Promise.all([market.agents(), market.event()]);
   return Promise.all(
     BOARDS.map(async (b) => {
       const a = agents.find((x) => x.id === b.agentId);
@@ -531,8 +534,8 @@ async function pricedBoards(): Promise<(PricedBoard & { stock: Record<string, nu
         prices[g] =
           b.kind === "sells"
             ? // costBasis is rounded to whole coins; the half covers the rounding, so the contract's no-loss check passes.
-              askPrice(base, a?.stock[g] ?? 0, (a?.costBasis[g] ?? 0) + 0.5)
-            : bidPrice(base, b, await store.count(`board:${b.id}:${g}`));
+              priced(askPrice(base, a?.stock[g] ?? 0, (a?.costBasis[g] ?? 0) + 0.5), askMultiplier(event, g))
+            : priced(bidPrice(base, b, await store.count(`board:${b.id}:${g}`)), bidMultiplier(event, g));
       }
       return { ...b, prices, stock: Object.fromEntries(b.goods.map((g) => [g, a?.stock[g] ?? 0])) };
     }),
@@ -603,6 +606,46 @@ async function settleBoardTrade(board: NonNullable<ReturnType<typeof boardById>>
     .pushNews({ t: Date.now(), kind: "route", text: board.kind === "sells" ? `A player bought ${good} off Auntie Wu's board for ${price}` : `A player sold ${good} to ${board.name} (${board.district}) for ${price}`, tx: explorerTx(ledger.network, tx), agents: [board.agentId] })
     .catch(() => {});
   return { ok: true, price, txUrl: explorerTx(ledger.network, tx), boards: await boardsView().catch(() => null), player: await playerView(player).catch(() => null) };
+}
+
+// ---------- street events ----------
+
+async function eventView(player: string) {
+  const e = market ? await market.event() : null;
+  const seized = e && PLAYER_RE.test(player) ? await store.getJSON<number>(`seized:${e.id}:${player}`) : null;
+  return {
+    event: e,
+    active: eventActive(e),
+    headline: e ? eventHeadline(e, (g) => GOODS[g]?.name ?? g) : null,
+    raidLimit: RAID_LIMIT,
+    // Whether this player has been inspected in the current raid, and what was taken.
+    seized,
+  };
+}
+
+/** During a raid, an unlicensed player who haggles on Canal Street is inspected (once per raid). */
+async function raidCheck(player: string, goods: Record<string, number>) {
+  if (!market || !ledger?.inspect) return null;
+  const e = await market.event();
+  if (!eventActive(e) || e.kind !== "raid") return null;
+  if ((await store.getJSON<number>(`seized:${e.id}:${player}`)) !== null) return null;
+  // Contract decides (it knows about licences); this only skips a pointless call.
+  if (raidSeizes(goods) === 0) {
+    await store.putJSON(`seized:${e.id}:${player}`, 0, 3_600_000);
+    return null;
+  }
+  try {
+    const tx = await ledger.inspect({ player, goodIds: GOOD_IDS });
+    market.invalidate();
+    const after = await purse(player);
+    const taken = GOOD_IDS.reduce((n, g) => n + Math.max(0, (goods[g] ?? 0) - (after.goods[g] ?? 0)), 0);
+    await store.putJSON(`seized:${e.id}:${player}`, taken, 3_600_000);
+    if (taken) await store.pushNews({ t: Date.now(), kind: "event", text: `Inspectors seized ${taken} goods from an unlicensed trader on Canal Street`, tx: explorerTx(ledger.network, tx), agents: [] }).catch(() => {});
+    return taken;
+  } catch (e) {
+    console.error("inspect:", (e as Error).message);
+    return null;
+  }
 }
 
 // ---------- player stalls ----------
@@ -835,6 +878,10 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
     );
 
   const me = await playerView(player);
+  // Inspectors on Canal Street: carrying too much without a licence costs you the excess.
+  const seized = await raidCheck(player, me.goods);
+  if (seized)
+    throw new HttpError(409, `🚨 Inspectors stopped you on Canal Street and seized ${seized} goods (anything over ${RAID_LIMIT} of a kind, without a stall licence). Haggle again when you're ready.`);
   if (me.day.left <= 0) throw new HttpError(409, "The sun has set on this market day. Start the next day to keep trading.");
   const goodId = side === "sell" ? merchant.goodId : merchant.buysGoodId;
   if (side === "sell" && me.coins <= 0) throw new HttpError(402, "Your purse is empty.");
@@ -1002,6 +1049,7 @@ createServer(async (req, res) => {
       return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
     }
     if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(body));
+    if (req.method === "GET" && url.startsWith("/api/event")) return send(res, 200, await eventView(new URL(url, "http://x").searchParams.get("player") ?? ""));
     if (req.method === "GET" && url === "/api/boards") return send(res, 200, await boardsView());
     const bm = url.match(/^\/api\/boards\/([a-z0-9_-]{1,64})\/trade$/);
     if (req.method === "POST" && bm) return send(res, 200, await boardTrade(bm[1], body));
