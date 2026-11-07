@@ -14,8 +14,9 @@
  *   POST /api/orders/:id/deliver {player,x,z,mode}  hand it over at the drop site
  *   GET  /api/stalls?player=…&visit=1   the stall slots, and the player's own stall (with what it
  *                                       earned since their last visit)
- *   POST /api/stalls/{licence|stock|withdraw|collect|list|unlist|buydeed} {player,…}  run your own
- *                                       stall; list, unlist or buy a stall's deed (a NEP-171 NFT)
+ *   POST /api/stalls/{licence|stock|withdraw|collect|list|unlist|buydeed|certify} {player,…}  run your
+ *                                       own stall; list, unlist or buy a stall's deed (a NEP-171 NFT);
+ *                                       certify your deed on Ethereum (an MPC Chain Signature)
  *   POST /api/dockwork {player,x,z}     a broke player works a shift at Pier 34 for the wholesaler
  *   GET  /api/auctions?player=…         the cargo ship lot at Pier 34 (sealed bids) and recent results
  *   POST /api/auctions/:id/bid {player,commitment,deposit,x,z}  seal a bid (hashed in the browser)
@@ -45,6 +46,7 @@ import { AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHea
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
+import { checkDeedCertificate, deedSignerAddress } from "@bazaar/verify";
 import {
   HaggleSession,
   NearAiClient,
@@ -58,6 +60,7 @@ import {
   readCred,
   readInformants,
   readTips,
+  readDeedCertificate,
   agentSignersFromEnv,
   verifyBundle,
   type Ledger,
@@ -674,8 +677,28 @@ async function stallsView(player: string, visit: boolean) {
     if (seen && (own.sold > seen.sold || own.earned > seen.earned)) away = { sold: own.sold - seen.sold, earned: own.earned - seen.earned };
     await store.putJSON(`stallSeen:${player}`, { sold: own.sold, earned: own.earned }, 90 * 24 * 3_600_000);
   }
-  const mine = own ? { ...own, ask: askOf(own.slot), suggestedAsk: suggestedAsk(own.earned), deedUrl: deedUrl(own.slot) } : null;
+  const mine = own ? { ...own, ask: askOf(own.slot), suggestedAsk: suggestedAsk(own.earned), deedUrl: deedUrl(own.slot), certificate: await deedCertificate(own.slot, own.owner) } : null;
   return { slots, mine, away, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL, ...deedTerms };
+}
+
+/** The bazaar's Ethereum address, derived from NEAR's MPC key for the contract (fixed, so read once). */
+let deedSigner: Promise<{ signer: string; path: string; ethAddress: string }> | null = null;
+function bazaarEth() {
+  if (!ledger) return Promise.resolve(null);
+  deedSigner ??= deedSignerAddress(ledger.network, ledger.contractId).catch((e) => {
+    deedSigner = null;
+    throw e;
+  });
+  return deedSigner.catch(() => null);
+}
+
+/** A deed's Ethereum certificate, if it names the current owner, with our own check of it. */
+async function deedCertificate(slot: string, owner: string) {
+  if (!ledger) return null;
+  const [cert, eth] = await Promise.all([readDeedCertificate(ledger.network, ledger.contractId, slot).catch(() => null), bazaarEth()]);
+  if (!cert || cert.owner !== owner || !eth) return null;
+  const verified = checkDeedCertificate(cert, { contractId: ledger.contractId, ethAddress: eth.ethAddress }).every((c) => c.ok);
+  return { ...cert, ethAddress: eth.ethAddress, signer: eth.signer, path: eth.path, verified };
 }
 
 /** The deed's page on the explorer (it's a NEP-171 token of the game contract). */
@@ -717,6 +740,16 @@ async function stallAction(action: string, body: Record<string, unknown>) {
     } else if (action === "unlist") {
       if (!ledger.unlistDeed) throw new HttpError(404, "the deed market isn't open");
       tx = await ledger.unlistDeed(player);
+    } else if (action === "certify") {
+      if (!ledger.certifyDeed) throw new HttpError(404, "deed certificates aren't available");
+      const own = (await market.stalls(0)).find((s) => s.owner === player);
+      if (!own) throw new HttpError(409, "You don't have a stall.");
+      // Each signature costs the server gas; one per player every few minutes is plenty.
+      const key = `certify:${player}`;
+      if (await store.getJSON(key)) throw new HttpError(429, "Your deed was certified a moment ago. Try again in a few minutes.");
+      await store.putJSON(key, 1, 5 * 60_000);
+      tx = await ledger.certifyDeed(own.slot);
+      news = `A stall deed on Canal Street (${own.slot}) was certified on Ethereum by NEAR's MPC network`;
     } else if (action === "buydeed") {
       if (!ledger.buyDeed) throw new HttpError(404, "the deed market isn't open");
       const [stalls, asks] = await Promise.all([market.stalls(0), market.deedAsks(0)]);
@@ -1090,7 +1123,7 @@ createServer(async (req, res) => {
     if (req.method === "GET" && url.startsWith("/api/auctions")) return send(res, 200, await auctionsView(new URL(url, "http://x").searchParams.get("player") ?? ""));
     const am = url.match(/^\/api\/auctions\/([a-z0-9_-]{1,64})\/(bid|reveal)$/);
     if (req.method === "POST" && am) return send(res, 200, await auctionAction(am[1], am[2], body));
-    const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect|list|unlist|buydeed)$/);
+    const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect|list|unlist|buydeed|certify)$/);
     if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], body));
     const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
     if (req.method === "POST" && om) return send(res, 200, await (om[2] === "take" ? takeOrder : deliverOrder)(om[1], body));
