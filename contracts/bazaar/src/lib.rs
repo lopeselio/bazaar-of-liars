@@ -77,6 +77,12 @@
 //! (`informants`). A tip never revealed can be expired by anyone: refunded, and counted against
 //! the informant. Raw "x:" storage again, so no migration.
 //!
+//! ## Price boards across the city (v3.9)
+//! Auntie Wu posts sell prices at the docks; customers uptown post buy prices outside their
+//! doors. `buy_from_board` sells a player one unit at the posted price, never below what the stock
+//! cost the agent. `sell_to_board` buys one unit from a player at exactly the price the buying
+//! agent signed for with `authorize_spend`. Buy cheap at the docks, carry it uptown, sell dear.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -1536,6 +1542,43 @@ impl Bazaar {
         ids.iter().take(32).map(|id| self.informant_record(id)).collect()
     }
 
+    // ---------- price boards across the city (v3.9) ----------
+
+    /// Server, for a player: buy one unit at a merchant's or the wholesaler's posted price.
+    /// The no-loss rule holds here too: never below what the agent's stock cost it.
+    pub fn buy_from_board(&mut self, player: AccountId, agent_id: String, good_id: String, price: u64) {
+        self.require_server();
+        let a = self.agent(&agent_id);
+        require!(matches!(a.kind, AgentKind::Merchant | AgentKind::Wholesaler), "only merchants and the wholesaler post sell prices");
+        require!(self.agent_of(&player).is_none(), "agents don't trade at boards");
+        require!((1..=u64::from(MAX_STALL_PRICE)).contains(&price), "price must be 1..=500");
+        let basis = self.cost_basis.get(&goods_key(&a.account, &good_id)).copied().unwrap_or(0);
+        require!(price * 100 >= basis, "that price is below what the stock cost");
+        self.add_coins(&player, -(price as i64));
+        self.add_coins(&a.account, price as i64);
+        self.move_goods(&a.account, &player, &good_id, 1, "board sale");
+        emit("board_trade", json!({ "player": player, "agent": agent_id, "good_id": good_id, "side": "player_buys", "price": price }));
+    }
+
+    /// Server: an agent buys one unit from a player at its posted price. The agent signed
+    /// `authorize_spend(sale_id, price)` first; the price is exactly what it signed for.
+    pub fn sell_to_board(&mut self, sale_id: String, player: AccountId, good_id: String) {
+        self.require_server();
+        let auth = self.auths.remove(&sale_id).unwrap_or_else(|| env::panic_str("the agent hasn't authorized this purchase"));
+        let a = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("only agents buy at boards"));
+        require!(matches!(a.kind, AgentKind::Customer | AgentKind::Merchant), "only customers and merchants post buy prices");
+        require!(self.agent_of(&player).is_none(), "agents don't trade at boards");
+        let price = auth.max;
+        self.move_goods(&player, &auth.agent, &good_id, 1, "board purchase");
+        self.add_coins(&auth.agent, -(price as i64));
+        self.add_coins(&player, price as i64);
+        let key = goods_key(&auth.agent, &good_id);
+        let held = u64::from(self.goods_of(auth.agent.clone(), good_id.clone()));
+        let old = self.cost_basis.get(&key).copied().unwrap_or(0);
+        self.cost_basis.insert(key, (old * (held - 1) + price * 100) / held);
+        emit("board_trade", json!({ "sale_id": sale_id, "player": player, "agent": a.id, "good_id": good_id, "side": "player_sells", "price": price }));
+    }
+
     // ---------- haggles ----------
 
     /// Post the commitment. Must happen before the first message.
@@ -2985,5 +3028,51 @@ mod tests {
         assert_eq!(c.coins_of(player()), 120 - 60, "no refund");
         let rec = &c.informants(vec!["vex".into()])[0];
         assert_eq!((rec.truths, rec.lies), (0, 0));
+    }
+
+    // ---------- price boards ----------
+
+    #[test]
+    fn a_player_buys_at_the_docks_board_and_sells_uptown() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1"); // 140 coins, 1 rug
+        // Wu's rugs cost her nothing (opening stock), so any price is above cost.
+        c.buy_from_board(player(), "wu".into(), "rug".into(), 45);
+        assert_eq!((c.coins_of(player()), c.goods_of(player(), "rug".into())), (95, 2));
+        ctx("deli.testnet", 100);
+        c.authorize_spend("q-1".into(), 80);
+        ctx("server.testnet", 100);
+        c.sell_to_board("q-1".into(), player(), "rug".into());
+        assert_eq!((c.coins_of(player()), c.goods_of(player(), "rug".into())), (175, 1));
+        assert_eq!(c.goods_of(acc("deli.testnet"), "rug".into()), 1);
+        assert_eq!(c.coins_of(acc("deli.testnet")), 120);
+        assert_eq!(c.mt_supply("rug".into()), Some(U128(103)));
+    }
+
+    #[test]
+    #[should_panic(expected = "below what the stock cost")]
+    fn a_board_never_sells_below_cost() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        // Farrukh's rugs cost 40 each.
+        c.buy_from_board(player(), "farrukh".into(), "rug".into(), 39);
+    }
+
+    #[test]
+    #[should_panic(expected = "hasn't authorized this purchase")]
+    fn the_server_cannot_spend_a_customers_coins_at_a_board() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        c.sell_to_board("q-1".into(), player(), "rug".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "player doesn't have that good")]
+    fn you_cannot_sell_what_you_dont_have_at_a_board() {
+        let mut c = setup();
+        ctx("deli.testnet", 100);
+        c.authorize_spend("q-1".into(), 80);
+        ctx("server.testnet", 100);
+        c.sell_to_board("q-1".into(), player(), "saffron".into());
     }
 }
