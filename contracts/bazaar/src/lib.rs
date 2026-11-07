@@ -90,6 +90,14 @@
 //! (burns) whatever an unlicensed player holds above 5 of any good, once per raid; a stall
 //! licence exempts you. The agents react in the server's market loop.
 //!
+//! ## Property deeds (v3.11)
+//! Each stall licence is a NEP-171 NFT, the deed to its slot (token id = slot, e.g. "corner-1"),
+//! with NEP-177 metadata and NEP-181 enumeration, so wallets show it. Buying a licence mints the
+//! deed; giving the stall up burns it. The owner can `nft_transfer` it from a wallet, or list it on
+//! the game's deed market (`list_deed`); `buy_deed` pays the asking price, less a 5% tax burned.
+//! When a deed changes hands the stall's stock and till go home with the old owner, and nobody
+//! holds two stalls. Asks live under raw "x:deedask:" keys, so no migration.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -101,6 +109,12 @@ use near_sdk::{AccountId, BorshStorageKey, Gas, PanicOnDefault, PromiseError, Pr
 #[ext_contract(ext_mt_receiver)]
 pub trait MtReceiver {
     fn mt_on_transfer(&mut self, sender_id: AccountId, previous_owner_ids: Vec<AccountId>, token_ids: Vec<String>, amounts: Vec<U128>, msg: String) -> PromiseOrValue<Vec<U128>>;
+}
+
+/// NEP-171 receiver interface, for `nft_transfer_call`.
+#[ext_contract(ext_nft_receiver)]
+pub trait NftReceiver {
+    fn nft_on_transfer(&mut self, sender_id: AccountId, previous_owner_id: AccountId, token_id: String, msg: String) -> PromiseOrValue<bool>;
 }
 
 const GAS_FOR_RESOLVE: Gas = Gas::from_tgas(15);
@@ -650,6 +664,99 @@ pub struct StreetEvent {
     pub seized: u64,
 }
 
+// ---------- v3.11: property deeds ----------
+
+/// A share of every deed sale, burned to the street.
+pub const DEED_TAX_PCT: u64 = 5;
+pub const MAX_DEED_PRICE: u64 = 5000;
+
+/// NEP-177 token metadata.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TokenMetadata {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub media: Option<String>,
+    pub media_hash: Option<String>,
+    pub copies: Option<u64>,
+    pub issued_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub starts_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub extra: Option<String>,
+    pub reference: Option<String>,
+    pub reference_hash: Option<String>,
+}
+
+/// NEP-171 token: a deed to one stall slot. The token id is the slot.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct NftToken {
+    pub token_id: String,
+    pub owner_id: AccountId,
+    pub metadata: Option<TokenMetadata>,
+    pub approved_account_ids: Option<std::collections::HashMap<AccountId, u64>>,
+}
+
+/// NEP-177 contract metadata.
+#[near(serializers = [json])]
+pub struct NftContractMetadata {
+    pub spec: String,
+    pub name: String,
+    pub symbol: String,
+    pub icon: Option<String>,
+    pub base_uri: Option<String>,
+    pub reference: Option<String>,
+    pub reference_hash: Option<String>,
+}
+
+/// A deed on the market.
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeedAsk {
+    pub slot: String,
+    pub owner: AccountId,
+    pub price: u64,
+}
+
+fn deed_ask_key(slot: &str) -> String {
+    format!("x:deedask:{slot}")
+}
+
+/// NEP-171 event (standard "nep171", version "1.2.0").
+fn nft_event(event: &str, data: near_sdk::serde_json::Value) {
+    let log = json!({ "standard": "nep171", "version": "1.2.0", "event": event, "data": [data] });
+    env::log_str(&format!("EVENT_JSON:{log}"));
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            out.push(if i <= c.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// "corner-1" → "Corner 1".
+fn slot_name(slot: &str) -> String {
+    let s = slot.replace('-', " ");
+    let mut c = s.chars();
+    c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default()
+}
+
+/// The deed's picture: a small parchment, drawn here so it needs no hosting.
+fn deed_svg(slot: &str) -> String {
+    let name = slot_name(slot);
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='rgb(42,26,14)'/><rect x='24' y='24' width='252' height='252' rx='10' fill='rgb(240,224,188)' stroke='rgb(176,120,40)' stroke-width='6'/><text x='150' y='82' font-family='Georgia,serif' font-size='22' text-anchor='middle' fill='rgb(90,46,8)'>DEED</text><text x='150' y='128' font-family='Georgia,serif' font-size='17' text-anchor='middle' fill='rgb(60,40,20)'>A stall on Canal Street</text><text x='150' y='178' font-family='Georgia,serif' font-size='34' font-weight='bold' text-anchor='middle' fill='rgb(140,60,10)'>{name}</text><text x='150' y='236' font-family='Georgia,serif' font-size='13' text-anchor='middle' fill='rgb(90,70,50)'>Bazaar of Liars</text></svg>"
+    );
+    format!("data:image/svg+xml;base64,{}", base64(svg.as_bytes()))
+}
+
 /// sha256 of the canonical preimage, lowercase hex.
 pub fn commitment_of(s: &Secret, salt: &str) -> String {
     let preimage = format!(
@@ -1166,6 +1273,7 @@ impl Bazaar {
         require!(self.coins.contains_key(&from), "nothing to carry over");
         require!(!self.coins.contains_key(&to) && self.cred.get(&to).is_none(), "that account already has progress");
         require!(merchant_ids.len() <= 32 && good_ids.len() <= 16, "too many ids");
+        require!(self.stall_slot_of(&from).is_none() || self.stall_slot_of(&to).is_none(), "that account already has a stall");
         let coins = self.coins_of(from.clone());
         self.coins.remove(&from);
         self.set_coins(&to, coins);
@@ -1187,6 +1295,7 @@ impl Bazaar {
         if let Some(slot) = self.stall_slot_of(&from) {
             let mut st = self.stalls.get(&slot).cloned().unwrap();
             st.owner = to.clone();
+            nft_event("nft_transfer", json!({ "old_owner_id": from, "new_owner_id": to, "token_ids": [slot], "memo": "signed in" }));
             self.stalls.insert(slot, st);
         }
         emit("player_merged", json!({ "from": from, "to": to, "coins": coins }));
@@ -1239,6 +1348,7 @@ impl Bazaar {
         let st = PlayerStall { slot: slot.clone(), owner: player.clone(), listings: vec![], till: 0, sold: 0, earned: 0, opened_ms: env::block_timestamp_ms() };
         self.stalls.insert(slot.clone(), st);
         emit("licence_bought", json!({ "player": player, "slot": slot, "fee": LICENCE_PRICE }));
+        nft_event("nft_mint", json!({ "owner_id": player, "token_ids": [slot], "memo": "licence bought" }));
     }
 
     /// Server, for a stall owner: move goods from their purse onto the stall at a price
@@ -1322,7 +1432,166 @@ impl Bazaar {
         }
         self.add_coins(&player, st.till as i64);
         self.stalls.remove(&st.slot);
+        env::storage_remove(deed_ask_key(&st.slot).as_bytes());
         emit("stall_released", json!({ "player": player, "slot": st.slot }));
+        nft_event("nft_burn", json!({ "owner_id": player, "token_ids": [st.slot], "memo": "stall given up" }));
+    }
+
+    // ---------- property deeds (v3.11) ----------
+
+    /// The deed to a stall changes hands. The stall's stock and till go home with the old owner;
+    /// the new owner gets the slot, empty. Any asking price is taken down.
+    fn hand_over_deed(&mut self, slot: &str, to: &AccountId, memo: &str) {
+        let st = self.stalls.get(slot).cloned().unwrap_or_else(|| env::panic_str("no such deed"));
+        let from = st.owner.clone();
+        require!(&from != to, "that account already owns this deed");
+        require!(self.agent_of(to).is_none(), "agents don't hold deeds");
+        require!(self.stall_slot_of(to).is_none(), "that account already has a stall");
+        for l in &st.listings {
+            self.move_goods(&env::current_account_id(), &from, &l.good_id, l.qty, "deed changed hands");
+        }
+        self.add_coins(&from, st.till as i64);
+        let next = PlayerStall { slot: slot.to_string(), owner: to.clone(), listings: vec![], till: 0, sold: 0, earned: 0, opened_ms: env::block_timestamp_ms() };
+        self.stalls.insert(slot.to_string(), next);
+        env::storage_remove(deed_ask_key(slot).as_bytes());
+        nft_event("nft_transfer", json!({ "old_owner_id": from, "new_owner_id": to, "token_ids": [slot], "memo": memo }));
+    }
+
+    fn deed_owned_by_caller(&self, token_id: &str) -> AccountId {
+        let st = self.stalls.get(token_id).unwrap_or_else(|| env::panic_str("no such deed"));
+        let me = env::predecessor_account_id();
+        require!(st.owner == me, "only the deed's owner can transfer it");
+        me
+    }
+
+    /// NEP-171: the owner gives the deed (and the stall slot) to another account.
+    #[payable]
+    pub fn nft_transfer(&mut self, receiver_id: AccountId, token_id: String, approval_id: Option<u64>, memo: Option<String>) {
+        near_sdk::assert_one_yocto();
+        require!(approval_id.is_none(), "approvals are not supported");
+        self.deed_owned_by_caller(&token_id);
+        self.hand_over_deed(&token_id, &receiver_id, &memo.unwrap_or_default());
+    }
+
+    /// NEP-171: transfer, then tell the receiving contract. It can hand the deed straight back.
+    #[payable]
+    pub fn nft_transfer_call(&mut self, receiver_id: AccountId, token_id: String, approval_id: Option<u64>, memo: Option<String>, msg: String) -> PromiseOrValue<bool> {
+        near_sdk::assert_one_yocto();
+        require!(approval_id.is_none(), "approvals are not supported");
+        let sender = self.deed_owned_by_caller(&token_id);
+        self.hand_over_deed(&token_id, &receiver_id, &memo.unwrap_or_default());
+        ext_nft_receiver::ext(receiver_id.clone())
+            .with_static_gas(GAS_FOR_RECEIVER)
+            .nft_on_transfer(sender.clone(), sender.clone(), token_id.clone(), msg)
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).nft_resolve_transfer(sender, receiver_id, token_id, None))
+            .into()
+    }
+
+    /// NEP-171 resolve: if the receiver asked to return the deed (or its call failed), give it
+    /// back, unless it has moved on or the old owner has a stall again. True if the receiver kept it.
+    #[private]
+    pub fn nft_resolve_transfer(&mut self, owner_id: AccountId, receiver_id: AccountId, token_id: String, approved_account_ids: Option<std::collections::HashMap<AccountId, u64>>, #[callback_result] give_back: Result<bool, PromiseError>) -> bool {
+        let _ = approved_account_ids;
+        if matches!(give_back, Ok(false)) {
+            return true;
+        }
+        let still_theirs = self.stalls.get(&token_id).is_some_and(|st| st.owner == receiver_id);
+        if !still_theirs || self.stall_slot_of(&owner_id).is_some() {
+            return true;
+        }
+        self.hand_over_deed(&token_id, &owner_id, "returned");
+        false
+    }
+
+    fn deed_token(&self, st: &PlayerStall) -> NftToken {
+        let name = slot_name(&st.slot);
+        NftToken {
+            token_id: st.slot.clone(),
+            owner_id: st.owner.clone(),
+            metadata: Some(TokenMetadata {
+                title: Some(format!("Deed: Canal Street stall, {name}")),
+                description: Some("The deed to a player stall on Canal Street in Bazaar of Liars. Its owner stocks the stall and sets prices; rival traders and customers buy from it while they're away.".into()),
+                media: Some(deed_svg(&st.slot)),
+                media_hash: None,
+                copies: Some(1),
+                issued_at: Some(st.opened_ms.to_string()),
+                expires_at: None,
+                starts_at: None,
+                updated_at: None,
+                extra: Some(json!({ "slot": st.slot, "sold": st.sold, "earned": st.earned }).to_string()),
+                reference: None,
+                reference_hash: None,
+            }),
+            approved_account_ids: Some(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Deeds in slot order.
+    fn deed_list(&self) -> Vec<PlayerStall> {
+        STALL_SLOTS.iter().filter_map(|s| self.stalls.get(*s).cloned()).collect()
+    }
+
+    pub fn nft_token(&self, token_id: String) -> Option<NftToken> {
+        self.stalls.get(&token_id).map(|st| self.deed_token(st))
+    }
+
+    pub fn nft_metadata(&self) -> NftContractMetadata {
+        NftContractMetadata { spec: "nft-1.0.0".into(), name: "Bazaar of Liars stall deeds".into(), symbol: "DEED".into(), icon: None, base_uri: None, reference: None, reference_hash: None }
+    }
+
+    pub fn nft_total_supply(&self) -> U128 {
+        U128(self.stalls.len() as u128)
+    }
+
+    pub fn nft_tokens(&self, from_index: Option<U128>, limit: Option<u64>) -> Vec<NftToken> {
+        let skip = from_index.map_or(0, |i| i.0 as usize);
+        self.deed_list().iter().skip(skip).take(limit.unwrap_or(50) as usize).map(|st| self.deed_token(st)).collect()
+    }
+
+    pub fn nft_supply_for_owner(&self, account_id: AccountId) -> U128 {
+        U128(u128::from(self.stall_slot_of(&account_id).is_some()))
+    }
+
+    pub fn nft_tokens_for_owner(&self, account_id: AccountId, from_index: Option<U128>, limit: Option<u64>) -> Vec<NftToken> {
+        let skip = from_index.map_or(0, |i| i.0 as usize);
+        self.deed_list().iter().filter(|st| st.owner == account_id).skip(skip).take(limit.unwrap_or(50) as usize).map(|st| self.deed_token(st)).collect()
+    }
+
+    /// Server, for a deed owner: put the deed on the market at a price (or reprice it).
+    pub fn list_deed(&mut self, player: AccountId, price: u64) {
+        self.require_server();
+        require!((1..=MAX_DEED_PRICE).contains(&price), "a deed's price must be 1..=5000");
+        let slot = self.stall_slot_of(&player).unwrap_or_else(|| env::panic_str("you don't have a stall"));
+        raw_put(&deed_ask_key(&slot), &price);
+        emit("deed_listed", json!({ "slot": slot, "owner": player, "price": price }));
+    }
+
+    /// Server, for a deed owner: take the deed off the market.
+    pub fn unlist_deed(&mut self, player: AccountId) {
+        self.require_server();
+        let slot = self.stall_slot_of(&player).unwrap_or_else(|| env::panic_str("you don't have a stall"));
+        require!(env::storage_remove(deed_ask_key(&slot).as_bytes()), "that deed isn't for sale");
+        emit("deed_unlisted", json!({ "slot": slot, "owner": player }));
+    }
+
+    /// Server, for a player: buy a listed deed at exactly its asking price. The seller gets the
+    /// price less a 5% tax (burned). No street cred needed: buying a deed is the shortcut.
+    pub fn buy_deed(&mut self, buyer: AccountId, slot: String, price: u64) {
+        self.require_server();
+        let ask: u64 = raw_get(&deed_ask_key(&slot)).unwrap_or_else(|| env::panic_str("that deed isn't for sale"));
+        require!(ask == price, "the asking price changed");
+        let seller = self.stalls.get(&slot).map(|st| st.owner.clone()).unwrap_or_else(|| env::panic_str("no such deed"));
+        require!(seller != buyer, "that's your own deed");
+        self.add_coins(&buyer, -(price as i64));
+        let tax = price * DEED_TAX_PCT / 100;
+        self.burned += tax;
+        self.add_coins(&seller, (price - tax) as i64);
+        self.hand_over_deed(&slot, &buyer, "sold");
+        emit("deed_sold", json!({ "slot": slot, "seller": seller, "buyer": buyer, "price": price, "tax": tax }));
+    }
+
+    pub fn deed_asks(&self) -> Vec<DeedAsk> {
+        self.deed_list().into_iter().filter_map(|st| raw_get::<u64>(&deed_ask_key(&st.slot)).map(|price| DeedAsk { slot: st.slot, owner: st.owner, price })).collect()
     }
 
     // ---------- cargo ship auctions (v3.7) ----------
@@ -3258,5 +3527,186 @@ mod tests {
         let mut c = raid();
         at_ms("server.testnet", T0 + EVENT_MS, 9);
         c.inspect(player(), vec!["rug".into()]);
+    }
+
+    // ---------- property deeds (v3.11) ----------
+
+    fn one_yocto(caller: &str) {
+        testing_env!(VMContextBuilder::new().predecessor_account_id(acc(caller)).block_height(100).block_timestamp(100_000_000_000).attached_deposit(near_sdk::NearToken::from_yoctonear(1)).build());
+    }
+    fn bob() -> AccountId {
+        acc("bob.testnet")
+    }
+
+    #[test]
+    fn a_licence_mints_a_deed_as_a_nep171_token() {
+        let mut c = setup();
+        licensed(&mut c);
+        assert!(get_logs().iter().any(|l| l.contains(r#""standard":"nep171""#) && l.contains(r#""event":"nft_mint""#) && l.contains("corner-1")));
+        let t = c.nft_token("corner-1".into()).unwrap();
+        assert_eq!(t.owner_id, player());
+        let m = t.metadata.unwrap();
+        assert_eq!(m.title.as_deref(), Some("Deed: Canal Street stall, Corner 1"));
+        assert!(m.media.unwrap().starts_with("data:image/svg+xml;base64,PHN2Zy"));
+        assert_eq!(c.nft_total_supply(), U128(1));
+        assert_eq!(c.nft_supply_for_owner(player()), U128(1));
+        assert_eq!(c.nft_tokens_for_owner(player(), None, None).len(), 1);
+        assert!(c.nft_tokens_for_owner(bob(), None, None).is_empty());
+        assert_eq!(c.nft_metadata().symbol, "DEED");
+        assert!(c.nft_token("corner-2".into()).is_none());
+    }
+
+    #[test]
+    fn base64_matches_the_rfc_vectors() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn a_listed_deed_sells_for_its_asking_price_less_tax() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.stock_stall(player(), "saffron".into(), 1, 50);
+        c.list_deed(player(), 300);
+        assert_eq!(c.deed_asks(), vec![DeedAsk { slot: "corner-1".into(), owner: player(), price: 300 }]);
+        c.set_coins(&bob(), 400);
+        let seller_before = c.coins_of(player());
+        let burned_before = c.stats().burned;
+        c.buy_deed(bob(), "corner-1".into(), 300);
+        assert_eq!(c.coins_of(bob()), 100);
+        assert_eq!(c.coins_of(player()), seller_before + 285, "300 less the 5% tax");
+        assert_eq!(c.stats().burned, burned_before + 15);
+        assert_eq!(c.goods_of(player(), "saffron".into()), 1, "the stock went home with the seller");
+        let st = c.stall_of(bob()).unwrap();
+        assert!(st.listings.is_empty() && st.till == 0);
+        assert!(c.stall_of(player()).is_none());
+        assert!(c.deed_asks().is_empty(), "the ask comes down");
+        assert!(get_logs().iter().any(|l| l.contains(r#""event":"nft_transfer""#) && l.contains("bob.testnet")));
+    }
+
+    #[test]
+    #[should_panic(expected = "the asking price changed")]
+    fn a_deed_sells_only_at_the_price_the_buyer_saw() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.list_deed(player(), 300);
+        c.set_coins(&bob(), 400);
+        c.buy_deed(bob(), "corner-1".into(), 250);
+    }
+
+    #[test]
+    #[should_panic(expected = "isn't for sale")]
+    fn an_unlisted_deed_cannot_be_bought() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.list_deed(player(), 300);
+        c.unlist_deed(player());
+        c.set_coins(&bob(), 400);
+        c.buy_deed(bob(), "corner-1".into(), 300);
+    }
+
+    #[test]
+    #[should_panic(expected = "already has a stall")]
+    fn one_stall_per_player_even_by_deed() {
+        let mut c = setup();
+        licensed(&mut c);
+        // Bob owns corner-2.
+        c.award_cred(bob(), 80, "caught_bluff".into());
+        at_day("server.testnet", 1);
+        c.award_cred(bob(), 40, "caught_bluff".into());
+        ctx("server.testnet", 100);
+        c.set_coins(&bob(), 400);
+        c.buy_licence(bob(), "corner-2".into());
+        c.list_deed(player(), 100);
+        c.buy_deed(bob(), "corner-1".into(), 100);
+    }
+
+    #[test]
+    fn the_owner_can_transfer_the_deed_from_a_wallet() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.list_deed(player(), 300);
+        one_yocto("player.testnet");
+        c.nft_transfer(bob(), "corner-1".into(), None, Some("a gift".into()));
+        assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, bob());
+        assert!(c.deed_asks().is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "only the deed's owner")]
+    fn nobody_else_can_transfer_a_deed() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("bob.testnet");
+        c.nft_transfer(bob(), "corner-1".into(), None, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "agents don't hold deeds")]
+    fn agents_cannot_be_given_a_deed() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("player.testnet");
+        c.nft_transfer(acc("ivy.testnet"), "corner-1".into(), None, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Requires attached deposit of exactly 1 yoctoNEAR")]
+    fn a_deed_transfer_needs_one_yocto() {
+        let mut c = setup();
+        licensed(&mut c);
+        ctx("player.testnet", 100);
+        c.nft_transfer(bob(), "corner-1".into(), None, None);
+    }
+
+    #[test]
+    fn a_receiver_that_hands_the_deed_back_returns_it() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("player.testnet");
+        let _ = c.nft_transfer_call(bob(), "corner-1".into(), None, None, "".into());
+        assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, bob());
+        ctx("alice.near", 100);
+        assert!(!c.nft_resolve_transfer(player(), bob(), "corner-1".into(), None, Ok(true)));
+        assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, player());
+        // A receiver that keeps it.
+        one_yocto("player.testnet");
+        let _ = c.nft_transfer_call(bob(), "corner-1".into(), None, None, "".into());
+        ctx("alice.near", 100);
+        assert!(c.nft_resolve_transfer(player(), bob(), "corner-1".into(), None, Ok(false)));
+        assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, bob());
+    }
+
+    #[test]
+    fn giving_up_a_stall_burns_its_deed() {
+        let mut c = setup();
+        licensed(&mut c);
+        c.list_deed(player(), 300);
+        c.release_stall(player());
+        assert!(c.nft_token("corner-1".into()).is_none());
+        assert!(c.deed_asks().is_empty());
+        assert!(get_logs().iter().any(|l| l.contains(r#""event":"nft_burn""#)));
+    }
+
+    #[test]
+    #[should_panic(expected = "already has a stall")]
+    fn signing_in_cannot_stack_two_stalls() {
+        let mut c = setup();
+        licensed(&mut c);
+        // A fresh NEAR account was given a deed before it ever played…
+        c.award_cred(bob(), 80, "caught_bluff".into());
+        at_day("server.testnet", 1);
+        c.award_cred(bob(), 40, "caught_bluff".into());
+        ctx("server.testnet", 100);
+        c.set_coins(&bob(), 400);
+        c.buy_licence(bob(), "corner-2".into());
+        one_yocto("bob.testnet");
+        c.nft_transfer(acc("fresh.testnet"), "corner-2".into(), None, None);
+        // …then a guest with a stall signs in as it.
+        ctx("server.testnet", 100);
+        c.merge_player(player(), acc("fresh.testnet"), vec![], vec![]);
     }
 }
