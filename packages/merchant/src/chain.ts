@@ -76,6 +76,11 @@ export interface Ledger {
   payWages?(a: { wageId: string; player: string }): Promise<string>;
   /** v3.6: move a guest's progress to the NEAR account they signed in with. */
   mergePlayer?(a: { from: string; to: string; merchantIds: string[]; goodIds: string[] }): Promise<string>;
+  /** v3.7: cargo ship auctions. */
+  shipArrives?(auctionId: string): Promise<string>;
+  commitBid?(a: { auctionId: string; bidId: string; bidder: string; commitment: string; deposit: number }): Promise<string>;
+  revealBid?(a: { auctionId: string; bidder: string; amount: number; salt: string }): Promise<string>;
+  settleAuction?(auctionId: string): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -128,6 +133,10 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     stallSale: (a) => call("stall_sale", { sale_id: a.saleId, slot: a.slot, good_id: a.goodId }),
     payWages: (a) => call("pay_wages", { wage_id: a.wageId, player: a.player }, "FINAL"),
     mergePlayer: (a) => call("merge_player", { from: a.from, to: a.to, merchant_ids: a.merchantIds, good_ids: a.goodIds }, "FINAL"),
+    shipArrives: (auctionId) => call("ship_arrives", { auction_id: auctionId }, "FINAL"),
+    commitBid: (a) => call("commit_bid", { auction_id: a.auctionId, bid_id: a.bidId, bidder: a.bidder, commitment: a.commitment, deposit: a.deposit }, "FINAL"),
+    revealBid: (a) => call("reveal_bid", { auction_id: a.auctionId, bidder: a.bidder, amount: a.amount, salt: a.salt }, "FINAL"),
+    settleAuction: (auctionId) => call("settle_auction", { auction_id: auctionId }, "FINAL"),
   };
 }
 
@@ -343,4 +352,33 @@ export interface OnchainStall {
 export async function readStalls(network: Network, contractId: string): Promise<OnchainStall[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<OnchainStall[]>(contractId, "stalls", {}, { finality: "optimistic" })) ?? [];
+}
+
+export interface OnchainBid {
+  bidder: string;
+  commitment: string;
+  deposit: number;
+  agent: boolean;
+  committed_ms: number;
+  amount: number | null;
+}
+
+export interface OnchainAuction {
+  id: string;
+  good_id: string;
+  qty: number;
+  reserve: number;
+  opened_ms: number;
+  bids_close_ms: number;
+  reveal_close_ms: number;
+  status: "bidding" | "settled" | "unsold";
+  bids: OnchainBid[];
+  winner: string | null;
+  price: number;
+}
+
+/** Recent cargo ship auctions, newest first (v3.7). */
+export async function readAuctions(network: Network, contractId: string): Promise<OnchainAuction[]> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<OnchainAuction[]>(contractId, "auctions", {}, { finality: "optimistic" })) ?? [];
 }
