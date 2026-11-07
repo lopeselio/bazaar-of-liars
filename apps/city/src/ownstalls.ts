@@ -10,7 +10,7 @@
  * put the deed up for sale; any player without a stall can buy it, no street cred needed.
  */
 import * as THREE from "three";
-import { api, type OwnStall, type PlayerView, type StallsView } from "../../web/src/api";
+import { api, type DeedCertificateView, type OwnStall, type PlayerView, type StallsView } from "../../web/src/api";
 import { buildStall, type StallLook } from "../../web/src/scene";
 
 export interface OwnStallsDeps {
@@ -177,6 +177,11 @@ export function initOwnStalls(d: OwnStallsDeps) {
         void act(() => api.listDeed(d.player, price), `Your deed is on the market at ${price}.`);
       });
       $("bz-deed-unlist")?.addEventListener("click", () => void act(() => api.unlistDeed(d.player), "Your deed is off the market."));
+      $("bz-deed-certify")?.addEventListener("click", () => void certify());
+      $("bz-cert-copy")?.addEventListener("click", () => {
+        const c = st.certificate;
+        if (c) void navigator.clipboard?.writeText(JSON.stringify({ address: c.ethAddress, msg: c.message, sig: c.signature }, null, 2)).then(() => d.toast("Copied. Paste it into any Ethereum signature checker."));
+      });
       $("bz-collect").addEventListener("click", () => void act(() => api.collectTill(d.player), `Collected ${st.till} coins.`));
       p.querySelectorAll<HTMLButtonElement>("button[data-price]").forEach((b) =>
         b.addEventListener("click", () => {
@@ -206,6 +211,27 @@ export function initOwnStalls(d: OwnStallsDeps) {
     }
     $("bz-own-x").addEventListener("click", close);
   }
+  let certifying = false;
+  async function certify() {
+    if (certifying) return;
+    certifying = true;
+    const b = document.getElementById("bz-deed-certify") as HTMLButtonElement | null;
+    if (b) {
+      b.disabled = true;
+      b.textContent = "NEAR's MPC network is signing…";
+    }
+    try {
+      const r = await api.certifyDeed(d.player);
+      view = r.stalls;
+      d.toast(r.stalls.mine?.certificate ? "Certified. Your deed's ownership is signed for Ethereum." : "The MPC network didn't answer in time. Try again in a few minutes.");
+    } catch (e) {
+      d.toast((e as Error).message);
+    } finally {
+      certifying = false;
+      if (open) renderPanel(open);
+    }
+  }
+
   /** The owner's deed: list it, reprice it, or take it off the market. */
   function deedHtml(st: OwnStall) {
     const tax = view?.deedTax ?? 5;
@@ -218,7 +244,25 @@ export function initOwnStalls(d: OwnStallsDeps) {
              <div class="bz-price">Reprice at <input type="number" id="bz-deed-price" min="1" max="${view?.maxDeedPrice ?? 5000}" value="${st.ask}" /> <button type="button" id="bz-deed-list">Reprice</button> <button type="button" id="bz-deed-unlist">Take it off the market</button></div>`
           : `<p class="bz-note">Sell it to another player. The buyer gets the empty stall; your stock and till come back to you. The street keeps ${tax}%.</p>
              <div class="bz-price">Ask <input type="number" id="bz-deed-price" min="1" max="${view?.maxDeedPrice ?? 5000}" value="${st.suggestedAsk ?? view?.licencePrice ?? 150}" /> <button type="button" id="bz-deed-list">Put the deed up for sale</button></div>`
-      }`;
+      }
+      ${certHtml(st.certificate ?? null)}`;
+  }
+
+  /** The deed's Ethereum certificate: signed by NEAR's MPC network for this contract. */
+  function certHtml(c: DeedCertificateView | null) {
+    if (!c)
+      return `<h4>🔗 On Ethereum</h4>
+        <p class="bz-note">Get a certificate any Ethereum app can check: NEAR's MPC network signs "this deed is yours" with a key only the bazaar's contract controls (Chain Signatures). It takes a few seconds.</p>
+        <button type="button" id="bz-deed-certify">🔗 Certify on Ethereum</button>`;
+    const short = `${c.ethAddress.slice(0, 6)}…${c.ethAddress.slice(-4)}`;
+    return `<h4>🔗 On Ethereum</h4>
+      <p class="bz-note">${c.verified ? "✓" : "✗"} Certified at NEAR block ${c.block_height}, signed by the bazaar's Ethereum address <b title="${esc(c.ethAddress)}">${esc(short)}</b>: a key NEAR's MPC network (${esc(c.signer)}) holds for this contract alone.</p>
+      <details class="bz-cert"><summary>The certificate</summary>
+        <p class="bz-mono">${esc(c.message)}</p>
+        <p class="bz-mono">${esc(c.signature)}</p>
+        <button type="button" id="bz-cert-copy">Copy as JSON</button>
+      </details>
+      <p class="bz-note">Any EVM chain checks it with <code>ecrecover</code>; so does any Ethereum "verify signature" tool, or <code>pnpm verify:deed ${esc(c.slot)}</code>. <button type="button" id="bz-deed-certify" class="bz-link">Certify again</button></p>`;
   }
 
   /** Another player's deed on the market. */
