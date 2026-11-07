@@ -72,4 +72,25 @@ export const BOTS: Record<string, Bot> = {
         return Math.round(last + (a - last) * 0.25);
     }
   },
+  /**
+   * The reader, selling: asks high, then comes down slowly while the buyer looks relaxed or
+   * nervous, and closes when it looks firm (near its limit) or irritated.
+   */
+  sellReader: (v) => {
+    if (v.reply?.action === "final") return "accept";
+    const last = v.lastOffer ?? Math.round(v.listPrice * 1.6);
+    if (v.lastOffer === undefined) return last;
+    const a = ask(v);
+    const tell: Tell = v.reply?.tell ?? "relaxed";
+    switch (tell) {
+      case "firm":
+        return Math.round(a + (last - a) * 0.15);
+      case "irritated":
+        return Math.round(last - (last - a) * 0.6);
+      case "nervous":
+        return Math.round(last - (last - a) * 0.12);
+      default:
+        return Math.round(last - (last - a) * 0.25);
+    }
+  },
 };
