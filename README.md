@@ -166,7 +166,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 87 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 88 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;
@@ -175,7 +175,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    - only the game server can open or close a haggle;
    - if the server never reveals, anyone can expire the haggle after about an hour, and it's counted publicly in `stats().unrevealed`;
    - a cargo ship's sealed bid can't change after it's sealed, can't be opened before bidding closes, and an agent's deposit needs the agent's own signature; the highest revealed bid wins and everyone else is refunded;
-   - an informant's tip can't be changed after it's sold, resolves only at its check time against the merchant's real stock, a lie is refunded, and a tip never revealed is refunded and counted against the informant;
+   - an informant's tip can't be changed after it's sold, resolves only at its check time against the merchant's real stock, a lie is refunded, a tip whose buyer traded with that merchant is void, and a tip never revealed is refunded and counted against the informant;
    - goods are NEP-245 tokens: minting sets supply, trading moves tokens through the contract's escrow without changing supply, using a good burns it, `mt_transfer` needs exactly 1 yoctoNEAR, and a failed `mt_transfer_call` is refunded.
 8. **No key needed:** run `pnpm check:goods`. It reads every goods balance straight from the contract's storage and checks that, for each NEP-245 token (rug, saffron, lamp), the balances add up to `mt_supply`. You should see three ✓ lines.
 
