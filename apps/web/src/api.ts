@@ -228,6 +228,22 @@ export interface OwnStall {
   suggestedAsk?: number;
   /** The deed (a NEP-171 NFT) on the explorer. */
   deedUrl?: string | null;
+  /** v3.12: the deed's Ethereum certificate, if it names this owner. */
+  certificate?: DeedCertificateView | null;
+}
+export interface DeedCertificateView {
+  slot: string;
+  owner: string;
+  message: string;
+  /** 65-byte Ethereum signature (r ‖ s ‖ v). */
+  signature: string;
+  block_height: number;
+  /** The bazaar's Ethereum address: NEAR's MPC key derived for the contract. */
+  ethAddress: string;
+  signer: string;
+  path: string;
+  /** The server's own ecrecover check. */
+  verified: boolean;
 }
 export interface StallsView {
   slots: { slot: string; owner: string | null; mine: boolean; listings: Listing[]; sold: number; ask?: number | null; deedUrl?: string | null }[];
@@ -351,6 +367,7 @@ export const api = {
   collectTill: (player: string) => call<StallResult>("/api/stalls/collect", { player }),
   listDeed: (player: string, price: number) => call<StallResult>("/api/stalls/list", { player, price }),
   unlistDeed: (player: string) => call<StallResult>("/api/stalls/unlist", { player }),
+  certifyDeed: (player: string) => call<StallResult>("/api/stalls/certify", { player }),
   buyDeed: (player: string, slot: string, price: number) => call<StallResult>("/api/stalls/buydeed", { player, slot, price }),
   dockWork: (player: string, x: number, z: number) => call<{ wage: number; txUrl: string; player: PlayerView }>("/api/dockwork", { player, x, z }),
   auctions: (player: string) => call<AuctionsView>(`/api/auctions?player=${encodeURIComponent(player)}`),

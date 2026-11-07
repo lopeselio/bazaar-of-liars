@@ -1680,3 +1680,9 @@ button:disabled {
 #bz-link .bz-note {
   color: var(--bz-dim);
 }
+
+/* v3.12: a deed's Ethereum certificate */
+.bz-cert { margin: 4px 0 8px; font-size: 12px; }
+.bz-cert summary { cursor: pointer; opacity: 0.85; }
+.bz-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; word-break: break-all; opacity: 0.85; margin: 6px 0; }
+button.bz-link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
