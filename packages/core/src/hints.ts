@@ -23,11 +23,12 @@ export function haggleHint(h: HintInput): string | null {
   const dir = h.side === "sell" ? 1 : -1;
   const gap = dir * (h.askBefore - h.offer);
   const moved = dir * (h.askBefore - h.askAfter);
-  if (gap <= 0) return null;
+  // A firm merchant is near its limit: barely moving is the truth, not a cue to push.
+  if (gap <= 0 || h.tell === "firm") return null;
   const far = gap / Math.max(1, h.askBefore) > 0.3;
   if (h.tell === "irritated" && far)
     return `${h.name} is losing patience. Offers that far off sour the mood, and a merchant remembers a lowball next time. Come closer, or ${h.name} may walk.`;
   if (moved / gap < BARELY_MOVED)
-    return `${h.name} barely moved${moved > 0 ? ` (${moved} coin${moved === 1 ? "" : "s"})` : ""}. A price that far off doesn't move a merchant much: offer closer to the ask, or catch a bluff when one comes.`;
+    return `${h.name} barely moved${moved > 0 ? ` (${moved} coin${moved === 1 ? "" : "s"})` : ""}.${far ? " A price that far off doesn't move a merchant much: meet nearer the middle," : " Hold your price a round,"} or catch a bluff when one comes.`;
   return null;
 }
