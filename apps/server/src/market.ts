@@ -18,6 +18,10 @@ import { randomUUID } from "node:crypto";
 import {
   AGENTS,
   BOTS,
+  SHIP_GAP_MS,
+  agentBid,
+  bidCommitment,
+  depositFor,
   CUSTOMERS,
   customerWouldBuy,
   traderWouldBuy,
@@ -41,7 +45,7 @@ import {
   type PlayerMemory,
   type Reason,
 } from "@bazaar/core";
-import { explorerTx, readAgents, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
+import { explorerTx, readAgents, readAuctions, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
 const GOOD_IDS = Object.keys(GOODS);
@@ -84,6 +88,7 @@ export class Market {
   private cache: { at: number; agents: MarketAgent[] } | null = null;
   private orderCache: { at: number; orders: MarketOrder[] } | null = null;
   private stallCache: { at: number; stalls: OnchainStall[] } | null = null;
+  private auctionCache: { at: number; auctions: OnchainAuction[] } | null = null;
   private rng = mulberry32(Date.now() % 2 ** 31);
 
   constructor(
@@ -123,6 +128,7 @@ export class Market {
     this.cache = null;
     this.orderCache = null;
     this.stallCache = null;
+    this.auctionCache = null;
   }
 
   /** Player-owned stalls (v3.3). */
@@ -399,6 +405,101 @@ export class Market {
       tx: explorerTx(this.ledger.network, tx),
       agents: [o.customer, ...(fare ? ["cab"] : [])],
     });
+  }
+
+  // ---------- cargo ship auctions at Pier 34 ----------
+
+  /** Recent auctions, newest first (v3.7). */
+  async auctions(maxAgeMs = 3000): Promise<OnchainAuction[]> {
+    if (this.auctionCache && Date.now() - this.auctionCache.at < maxAgeMs) return this.auctionCache.auctions;
+    const auctions = await readAuctions(this.ledger.network, this.ledger.contractId);
+    this.auctionCache = { at: Date.now(), auctions };
+    return auctions;
+  }
+
+  /** Agents that might bid on a lot: Auntie Wu, the merchants, and the rival traders. */
+  private async agentBids(a: OnchainAuction) {
+    const agents = await this.agents(0);
+    for (const def of AGENTS.filter((x) => ["wholesaler", "merchant", "trader"].includes(x.kind))) {
+      const me = agents.find((x) => x.id === def.id);
+      const signer = this.signers[def.id];
+      if (!me || !signer || a.bids.some((b) => b.bidder === signer.account)) continue;
+      const amount = agentBid(
+        { kind: def.kind, sells: MERCHANTS.find((m) => m.id === def.id)?.goodId, stock: me.stock[a.good_id] ?? 0, coins: me.coins, capLeft: me.dailyCap - me.spentToday },
+        { goodId: a.good_id, qty: a.qty, reserve: a.reserve, baseValue: GOOD_VALUES[a.good_id] ?? 0 },
+        this.rng,
+      );
+      if (amount === null) continue;
+      const deposit = Math.min(depositFor(amount, a.reserve, me.coins), me.dailyCap - me.spentToday);
+      const salt = newSalt();
+      const bidId = `b-${randomUUID()}`;
+      // The salt is the agent's secret until the reveal; it waits in the store, never onchain.
+      await this.store.putJSON(`bid:${a.id}:${def.id}`, { amount, salt }, 3_600_000);
+      await signer.authorizeSpend(bidId, deposit);
+      const tx = await this.ledger.commitBid!({ auctionId: a.id, bidId, bidder: signer.account, commitment: bidCommitment(a.id, signer.account, amount, salt), deposit });
+      this.invalidate();
+      await this.say({ kind: "auction", text: `${short(def.id)} sealed a bid on the ${GOODS[a.good_id].name} lot (deposit ${deposit})`, tx: explorerTx(this.ledger.network, tx), agents: [def.id] });
+    }
+  }
+
+  /** Agents open their sealed bids once bidding has closed. */
+  private async agentReveals(a: OnchainAuction) {
+    for (const b of a.bids.filter((x) => x.agent && x.amount === null)) {
+      const id = Object.keys(this.signers).find((k) => this.signers[k].account === b.bidder);
+      const sealed = id ? await this.store.getJSON<{ amount: number; salt: string }>(`bid:${a.id}:${id}`) : null;
+      if (!sealed) continue;
+      await this.ledger.revealBid!({ auctionId: a.id, bidder: b.bidder, amount: sealed.amount, salt: sealed.salt });
+      this.invalidate();
+    }
+  }
+
+  /**
+   * The harbour, run every few seconds (one replica at a time): dock a ship when one is due, have
+   * the agents bid and reveal, and settle a lot when its reveal window closes.
+   */
+  async harbour() {
+    const now = Date.now();
+    const recent = await this.auctions(0);
+    for (const a of recent.filter((x) => x.status === "bidding")) {
+      try {
+        if (now < a.bids_close_ms - 20_000) {
+          // Agents sit on their hands for a moment, so a player gets a chance to bid first.
+          if (now >= a.opened_ms + 25_000 && !(await this.store.getJSON(`bidded:${a.id}`))) {
+            await this.store.putJSON(`bidded:${a.id}`, 1, 3_600_000);
+            await this.agentBids(a);
+          }
+        } else if (now >= a.bids_close_ms && now < a.reveal_close_ms) {
+          await this.agentReveals(a);
+        } else if (now >= a.reveal_close_ms + 2000) {
+          const tx = await this.ledger.settleAuction!(a.id);
+          this.invalidate();
+          const done = (await this.auctions(0)).find((x) => x.id === a.id);
+          const good = GOODS[a.good_id].name;
+          const who = done?.winner ? (AGENTS.find((d) => this.signers[d.id]?.account === done.winner)?.name ?? "A player") : null;
+          await this.say({
+            kind: "auction",
+            text: who ? `${who} won ${a.qty} ${good} at the Pier 34 auction for ${done!.price}` : `Nobody met the reserve on ${a.qty} ${good}. The ship sailed on.`,
+            tx: explorerTx(this.ledger.network, tx),
+            agents: [],
+          });
+        }
+      } catch (e) {
+        console.error(`harbour ${a.id}:`, (e as Error).message);
+      }
+    }
+    const last = recent[0]?.opened_ms ?? 0;
+    if (recent.some((x) => x.status === "bidding") || now < last + SHIP_GAP_MS + 5000) return;
+    const id = `ship-${now.toString(36)}`;
+    const tx = await this.ledger.shipArrives!(id);
+    this.invalidate();
+    const a = (await this.auctions(0)).find((x) => x.id === id);
+    if (a)
+      await this.say({
+        kind: "auction",
+        text: `A cargo ship docked at Pier 34 with ${a.qty} ${GOODS[a.good_id].name}. Sealed bids close in ${Math.round((a.bids_close_ms - a.opened_ms) / 60_000 * 10) / 10} min (reserve ${a.reserve}).`,
+        tx: explorerTx(this.ledger.network, tx),
+        agents: [],
+      });
   }
 
   /** One round of the agents acting on their own. Errors are logged, never thrown. */
