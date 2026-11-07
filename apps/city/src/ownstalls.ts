@@ -211,7 +211,7 @@ export function initOwnStalls(d: OwnStallsDeps) {
     const tax = view?.deedTax ?? 5;
     const link = st.deedUrl ? ` <a href="${st.deedUrl}" target="_blank" rel="noopener">See it onchain</a>.` : "";
     return `<h4>📜 Your deed</h4>
-      <p class="bz-note">This stall's deed is an NFT you own (token <b>${esc(st.slot)}</b>), so it shows in a NEAR wallet.${link}</p>
+      <p class="bz-note">This stall's deed is an NFT you own (token <b>${esc(st.slot)}</b>). Signed in, it shows in your NEAR wallet.${link}</p>
       ${
         st.ask
           ? `<p class="bz-note">On the market at <b>${st.ask}</b> coins. If it sells you keep ${st.ask - Math.floor((st.ask * tax) / 100)}, and your stock and till come back to you.</p>
