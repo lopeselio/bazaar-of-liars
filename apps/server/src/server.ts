@@ -553,10 +553,20 @@ async function boardTrade(id: string, body: Record<string, unknown>) {
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   if (!board.goods.includes(goodId)) throw new HttpError(400, `${board.name} doesn't trade that.`);
   if (Math.hypot(num(body.x) - board.x, num(body.z) - board.z) > BOARD_REACH) throw new HttpError(409, `Walk to ${board.name} (${board.district}) to trade there.`);
+  if (!(await purse(player)).known) throw new HttpError(409, "Make your first deal on Canal Street before trading across town.");
+  // One board trade per player at a time, so parallel requests can't all pass the purse check.
+  return withLock(`board:${player}`, () => settleBoardTrade(board, player, goodId, body), "Your last trade is still settling.");
+}
+
+async function settleBoardTrade(board: NonNullable<ReturnType<typeof boardById>>, player: string, goodId: string, body: Record<string, unknown>) {
+  if (!market || !ledger?.buyFromBoard || !signers) throw new HttpError(404, "boards need the agent economy");
+  const id = board.id;
   const p = await purse(player);
-  if (!p.known) throw new HttpError(409, "Make your first deal on Canal Street before trading across town.");
   const price = (await pricedBoards()).find((b) => b.id === id)?.prices[goodId] ?? null;
   if (price === null) throw new HttpError(409, board.kind === "sells" ? "Auntie Wu is keeping the rest of that for the merchants." : `${board.name} has had enough of that today.`);
+  // The player trades at the price they were shown, or not at all.
+  const expected = Math.floor(Number(body.expectedPrice));
+  if (Number.isFinite(expected) && expected !== price) throw new HttpError(409, `The price just moved to ${price}. Check the board and try again.`);
   let tx: string;
   try {
     if (board.kind === "sells") {
@@ -565,18 +575,28 @@ async function boardTrade(id: string, body: Record<string, unknown>) {
     } else {
       if ((p.goods[goodId] ?? 0) < 1) throw new HttpError(409, `You don't have any ${GOODS[goodId].name} to sell.`);
       const buyer = (await market.agents(0)).find((a) => a.id === board.agentId);
-      // A buyer short of coins draws on its (capped) daily income first.
-      if (buyer && buyer.coins < price) await ledger.payIncome!({ agentId: board.agentId, amount: Math.max(price - buyer.coins, 60) }).catch(() => {});
+      // A buyer short of coins draws on its (capped) daily income first: a round top-up, or just the shortfall.
+      if (buyer && buyer.coins < price) {
+        const short = price - buyer.coins;
+        const pay = ledger.payIncome!;
+        await pay({ agentId: board.agentId, amount: Math.max(short, 60) }).catch(() => pay({ agentId: board.agentId, amount: short }).catch(() => {}));
+      }
       const saleId = `q-${Date.now().toString(36)}-${randomInt(1e6).toString(36)}`;
       await signers[board.agentId].authorizeSpend(saleId, price);
-      tx = await ledger.sellToBoard!({ saleId, player, goodId });
-      await store.bump(`board:${id}:${goodId}`, 24 * 3_600_000);
+      try {
+        tx = await ledger.sellToBoard!({ saleId, player, goodId });
+      } catch (e) {
+        // The buyer signed but the sale didn't happen: give its cap back.
+        await ledger.releaseAuth!(saleId).catch((r) => console.error("release_auth:", (r as Error).message));
+        throw e;
+      }
     }
   } catch (e) {
     if (e instanceof HttpError) throw e;
     const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
     throw new HttpError(409, m ? sentence(m[1]) : "The trade didn't go through. Try again.");
   }
+  if (board.kind === "buys") await store.bump(`board:${id}:${goodId}`, 24 * 3_600_000).catch(() => {});
   market.invalidate();
   const good = GOODS[goodId].name;
   await store
