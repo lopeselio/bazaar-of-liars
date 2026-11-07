@@ -257,6 +257,8 @@ export interface TxInfo {
   calls?: Array<{ method: string; args: Record<string, unknown> | null }>;
   /** The transaction and the contract's receipt both succeeded. */
   ok?: boolean;
+  /** Height of the block where the contract executed it. */
+  blockHeight?: number;
 }
 
 export interface ChainReader {
@@ -300,7 +302,9 @@ async function rpc<T>(network: Network, method: string, params: unknown): Promis
   }
 }
 
-type Status = { SuccessValue?: string; SuccessReceiptId?: string; Failure?: unknown };
+/** An object once final; a string ("Started", "NotStarted", "Unknown") while in flight. */
+type Status = { SuccessValue?: string; SuccessReceiptId?: string; Failure?: unknown } | string;
+const succeeded = (st: Status | undefined) => typeof st === "object" && st !== null && ("SuccessValue" in st || "SuccessReceiptId" in st);
 type TxResult = {
   transaction: { signer_id: string; receiver_id: string; actions?: Array<{ FunctionCall?: { method_name: string; args: string } } | string> };
   transaction_outcome?: { block_hash: string; outcome?: { receipt_ids?: string[] } };
@@ -325,19 +329,24 @@ export const nearReader: ChainReader = {
     // Don't wait: a node asked to wait for a transaction it has pruned waits until it times out.
     // A transaction still executing has no outcome yet; only then wait for it.
     let tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "NONE" });
-    if (!tx.transaction_outcome) tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "EXECUTED_OPTIMISTIC" });
-    if (!tx.transaction_outcome) throw new Error("tx: no outcome yet");
     // The contract's own receipt: its block is when the call's effects were onchain.
-    const first = tx.transaction_outcome.outcome?.receipt_ids?.[0];
-    const receipt = tx.receipts_outcome?.find((r) => r.id === first) ?? tx.receipts_outcome?.find((r) => r.outcome.executor_id === tx.transaction.receiver_id);
-    const block = await rpc<{ header: { timestamp_nanosec: string } }>(network, "block", { block_id: (receipt ?? tx.transaction_outcome).block_hash });
+    const contractReceipt = (t: TxResult) => {
+      const first = t.transaction_outcome?.outcome?.receipt_ids?.[0];
+      return t.receipts_outcome?.find((r) => r.id === first) ?? t.receipts_outcome?.find((r) => r.outcome.executor_id === t.transaction.receiver_id);
+    };
+    if (!tx.transaction_outcome || !contractReceipt(tx))
+      tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "EXECUTED_OPTIMISTIC" });
+    if (!tx.transaction_outcome) throw new Error("tx: no outcome yet");
+    const receipt = contractReceipt(tx);
+    const block = await rpc<{ header: { timestamp_nanosec: string; height: number } }>(network, "block", { block_id: (receipt ?? tx.transaction_outcome).block_hash });
     const calls = (tx.transaction.actions ?? []).flatMap((a) => (typeof a === "object" && a.FunctionCall ? [{ method: a.FunctionCall.method_name, args: jsonArgs(a.FunctionCall.args) }] : []));
     return {
       blockTimeMs: Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n),
       signerId: tx.transaction.signer_id,
       receiverId: tx.transaction.receiver_id,
       calls,
-      ok: !!tx.status && tx.status.Failure === undefined && !!receipt && receipt.outcome.status.Failure === undefined,
+      ok: succeeded(tx.status) && !!receipt && succeeded(receipt.outcome.status),
+      ...(receipt ? { blockHeight: block.header.height } : {}),
     };
   },
 };
