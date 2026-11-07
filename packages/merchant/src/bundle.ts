@@ -194,6 +194,10 @@ async function verifyOnchain(b: ProofBundle, c: ChainRecord, reader: ChainReader
   try {
     const tx = await reader.txInfo(c.network, c.openTx, c.serverId);
     add("chain.opener", "Commitment was posted by the game server to the contract", tx.signerId === c.serverId && tx.receiverId === c.contractId);
+    // The contract refuses a reused haggle id, so a successful open_haggle carrying this id and
+    // commitment is this haggle's own commitment, not some earlier transaction to the contract.
+    const opens = tx.calls?.some((x) => x.method === "open_haggle" && x.args?.haggle_id === b.haggleId && x.args?.commitment === b.commitment) ?? false;
+    add("chain.opentx", "That transaction is this haggle's open_haggle, with this commitment, and it succeeded", opens && tx.ok === true, opens ? (tx.ok ? undefined : "the transaction failed") : "not an open_haggle call for this haggle and commitment");
     const created = firstReply ? createdOf(firstReply.responseBody) : undefined;
     if (created !== undefined)
       add(
