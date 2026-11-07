@@ -6,7 +6,7 @@
   "main": "src/index.ts",
   "scripts": {
     "test": "vitest run",
-    "verify:model": "node --env-file=../../.env --import tsx src/cli/verify-model.ts",
+    "verify:model": "node --env-file-if-exists=../../.env --import tsx src/cli/verify-model.ts",
     "verify:deed": "node --env-file-if-exists=../../.env --import tsx src/cli/verify-deed.ts"
   },
   "devDependencies": {
