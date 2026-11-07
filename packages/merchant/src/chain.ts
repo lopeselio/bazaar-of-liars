@@ -12,7 +12,7 @@
  */
 import { Near } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
-import type { MerchantSecret, TipClaim } from "@bazaar/core";
+import type { MerchantSecret, StreetEvent, TipClaim } from "@bazaar/core";
 
 export type Network = "testnet" | "mainnet";
 
@@ -90,6 +90,9 @@ export interface Ledger {
   sellToBoard?(a: { saleId: string; player: string; goodId: string }): Promise<string>;
   /** Give back an agent's cap for an authorization that was never used. */
   releaseAuth?(authId: string): Promise<string>;
+  /** v3.10: street events. */
+  startEvent?(eventId: string): Promise<string>;
+  inspect?(a: { player: string; goodIds: string[] }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -152,6 +155,8 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     buyFromBoard: (a) => call("buy_from_board", { player: a.player, agent_id: a.agentId, good_id: a.goodId, price: a.price }, "FINAL"),
     sellToBoard: (a) => call("sell_to_board", { sale_id: a.saleId, player: a.player, good_id: a.goodId }, "FINAL"),
     releaseAuth: (authId) => call("release_auth", { auth_id: authId }),
+    startEvent: (eventId) => call("start_event", { event_id: eventId }, "FINAL"),
+    inspect: (a) => call("inspect", { player: a.player, good_ids: a.goodIds }, "FINAL"),
   };
 }
 
@@ -435,4 +440,10 @@ export async function readInformants(network: Network, contractId: string, ids: 
 export async function readTip(network: Network, contractId: string, tipId: string): Promise<OnchainTip | null> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<OnchainTip | null>(contractId, "get_tip", { tip_id: tipId }, { finality: "optimistic" })) ?? null;
+}
+
+/** The current or most recent street event (v3.10). */
+export async function readEvent(network: Network, contractId: string): Promise<StreetEvent | null> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<StreetEvent | null>(contractId, "street_event", {}, { finality: "optimistic" })) ?? null;
 }
