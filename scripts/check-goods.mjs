@@ -5,7 +5,9 @@
 const contract = process.argv[2] ?? process.env.BAZAAR_CONTRACT_ID ?? "v3.bazaar-liars.testnet";
 const RPC = "https://rpc.testnet.fastnear.com";
 const rpc = async (method, params) => {
-  const r = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }).then((x) => x.json());
+  const r = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })
+    .then((x) => x.json())
+    .catch((e) => ({ error: { message: e.message } })); // exit 2 (couldn't read), not 1 (mismatch)
   if (r.error) {
     console.error(`✗ ${method}: ${r.error.cause?.name ?? r.error.message}`);
     process.exit(2);
