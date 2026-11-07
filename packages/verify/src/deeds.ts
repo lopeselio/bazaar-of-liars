@@ -8,6 +8,7 @@
  * the contract said it, and any EVM contract can check the same thing with `ecrecover`.
  */
 import { computeAddress, decodeBase58, toBeHex, verifyMessage } from "ethers";
+import { failover, rpcUrls, type Failover, type Network } from "./rpc.js";
 
 export const DEED_KEY_PATH = "bazaar-deeds";
 
@@ -55,10 +56,12 @@ export function checkDeedCertificate(cert: DeedCertificate, a: { contractId: str
   return checks;
 }
 
-const RPC: Record<string, string> = { testnet: process.env.NEAR_RPC_URL ?? "https://rpc.testnet.fastnear.com", mainnet: process.env.NEAR_RPC_URL ?? "https://rpc.mainnet.fastnear.com" };
+const rpc: Partial<Record<Network, Failover>> = {};
 
 async function view<T>(network: string, account: string, method: string, args: object): Promise<T> {
-  const r = await fetch(RPC[network], {
+  const net: Network = network === "mainnet" ? "mainnet" : "testnet";
+  const f = (rpc[net] ??= failover(rpcUrls(net)));
+  const r = await f.fetch(rpcUrls(net)[0]!, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") } }),
