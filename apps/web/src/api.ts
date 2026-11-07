@@ -167,7 +167,7 @@ export interface MarketAgent {
 }
 export interface NewsItem {
   t: number;
-  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed";
+  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction";
   text: string;
   tx?: string;
   agents: string[];
@@ -234,6 +234,30 @@ export interface StallsView {
 }
 type StallResult = { ok: true; txUrl: string; stalls: StallsView; player: PlayerView };
 
+export interface AuctionLot {
+  id: string;
+  goodId: string;
+  goodName: string;
+  qty: number;
+  reserve: number;
+  opened: number;
+  bidsClose: number;
+  revealClose: number;
+  status: "bidding" | "settled" | "unsold";
+  bids: { who: string; mine: boolean; agent: boolean; deposit: number; amount: number | null }[];
+  winner: string | null;
+  youWon: boolean;
+  price: number;
+}
+export interface AuctionsView {
+  lot: AuctionLot | null;
+  recent: AuctionLot[];
+  nextShip?: number;
+  windows: { bidMs: number; revealMs: number; gapMs: number };
+  pier: { x: number; z: number };
+}
+type AuctionResult = { ok: true; txUrl: string; auctions: AuctionsView; player: PlayerView };
+
 export const api = {
   /** `origins`: where NEAR Auth's Auth0 client allows sign-in to return to. */
   authConfig: () => call<{ domain: string; clientId: string; origins: string[] }>("/api/auth/config"),
@@ -256,5 +280,9 @@ export const api = {
   withdrawStock: (player: string, goodId: string, qty: number) => call<StallResult>("/api/stalls/withdraw", { player, goodId, qty }),
   collectTill: (player: string) => call<StallResult>("/api/stalls/collect", { player }),
   dockWork: (player: string, x: number, z: number) => call<{ wage: number; txUrl: string; player: PlayerView }>("/api/dockwork", { player, x, z }),
+  auctions: (player: string) => call<AuctionsView>(`/api/auctions?player=${encodeURIComponent(player)}`),
+  bid: (id: string, player: string, commitment: string, deposit: number, x: number, z: number) =>
+    call<AuctionResult>(`/api/auctions/${id}/bid`, { player, commitment, deposit, x, z }),
+  reveal: (id: string, player: string, amount: number, salt: string) => call<AuctionResult>(`/api/auctions/${id}/reveal`, { player, amount, salt }),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };
