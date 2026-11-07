@@ -83,6 +83,13 @@
 //! cost the agent. `sell_to_board` buys one unit from a player at exactly the price the buying
 //! agent signed for with `authorize_spend`. Buy cheap at the docks, carry it uptown, sell dear.
 //!
+//! ## Street events (v3.10)
+//! Every so often the server calls `start_event` and the contract rolls what happens from the
+//! block's random seed: a festival (buyers pay more), a shortage of one good (it costs more and
+//! sells for more), or an inspector raid on Canal Street. During a raid, `inspect` confiscates
+//! (burns) whatever an unlicensed player holds above 5 of any good, once per raid; a stall
+//! licence exempts you. The agents react in the server's market loop.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -608,6 +615,39 @@ fn informant_key(id: &str) -> String {
 /// When a player last traded with an agent (ms), so a tip's buyer can't spoil it on purpose.
 fn last_trade_key(player: &AccountId, agent_id: &str) -> String {
     format!("x:lt:{player}#{agent_id}")
+}
+
+// ---------- v3.10: street events ----------
+
+/// At most one street event this often…
+pub const EVENT_GAP_MS: u64 = 12 * 60_000;
+/// …and each lasts this long.
+pub const EVENT_MS: u64 = 4 * 60_000;
+/// During a raid, an unlicensed player holding more than this many of a good loses the excess.
+pub const RAID_LIMIT: u32 = 5;
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    /// A street festival: buyers across town pay more and want more.
+    Festival,
+    /// One good runs short: it costs more at the docks and buyers pay a premium.
+    Shortage,
+    /// Inspectors sweep Canal Street: unlicensed traders carrying too much lose the excess.
+    Raid,
+}
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StreetEvent {
+    pub id: String,
+    pub kind: EventKind,
+    /// The good a shortage is about (empty otherwise).
+    pub good_id: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub seized: u64,
 }
 
 /// sha256 of the canonical preimage, lowercase hex.
@@ -1591,6 +1631,62 @@ impl Bazaar {
         let old = self.cost_basis.get(&key).copied().unwrap_or(0);
         self.cost_basis.insert(key, (old * (held - 1) + price * 100) / held);
         emit("board_trade", json!({ "sale_id": sale_id, "player": player, "agent": a.id, "good_id": good_id, "side": "player_sells", "price": price }));
+    }
+
+    // ---------- street events (v3.10) ----------
+
+    /// Server: start the next street event. The contract rolls what it is from the block's random
+    /// seed (festival, shortage of a good, or an inspector raid), at most every `EVENT_GAP_MS`.
+    pub fn start_event(&mut self, event_id: String) -> StreetEvent {
+        self.require_server();
+        require!(is_id(&event_id), "event_id must be [a-z0-9_-]{1,64}");
+        let now = env::block_timestamp_ms();
+        if let Some(last) = raw_get::<StreetEvent>("x:event") {
+            require!(now >= last.start_ms + EVENT_GAP_MS, "the street is still settling from the last event");
+        }
+        let seed = env::random_seed();
+        let roll = seed[2] % 10;
+        let kind = if roll < 4 { EventKind::Festival } else if roll < 7 { EventKind::Shortage } else { EventKind::Raid };
+        let good_id = if kind == EventKind::Shortage { GOOD_BASE[usize::from(seed[3]) % GOOD_BASE.len()].0.to_string() } else { String::new() };
+        let e = StreetEvent { id: event_id, kind, good_id, start_ms: now, end_ms: now + EVENT_MS, seized: 0 };
+        raw_put("x:event", &e);
+        emit("street_event", json!(e));
+        e
+    }
+
+    /// The current (or most recent) street event.
+    pub fn street_event(&self) -> Option<StreetEvent> {
+        raw_get("x:event")
+    }
+
+    /// Server, during a raid: inspect a player on Canal Street. A player without a stall licence
+    /// loses whatever they hold above `RAID_LIMIT` of each good (burned: confiscated). Once per
+    /// player per raid. Returns how many units were seized.
+    pub fn inspect(&mut self, player: AccountId, good_ids: Vec<String>) -> u32 {
+        self.require_server();
+        let mut e: StreetEvent = raw_get("x:event").unwrap_or_else(|| env::panic_str("no street event"));
+        let now = env::block_timestamp_ms();
+        require!(e.kind == EventKind::Raid && now < e.end_ms, "there's no raid on");
+        require!(self.agent_of(&player).is_none(), "the inspectors leave agents alone");
+        require!(good_ids.len() <= 16, "too many goods");
+        let key = format!("x:inspected:{}:{player}", e.id);
+        require!(raw_get::<u8>(&key).is_none(), "already inspected in this raid");
+        raw_put(&key, &1u8);
+        if self.stall_slot_of(&player).is_some() {
+            return 0; // licensed traders may carry stock
+        }
+        let mut seized = 0;
+        for g in &good_ids {
+            let n = self.goods_of(player.clone(), g.clone());
+            if n > RAID_LIMIT {
+                self.burn_goods(&player, g, n - RAID_LIMIT, "seized in a raid");
+                seized += n - RAID_LIMIT;
+            }
+        }
+        e.seized += u64::from(seized);
+        raw_put("x:event", &e);
+        emit("inspected", json!({ "event_id": e.id, "player": player, "seized": seized }));
+        seized
     }
 
     // ---------- haggles ----------
@@ -3099,5 +3195,68 @@ mod tests {
         ctx("server.testnet", 100);
         c.release_auth("q-1".into());
         assert_eq!(c.agent("deli").spent_today, 0);
+    }
+
+    // ---------- street events ----------
+
+    #[test]
+    fn the_contract_rolls_the_event() {
+        let mut c = setup();
+        // seed bytes 2 and 3: 3 % 10 < 4 → festival.
+        at_ms("server.testnet", T0, 3);
+        assert_eq!(c.start_event("e-1".into()).kind, EventKind::Festival);
+        at_ms("server.testnet", T0 + EVENT_GAP_MS, 5);
+        let e = c.start_event("e-2".into());
+        assert_eq!((e.kind, e.good_id.as_str()), (EventKind::Shortage, "lamp"));
+    }
+
+    #[test]
+    #[should_panic(expected = "still settling")]
+    fn events_are_spaced_out() {
+        let mut c = setup();
+        at_ms("server.testnet", T0, 3);
+        c.start_event("e-1".into());
+        at_ms("server.testnet", T0 + EVENT_GAP_MS - 1, 3);
+        c.start_event("e-2".into());
+    }
+
+    /// A raid (seed 9 → 9 % 10 = 9) with the player carrying 8 rugs.
+    fn raid() -> Bazaar {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        c.buy_from_board(player(), "wu".into(), "rug".into(), 10);
+        for _ in 0..6 {
+            c.buy_from_board(player(), "wu".into(), "rug".into(), 10);
+        }
+        at_ms("server.testnet", T0, 9);
+        assert_eq!(c.start_event("e-1".into()).kind, EventKind::Raid);
+        c
+    }
+
+    #[test]
+    fn a_raid_seizes_what_an_unlicensed_player_carries_over_the_limit() {
+        let mut c = raid();
+        assert_eq!(c.goods_of(player(), "rug".into()), 8);
+        let supply = c.mt_supply("rug".into()).unwrap().0;
+        assert_eq!(c.inspect(player(), vec!["rug".into(), "lamp".into()]), 3);
+        assert_eq!(c.goods_of(player(), "rug".into()), RAID_LIMIT);
+        assert_eq!(c.mt_supply("rug".into()).unwrap().0, supply - 3);
+        assert_eq!(c.street_event().unwrap().seized, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "already inspected")]
+    fn a_player_is_inspected_once_per_raid() {
+        let mut c = raid();
+        c.inspect(player(), vec!["rug".into()]);
+        c.inspect(player(), vec!["rug".into()]);
+    }
+
+    #[test]
+    #[should_panic(expected = "no raid on")]
+    fn no_inspections_after_the_raid() {
+        let mut c = raid();
+        at_ms("server.testnet", T0 + EVENT_MS, 9);
+        c.inspect(player(), vec!["rug".into()]);
     }
 }
