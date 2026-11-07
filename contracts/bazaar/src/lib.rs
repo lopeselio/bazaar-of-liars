@@ -68,6 +68,15 @@
 //! less a 10% penalty for a bid never revealed. An unsold lot sails on (burned). This state lives
 //! under raw "x:" storage keys, so it deployed without a migration.
 //!
+//! ## The rumour network (v3.8)
+//! Informants around the city sell tips about the near future: an agent's stock of a good at a
+//! check time, "at most n" or "at least n". `sell_tip` puts only the tip's hash onchain and holds
+//! the player's coins. At the check time `resolve_tip` reveals the claim; the contract checks it
+//! against the hash and against the agent's real stock right then. A true tip is paid (burned to
+//! the street), a lie is refunded, and either way it goes on the informant's public record
+//! (`informants`). A tip never revealed can be expired by anyone: refunded, and counted against
+//! the informant. Raw "x:" storage again, so no migration.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -511,6 +520,81 @@ fn raw_put<T: near_sdk::borsh::BorshSerialize>(key: &str, v: &T) {
 }
 fn auction_key(id: &str) -> String {
     format!("x:auc:{id}")
+}
+
+// ---------- v3.8: the rumour network ----------
+
+/** A tip resolves no sooner than this after it's sold… */
+pub const TIP_MIN_WAIT_MS: u64 = 60_000;
+/** …and no later than this. */
+pub const TIP_MAX_WAIT_MS: u64 = 30 * 60_000;
+/// After its check time the server has this long to reveal a tip; then anyone can expire it.
+pub const TIP_RESOLVE_WINDOW_MS: u64 = 15 * 60_000;
+pub const MAX_TIP_PRICE: u64 = 100;
+const TIP_DOMAIN: &str = "bazaar-tip";
+const PLAYER_TIPS: usize = 10;
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TipStatus {
+    Pending,
+    True,
+    False,
+    Hidden,
+}
+
+/// What a tip claims: an agent's stock of a good at the check time, at most or at least `n`.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TipClaim {
+    pub agent_id: String,
+    pub good_id: String,
+    pub at_most: bool,
+    pub n: u32,
+}
+
+/// A tip an informant sold a player. Only its commitment is public until it resolves.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tip {
+    pub id: String,
+    pub informant: String,
+    pub player: AccountId,
+    /// sha256("bazaar-tip|tip|informant|agent|good|le-or-ge|n|check_ms|salt"), lowercase hex.
+    pub commitment: String,
+    /// Held until the tip resolves: paid (burned) if it was true, refunded if it was a lie.
+    pub price: u64,
+    pub sold_ms: u64,
+    pub check_ms: u64,
+    pub status: TipStatus,
+    pub claim: Option<TipClaim>,
+    /// The agent's actual stock at resolution.
+    pub observed: Option<u32>,
+}
+
+/// An informant's public record, kept by the contract.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InformantRecord {
+    pub id: String,
+    pub sold: u64,
+    pub truths: u64,
+    pub lies: u64,
+    /// Tips the server never revealed: counted against the informant.
+    pub hidden: u64,
+}
+
+/// The commitment for a tip: must stay byte-identical to packages/core rumours.ts.
+pub fn tip_commitment(tip_id: &str, informant: &str, c: &TipClaim, check_ms: u64, salt: &str) -> String {
+    let cmp = if c.at_most { "le" } else { "ge" };
+    hex(&env::sha256(format!("{TIP_DOMAIN}|{tip_id}|{informant}|{}|{}|{cmp}|{}|{check_ms}|{salt}", c.agent_id, c.good_id, c.n).as_bytes()))
+}
+fn tip_key(id: &str) -> String {
+    format!("x:tip:{id}")
+}
+fn informant_key(id: &str) -> String {
+    format!("x:inf:{id}")
 }
 
 /// sha256 of the canonical preimage, lowercase hex.
@@ -1344,6 +1428,99 @@ impl Bazaar {
 
     pub fn last_ship_ms(&self) -> u64 {
         raw_get("x:lastship").unwrap_or(0)
+    }
+
+    // ---------- the rumour network (v3.8) ----------
+
+    fn informant_record(&self, id: &str) -> InformantRecord {
+        raw_get(&informant_key(id)).unwrap_or(InformantRecord { id: id.to_string(), ..Default::default() })
+    }
+
+    /// Server: an informant sells a player a tip. Only the tip's commitment goes onchain; the
+    /// player's coins are held until it resolves.
+    pub fn sell_tip(&mut self, tip_id: String, informant: String, player: AccountId, commitment: String, price: u64, check_ms: u64) {
+        self.require_server();
+        require!(is_id(&tip_id) && is_id(&informant), "ids must be [a-z0-9_-]{1,64}");
+        require!(raw_get::<Tip>(&tip_key(&tip_id)).is_none(), "tip_id already used");
+        require!(is_lower_hex(&commitment, 64), "commitment must be 64 lowercase hex chars");
+        require!((1..=MAX_TIP_PRICE).contains(&price), "a tip costs 1..=100 coins");
+        require!(self.agent_of(&player).is_none(), "agents don't buy tips");
+        let now = env::block_timestamp_ms();
+        require!(check_ms >= now + TIP_MIN_WAIT_MS && check_ms <= now + TIP_MAX_WAIT_MS, "a tip must come true within 1 to 30 minutes");
+        self.add_coins(&player, -(price as i64));
+        let mut rec = self.informant_record(&informant);
+        rec.sold += 1;
+        raw_put(&informant_key(&informant), &rec);
+        let tip = Tip { id: tip_id.clone(), informant: informant.clone(), player: player.clone(), commitment, price, sold_ms: now, check_ms, status: TipStatus::Pending, claim: None, observed: None };
+        raw_put(&tip_key(&tip_id), &tip);
+        let key = format!("x:tips:{player}");
+        let mut mine: Vec<String> = raw_get(&key).unwrap_or_default();
+        mine.insert(0, tip_id.clone());
+        mine.truncate(PLAYER_TIPS);
+        raw_put(&key, &mine);
+        emit("tip_sold", json!({ "tip_id": tip_id, "informant": informant, "player": player, "price": price, "check_ms": check_ms }));
+    }
+
+    /// Server, at the check time: reveal what the tip claimed. The contract checks it against the
+    /// commitment, then against the agent's real stock right now. A true tip's price is paid to
+    /// the street (burned); a lie is refunded to the player. Either way it goes on the
+    /// informant's public record.
+    pub fn resolve_tip(&mut self, tip_id: String, claim: TipClaim, salt: String) -> Tip {
+        self.require_server();
+        let mut t: Tip = raw_get(&tip_key(&tip_id)).unwrap_or_else(|| env::panic_str("unknown tip"));
+        require!(t.status == TipStatus::Pending, "tip already resolved");
+        let now = env::block_timestamp_ms();
+        require!(now >= t.check_ms, "too early: the tip is about the check time");
+        require!(now < t.check_ms + TIP_RESOLVE_WINDOW_MS, "too late: the tip has to be expired");
+        require!(is_lower_hex(&salt, 32), "salt must be 32 lowercase hex chars");
+        require!(tip_commitment(&tip_id, &t.informant, &claim, t.check_ms, &salt) == t.commitment, "reveal does not match the tip");
+        let agent = self.agent(&claim.agent_id);
+        let observed = self.goods_of(agent.account, claim.good_id.clone());
+        let truth = if claim.at_most { observed <= claim.n } else { observed >= claim.n };
+        let mut rec = self.informant_record(&t.informant);
+        if truth {
+            self.burned += t.price;
+            rec.truths += 1;
+            t.status = TipStatus::True;
+        } else {
+            self.add_coins(&t.player, t.price as i64);
+            rec.lies += 1;
+            t.status = TipStatus::False;
+        }
+        raw_put(&informant_key(&t.informant), &rec);
+        t.claim = Some(claim);
+        t.observed = Some(observed);
+        emit("tip_resolved", json!({ "tip_id": tip_id, "informant": t.informant, "player": t.player, "status": t.status, "claim": t.claim, "observed": observed }));
+        raw_put(&tip_key(&tip_id), &t);
+        t
+    }
+
+    /// Anyone: a tip the server never revealed is refunded, and counted against the informant.
+    pub fn expire_tip(&mut self, tip_id: String) {
+        let mut t: Tip = raw_get(&tip_key(&tip_id)).unwrap_or_else(|| env::panic_str("unknown tip"));
+        require!(t.status == TipStatus::Pending, "tip already resolved");
+        require!(env::block_timestamp_ms() >= t.check_ms + TIP_RESOLVE_WINDOW_MS, "the tip can still be revealed");
+        self.add_coins(&t.player, t.price as i64);
+        let mut rec = self.informant_record(&t.informant);
+        rec.hidden += 1;
+        raw_put(&informant_key(&t.informant), &rec);
+        t.status = TipStatus::Hidden;
+        emit("tip_expired", json!({ "tip_id": tip_id, "informant": t.informant }));
+        raw_put(&tip_key(&tip_id), &t);
+    }
+
+    pub fn get_tip(&self, tip_id: String) -> Option<Tip> {
+        raw_get(&tip_key(&tip_id))
+    }
+
+    /// A player's most recent tips, newest first.
+    pub fn tips_of(&self, player: AccountId) -> Vec<Tip> {
+        raw_get::<Vec<String>>(&format!("x:tips:{player}")).unwrap_or_default().iter().filter_map(|id| raw_get(&tip_key(id))).collect()
+    }
+
+    /// Informants' public records.
+    pub fn informants(&self, ids: Vec<String>) -> Vec<InformantRecord> {
+        ids.iter().take(32).map(|id| self.informant_record(id)).collect()
     }
 
     // ---------- haggles ----------
@@ -2694,4 +2871,85 @@ mod tests {
         assert_eq!(bid_commitment("ship-1", &acc("guest-0011223344556677"), 130, BSALT), BID_VECTOR);
     }
     const BID_VECTOR: &str = "e10e213e549b9d04319420abddca6d9ce7f818e37bac0a776e02bebfa8fe9c67";
+
+    // ---------- the rumour network ----------
+
+    fn zaria_claim(at_most: bool, n: u32) -> TipClaim {
+        TipClaim { agent_id: "zaria".into(), good_id: "saffron".into(), at_most, n }
+    }
+    /// Player buys a tip (claim on Zaria's saffron, which is 3) checked 2 minutes later.
+    fn sold_tip(claim: &TipClaim) -> Bazaar {
+        let mut c = setup();
+        buy_rug(&mut c, "h1"); // 140 coins
+        at_ms("server.testnet", T0, 1);
+        let h = tip_commitment("tip-1", "vex", claim, T0 + 120_000, BSALT);
+        c.sell_tip("tip-1".into(), "vex".into(), player(), h, 20, T0 + 120_000);
+        c
+    }
+
+    #[test]
+    fn a_true_tip_is_paid_and_goes_on_the_record() {
+        let claim = zaria_claim(true, 3);
+        let mut c = sold_tip(&claim);
+        assert_eq!(c.coins_of(player()), 120);
+        at_ms("server.testnet", T0 + 120_000, 1);
+        let t = c.resolve_tip("tip-1".into(), claim, BSALT.into());
+        assert_eq!((t.status, t.observed), (TipStatus::True, Some(3)));
+        assert_eq!(c.coins_of(player()), 120);
+        let rec = &c.informants(vec!["vex".into()])[0];
+        assert_eq!((rec.sold, rec.truths, rec.lies), (1, 1, 0));
+    }
+
+    #[test]
+    fn a_lie_is_refunded_and_goes_on_the_record() {
+        let claim = zaria_claim(false, 5);
+        let mut c = sold_tip(&claim);
+        at_ms("server.testnet", T0 + 120_000, 1);
+        assert_eq!(c.resolve_tip("tip-1".into(), claim, BSALT.into()).status, TipStatus::False);
+        assert_eq!(c.coins_of(player()), 140);
+        assert_eq!(c.informants(vec!["vex".into()])[0].lies, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "reveal does not match the tip")]
+    fn an_informant_cannot_change_the_tip_afterwards() {
+        let mut c = sold_tip(&zaria_claim(false, 5));
+        at_ms("server.testnet", T0 + 120_000, 1);
+        c.resolve_tip("tip-1".into(), zaria_claim(true, 5), BSALT.into());
+    }
+
+    #[test]
+    #[should_panic(expected = "too early")]
+    fn tips_resolve_only_at_the_check_time() {
+        let claim = zaria_claim(true, 3);
+        let mut c = sold_tip(&claim);
+        c.resolve_tip("tip-1".into(), claim, BSALT.into());
+    }
+
+    #[test]
+    fn an_unrevealed_tip_expires_refunded_and_counts_against_the_informant() {
+        let mut c = sold_tip(&zaria_claim(true, 3));
+        at_ms("anyone.testnet", T0 + 120_000 + TIP_RESOLVE_WINDOW_MS, 1);
+        c.expire_tip("tip-1".into());
+        assert_eq!(c.coins_of(player()), 140);
+        assert_eq!(c.informants(vec!["vex".into()])[0].hidden, 1);
+        assert_eq!(c.tips_of(player())[0].status, TipStatus::Hidden);
+    }
+
+    #[test]
+    #[should_panic(expected = "within 1 to 30 minutes")]
+    fn a_tip_must_be_about_the_near_future() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        at_ms("server.testnet", T0, 1);
+        c.sell_tip("tip-1".into(), "vex".into(), player(), "a".repeat(64), 20, T0 + 10_000);
+    }
+
+    #[test]
+    fn tip_commitment_matches_typescript() {
+        ctx("x.testnet", 1);
+        // Vector from packages/core tipCommitment() (see rumours.test.ts).
+        assert_eq!(tip_commitment("tip-1", "vex", &zaria_claim(true, 3), 1_120_000, BSALT), TIP_VECTOR);
+    }
+    const TIP_VECTOR: &str = "ee48273145f98e3325e11bb2d95448b3d862fa4db697505a02c1f20e49dbee6c";
 }
