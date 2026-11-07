@@ -171,7 +171,8 @@ Informants around the city sell tips about the next few minutes. It's the Bazaar
   - A true tip is paid (the price is burned). A lie is refunded.
   - Either way it goes on the informant's public record (`informants()`: sold, truths, lies, never revealed), which floats over their head in the city.
   - A tip the server never reveals can be expired by anyone after 15 minutes: refunded, and counted against the informant.
-- **Limits.** A player who buys a tip and then trades with that merchant can change the outcome. The worst they get is their own money back on a tip they spoiled. The check runs when the server resolves it, within seconds of the check time, not at an exact block.
+- **No spoiling a tip.** Trading with a merchant changes its stock, so a buyer could turn an honest tip into a "lie" and get a refund. The contract notes when each player last traded with each merchant. A tip whose buyer traded with that merchant before the check is **void**: the buyer pays, and the informant's record doesn't change.
+- **Limits.** An honest informant can still be wrong: agents restock and trade in the meantime. The check runs when the server resolves the tip, within seconds of the check time, not at an exact block.
 
 ## Fair-play protocol (the core NEAR feature)
 
