@@ -542,6 +542,9 @@ pub enum TipStatus {
     True,
     False,
     Hidden,
+    /// The buyer traded with that merchant before the check: the tip doesn't count either way
+    /// (it's paid, and the informant's record is untouched).
+    Void,
 }
 
 /// What a tip claims: an agent's stock of a good at the check time, at most or at least `n`.
@@ -595,6 +598,10 @@ fn tip_key(id: &str) -> String {
 }
 fn informant_key(id: &str) -> String {
     format!("x:inf:{id}")
+}
+/// When a player last traded with an agent (ms), so a tip's buyer can't spoil it on purpose.
+fn last_trade_key(player: &AccountId, agent_id: &str) -> String {
+    format!("x:lt:{player}#{agent_id}")
 }
 
 /// sha256 of the canonical preimage, lowercase hex.
@@ -1477,8 +1484,14 @@ impl Bazaar {
         let agent = self.agent(&claim.agent_id);
         let observed = self.goods_of(agent.account, claim.good_id.clone());
         let truth = if claim.at_most { observed <= claim.n } else { observed >= claim.n };
+        let meddled = raw_get::<u64>(&last_trade_key(&t.player, &claim.agent_id)).is_some_and(|ms| ms >= t.sold_ms);
         let mut rec = self.informant_record(&t.informant);
-        if truth {
+        if meddled {
+            // Trading with the merchant can change its stock: the buyer gets no refund, and the
+            // informant no mark either way.
+            self.burned += t.price;
+            t.status = TipStatus::Void;
+        } else if truth {
             self.burned += t.price;
             rec.truths += 1;
             t.status = TipStatus::True;
@@ -1683,6 +1696,9 @@ impl Bazaar {
             }
         }
         if deal_price.is_some() {
+            if buyer_agent.is_none() {
+                raw_put(&last_trade_key(&player, &h.merchant_id), &env::block_timestamp_ms());
+            }
             h.status = Status::Deal;
             h.price = deal_price;
             self.deals += 1;
@@ -2952,4 +2968,22 @@ mod tests {
         assert_eq!(tip_commitment("tip-1", "vex", &zaria_claim(true, 3), 1_120_000, BSALT), TIP_VECTOR);
     }
     const TIP_VECTOR: &str = "ee48273145f98e3325e11bb2d95448b3d862fa4db697505a02c1f20e49dbee6c";
+
+    #[test]
+    fn a_buyer_who_trades_with_the_merchant_voids_the_tip() {
+        // Claim: Farrukh will have at most 2 rugs (he has 3, so it's a lie)…
+        let claim = TipClaim { agent_id: "farrukh".into(), good_id: "rug".into(), at_most: true, n: 1 };
+        let mut c = sold_tip(&claim);
+        // …and the buyer buys one from him, which would make it come true.
+        at_ms("server.testnet", T0 + 30_000, 1);
+        let s = Secret { loyalty: 1, ..sell_secret() };
+        open(&mut c, "h2", &s);
+        c.close_haggle("h2".into(), s, SALT.into(), Some(60), false);
+        at_ms("server.testnet", T0 + 120_000, 1);
+        let t = c.resolve_tip("tip-1".into(), claim, BSALT.into());
+        assert_eq!(t.status, TipStatus::Void);
+        assert_eq!(c.coins_of(player()), 120 - 60, "no refund");
+        let rec = &c.informants(vec!["vex".into()])[0];
+        assert_eq!((rec.truths, rec.lies), (0, 0));
+    }
 }
