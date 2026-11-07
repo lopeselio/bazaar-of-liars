@@ -10,3 +10,4 @@ export * from "./orders.js";
 export * from "./cred.js";
 export * from "./stalls.js";
 export * from "./wages.js";
+export * from "./auctions.js";
