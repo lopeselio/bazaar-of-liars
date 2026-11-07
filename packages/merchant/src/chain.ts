@@ -398,7 +398,7 @@ export interface OnchainTip {
   price: number;
   sold_ms: number;
   check_ms: number;
-  status: "pending" | "true" | "false" | "hidden";
+  status: "pending" | "true" | "false" | "hidden" | "void";
   claim: TipClaim | null;
   observed: number | null;
 }
@@ -421,4 +421,10 @@ export async function readTips(network: Network, contractId: string, player: str
 export async function readInformants(network: Network, contractId: string, ids: string[]): Promise<InformantRecord[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<InformantRecord[]>(contractId, "informants", { ids }, { finality: "optimistic" })) ?? [];
+}
+
+/** One tip, as the contract recorded it (v3.8). */
+export async function readTip(network: Network, contractId: string, tipId: string): Promise<OnchainTip | null> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<OnchainTip | null>(contractId, "get_tip", { tip_id: tipId }, { finality: "optimistic" })) ?? null;
 }
