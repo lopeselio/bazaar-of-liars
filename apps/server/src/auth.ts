@@ -68,7 +68,14 @@ export const fetchJwks: JwksFetcher = async (url) => {
 export async function verifyIdToken(jwt: string, cfg: Pick<AuthConfig, "domain" | "clientId">, jwks: JwksFetcher = fetchJwks, now = Date.now()): Promise<string> {
   const parts = jwt.split(".");
   if (parts.length !== 3) throw new AuthError("malformed token");
-  const header = JSON.parse(b64url(parts[0]).toString()) as { alg?: string; kid?: string };
+  const json = <T>(part: string): T => {
+    try {
+      return JSON.parse(b64url(part).toString()) as T;
+    } catch {
+      throw new AuthError("malformed token");
+    }
+  };
+  const header = json<{ alg?: string; kid?: string }>(parts[0]);
   if (header.alg !== "RS256") throw new AuthError("unsupported token algorithm");
   const issuer = `https://${cfg.domain}/`;
   const { keys } = await jwks(`${issuer}.well-known/jwks.json`);
@@ -76,7 +83,7 @@ export async function verifyIdToken(jwt: string, cfg: Pick<AuthConfig, "domain" 
   if (!jwk) throw new AuthError("unknown signing key");
   const ok = rsaVerify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), createPublicKey({ key: jwk, format: "jwk" }), b64url(parts[2]));
   if (!ok) throw new AuthError("bad token signature");
-  const c = JSON.parse(b64url(parts[1]).toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string };
+  const c = json<{ iss?: string; aud?: string | string[]; exp?: number; sub?: string }>(parts[1]);
   if (c.iss !== issuer) throw new AuthError("wrong issuer");
   const aud = Array.isArray(c.aud) ? c.aud : [c.aud];
   if (!aud.includes(cfg.clientId)) throw new AuthError("token is for another app");

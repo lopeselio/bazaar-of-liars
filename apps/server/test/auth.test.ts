@@ -21,6 +21,8 @@ describe("NEAR Auth ID tokens", () => {
 
   it("rejects forged, foreign, expired and odd tokens", async () => {
     const bad = async (t: string) => expect(verifyIdToken(t, cfg, jwks, now)).rejects.toBeInstanceOf(AuthError);
+    await bad("x.y.z");
+    await bad("not-a-token");
     await bad(token({ ...good, aud: "someone-else" }));
     await bad(token({ ...good, iss: "https://evil.test/" }));
     await bad(token({ ...good, exp: now / 1000 - 3600 }));
