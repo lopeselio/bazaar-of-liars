@@ -87,7 +87,8 @@ export function makeClaim(rng: Rng, informant: Informant, merchants: MerchantSto
   }
   // What it sells: it only goes down (until a restock), so "at least a little less than now" holds.
   const s = m.sellsStock;
-  if (honest) return { honest, claim: s <= 1 ? { agent_id: m.id, good_id: m.sells, at_most: true, n: s } : { agent_id: m.id, good_id: m.sells, at_most: false, n: Math.max(0, s - 2) } };
+  // "At least 0" says nothing, so a short shelf is always reported as "no more than now".
+  if (honest) return { honest, claim: s <= 2 ? { agent_id: m.id, good_id: m.sells, at_most: true, n: s } : { agent_id: m.id, good_id: m.sells, at_most: false, n: s - 2 } };
   return { honest, claim: s >= 3 ? { agent_id: m.id, good_id: m.sells, at_most: true, n: Math.max(0, s - 3) } : { agent_id: m.id, good_id: m.sells, at_most: false, n: s + 3 } };
 }
 
