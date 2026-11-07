@@ -59,7 +59,7 @@ flowchart TB
 | Player's browser | Three.js bazaar + chat (`apps/web`), a guest id, no wallet | Plays, then downloads the proof bundle |
 | Game server | `apps/server` + the rules engine in `packages/core`, on Azure Container Apps (2–5 replicas, image built in Azure Container Registry by `scripts/deploy-azure.sh`) | Attests the model, commits the secret, runs turns, reveals and settles. The only party that signs transactions, so players never pay gas |
 | Azure Managed Redis | TLS, access key, persistence off | Holds live haggles (with their secret until revealed), market days, turn locks and rate limits, so any replica can serve the next turn |
-| Container App secrets | NEAR AI key, `bazaar-server.testnet` key, the agents' keys (`AGENT_KEYS`), Redis URL | Never in the image or the repo |
+| Container App secrets | NEAR AI key, `bazaar-server.testnet` key, the agents' keys (`AGENT_KEYS`), Redis URL, the session secret (`SESSION_SECRET`) | Never in the image or the repo |
 | NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
 | NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods as NEP-245 multi tokens, merchant memory, top traders, and the agents' purses, stock and spending caps |
 | Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab` (`.v3.bazaar-liars.testnet`) | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
@@ -129,6 +129,7 @@ The same game, set on Canal Street in a walkable New York, where every trader is
 8. Every deal and delivery earns **street cred**, recorded onchain: watch the XP bar under your purse fill and a **+XP** pop up. Catching a merchant bluffing earns more. Your first XP each day adds a streak bonus (🔥), so come back tomorrow to grow it. Click the card to see what each level unlocks: express jobs at level 2, jobs from Times Square and Central Park at level 3. Until then those jobs show 🔒 on the board.
 9. Past Tobin's stall, four empty stalls are **for licence**. At level 3, walk up to one, press **F** and buy the licence (150 coins). Put goods you own on it and set your prices. While you're away, rival traders buy anything priced under street value, and customers whose delivery nobody brought buy what they wanted. Each purchase is signed by the buying agent and settled onchain, and the street keeps 10%. Next time you open the city, a **While you were away** card shows what your stall sold. Walk back and collect the till.
 10. Down to your last coins? A green banner points to **Pier 34**, at the west end of Canal Street (about 1 km). There, press **F** to unload crates for Auntie Wu, the wholesaler. She pays 40 coins out of her own purse, once a day, and only to players who are broke (under 20 coins). The contract checks both.
+11. **Sign in to own it all.** Run the game on port 3000 (`pnpm build`, then `PORT=3000 pnpm start`, and open http://localhost:3000/city/), then click **🔑 Sign in · Google or email**. It's NEAR Auth: you sign in with Google, email or a passkey, and your key is held by NEAR's MPC network, so there's no seed phrase and no wallet to install. You come back as a NEAR account (the chip shows `🔑 aca7a9…da71`). Your coins, goods (NEP-245 tokens) and street cred now live under that account onchain. If you'd been playing as a guest, you're offered to bring that progress along. On the hosted demo the button reads "Sign-in: run locally on :3000": NEAR Auth's shared testnet sign-in only allows `http://localhost:3000` for now, so hosted players stay guests.
 
 The rules the agents follow, and what they can and can't do with their keys, are in [DESIGN.md](./DESIGN.md#agent-economy-on-canal-street-v3).
 
@@ -142,7 +143,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ## Try the pieces
 
-1. Run `pnpm install`, then `pnpm test`. You should see 95 tests pass, including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
+1. Run `pnpm install`, then `pnpm test`. You should see 99 tests pass, including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer (e.g. `40`), claim a competitor's price (`40 saw 35`), call a claimed minimum (`liar`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor. `sharp` (calls bluffs unless the merchant looks firm) should beat both `caller` (calls everything) and `splitter` (never calls) against every merchant. Calling blindly only pays against heavy bluffers like Farrukh.
 4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
@@ -163,7 +164,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 64 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 68 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;

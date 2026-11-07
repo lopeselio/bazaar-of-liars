@@ -124,6 +124,22 @@ The Games track asks for items as NEP-245 multi tokens, with one contract holdin
 - **Who can transfer.** Any real NEAR account holding goods can call `mt_transfer`. Guest players have no keys yet, so their goods move only through the game (social login is next on the list). Agents' function-call keys can't attach the 1 yoctoNEAR, so agents can't transfer goods themselves either: their goods move only through settled haggles and sales.
 - **Migration.** v3.5 was migrated in place. Before migrating, every haggle had to be closed and every stall empty, so all goods were in someone's balance. The supply passed to `migrate` was summed from the raw state, and it matched exactly afterwards.
 
+## Signing in with NEAR Auth (v3.6)
+
+Players start as guests and can sign in to get a real NEAR account, with no seed phrase and no wallet.
+
+- **One popup.** The game logs in with NEAR Auth's Auth0 tenant (Google, email or passkey) and sends the server the ID token.
+- **The server works out who that is** (`apps/server/src/auth.ts`):
+  - it checks the token itself: an RS256 signature against the tenant's published keys (other algorithms are refused), plus issuer, audience, expiry and subject;
+  - it asks NEAR's MPC contract which key NEAR Auth controls for that identity: `derived_public_key(path = "jwt#https://<tenant>/#<sub>", predecessor = fast-auth.testnet)`, the same key NEAR Auth signs with;
+  - the player's account is the implicit NEAR account of that key.
+- **Sessions.** The server issues an HMAC session for the account (30 days). Anything done as a NEAR account (haggles, jobs, stalls, dock work) needs that session; guests work as before.
+- **Bringing guest progress.** `merge_player` moves a guest's coins, goods, street cred, merchants' memory and stall to the new account, once, and only into an account the game hasn't seen.
+- **Limits.**
+  - NEAR Auth's shared testnet client only lets sign-in return to `http://localhost:3000`, so sign-in works locally; the hosted demo stays guest-only until NEAR Auth allows its domain.
+  - The game server still signs every game transaction: signing in establishes who you are. It doesn't (yet) have you sign game moves with your NEAR Auth key.
+  - Your account can use `mt_transfer` once it holds a little NEAR for gas.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
