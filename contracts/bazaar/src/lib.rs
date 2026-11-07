@@ -725,7 +725,9 @@ impl Bazaar {
             a.spent_today = 0;
         }
         let next = a.spent_today as i64 + amount;
-        require!(next <= a.daily_cap as i64, "over the agent's daily spending cap");
+        // Releasing a reservation never fails, even if the cap was lowered since: otherwise a
+        // settlement that hands cap back could be blocked for good.
+        require!(amount <= 0 || next <= a.daily_cap as i64, "over the agent's daily spending cap");
         a.spent_today = next.max(0) as u64;
         self.agents.insert(id.to_string(), a);
     }
@@ -2660,6 +2662,21 @@ mod tests {
         at_ms("anyone.testnet", T0 + BID_WINDOW_MS + REVEAL_WINDOW_MS, 1);
         assert_eq!(c.settle_auction("ship-1".into()).price, 100);
         assert_eq!(c.cred_of(player()).xp, XP_DEAL + XP_STREAK_BONUS + XP_AUCTION_WIN);
+    }
+
+    #[test]
+    fn settling_still_works_after_an_agents_cap_is_lowered() {
+        let (mut c, _) = port();
+        at_ms("ivy.testnet", T0 + 1000, 1);
+        c.authorize_spend("b-ivy-testnet".into(), 150);
+        at_ms("server.testnet", T0 + 2000, 1);
+        bid(&mut c, &acc("ivy.testnet"), 120, 150);
+        // The owner lowers Ivy's cap below what she has reserved.
+        at_ms("owner.testnet", T0 + 3000, 1);
+        c.register_agent("ivy".into(), "Ivy".into(), acc("ivy.testnet"), AgentKind::Trader, 50, 0, vec![]);
+        at_ms("anyone.testnet", T0 + BID_WINDOW_MS + REVEAL_WINDOW_MS, 1);
+        assert_eq!(c.settle_auction("ship-1".into()).status, AuctionStatus::Unsold);
+        assert_eq!(c.coins_of(acc("ivy.testnet")), 300 - 15);
     }
 
     #[test]
