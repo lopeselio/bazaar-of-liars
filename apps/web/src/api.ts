@@ -235,7 +235,8 @@ export interface StallsView {
 type StallResult = { ok: true; txUrl: string; stalls: StallsView; player: PlayerView };
 
 export const api = {
-  authConfig: () => call<{ domain: string; clientId: string }>("/api/auth/config"),
+  /** `origins`: where NEAR Auth's Auth0 client allows sign-in to return to. */
+  authConfig: () => call<{ domain: string; clientId: string; origins: string[] }>("/api/auth/config"),
   startSession: (idToken: string) => call<Session & { player: PlayerView }>("/api/auth/session", { idToken }),
   linkGuest: (guest: string) => call<{ ok: true; player: PlayerView }>("/api/auth/link", { guest }),
   merchants: () => call<{ merchants: MerchantInfo[]; model: string; onchain: { network: string; contractId: string } | null }>("/api/merchants"),
