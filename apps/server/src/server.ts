@@ -692,10 +692,20 @@ function bazaarEth() {
   return deedSigner.catch(() => null);
 }
 
+/** Certificates change only when someone certifies, so cache them (per replica) a little while. */
+const certCache = new Map<string, { at: number; cert: Awaited<ReturnType<typeof readDeedCertificate>> }>();
+async function cachedCertificate(slot: string) {
+  const hit = certCache.get(slot);
+  if (hit && Date.now() - hit.at < 30_000) return hit.cert;
+  const cert = await readDeedCertificate(ledger!.network, ledger!.contractId, slot);
+  certCache.set(slot, { at: Date.now(), cert });
+  return cert;
+}
+
 /** A deed's Ethereum certificate, if it names the current owner, with our own check of it. */
 async function deedCertificate(slot: string, owner: string) {
   if (!ledger) return null;
-  const [cert, eth] = await Promise.all([readDeedCertificate(ledger.network, ledger.contractId, slot).catch(() => null), bazaarEth()]);
+  const [cert, eth] = await Promise.all([cachedCertificate(slot).catch(() => certCache.get(slot)?.cert ?? null), bazaarEth()]);
   if (!cert || cert.owner !== owner || !eth) return null;
   const verified = checkDeedCertificate(cert, { contractId: ledger.contractId, ethAddress: eth.ethAddress }).every((c) => c.ok);
   return { ...cert, ethAddress: eth.ethAddress, signer: eth.signer, path: eth.path, verified };
@@ -749,6 +759,7 @@ async function stallAction(action: string, body: Record<string, unknown>) {
       if (await store.getJSON(key)) throw new HttpError(429, "Your deed was certified a moment ago. Try again in a few minutes.");
       await store.putJSON(key, 1, 5 * 60_000);
       tx = await ledger.certifyDeed(own.slot);
+      certCache.delete(own.slot);
       news = `A stall deed on Canal Street (${own.slot}) was certified on Ethereum by NEAR's MPC network`;
     } else if (action === "buydeed") {
       if (!ledger.buyDeed) throw new HttpError(404, "the deed market isn't open");
