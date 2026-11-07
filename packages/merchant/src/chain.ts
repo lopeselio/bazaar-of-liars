@@ -13,14 +13,13 @@
 import { Near } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
 import type { MerchantSecret, StreetEvent, TipClaim } from "@bazaar/core";
-import type { DeedCertificate } from "@bazaar/verify";
+import { installRpcFailover, primaryRpc, type DeedCertificate, type Network } from "@bazaar/verify";
 
-export type Network = "testnet" | "mainnet";
+export type { Network };
 
-const RPC: Record<Network, string> = {
-  testnet: "https://rpc.testnet.fastnear.com",
-  mainnet: "https://rpc.mainnet.fastnear.com",
-};
+// A busy RPC (HTTP 429) falls over to the next public endpoint: see packages/verify/src/rpc.ts.
+installRpcFailover();
+const RPC: Record<Network, string> = { testnet: primaryRpc("testnet"), mainnet: primaryRpc("mainnet") };
 export const explorerTx = (network: Network, hash: string) =>
   `https://${network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${hash}`;
 
