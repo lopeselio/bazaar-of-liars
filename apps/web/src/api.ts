@@ -344,7 +344,7 @@ export const api = {
   buyTip: (informant: string, player: string, x: number, z: number) =>
     call<{ tip: { id: string; informant: string; text: string; plain: string; checkMs: number; price: number }; txUrl: string; player: PlayerView | null }>(`/api/rumours/${informant}/buy`, { player, x, z }),
   boards: () => call<BoardsView>("/api/boards"),
-  boardTrade: (id: string, player: string, goodId: string, x: number, z: number) =>
-    call<{ ok: true; price: number; txUrl: string; boards: BoardsView | null; player: PlayerView | null }>(`/api/boards/${id}/trade`, { player, goodId, x, z }),
+  boardTrade: (id: string, player: string, goodId: string, x: number, z: number, expectedPrice: number) =>
+    call<{ ok: true; price: number; txUrl: string; boards: BoardsView | null; player: PlayerView | null }>(`/api/boards/${id}/trade`, { player, goodId, x, z, expectedPrice }),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };

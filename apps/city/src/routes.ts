@@ -151,13 +151,15 @@ export function initRoutes(d: RouteDeps) {
     trading = true;
     try {
       const p = d.cm.getActiveEntity().position;
-      const r = await api.boardTrade(b.id, d.player, goodId, p.x, p.z);
+      const r = await api.boardTrade(b.id, d.player, goodId, p.x, p.z, b.prices[goodId] ?? 0);
       if (r.boards) view = r.boards;
       d.toast(b.kind === "sells" ? `Bought ${d.goodName(goodId)} for ${r.price}. Settled onchain.` : `Sold ${d.goodName(goodId)} to ${b.name} for ${r.price}. Settled onchain.`);
       if (b.kind === "buys") d.burst(Math.max(3, Math.round(r.price / 10)));
       await d.refreshPurse(true);
     } catch (e) {
       d.toast((e as Error).message);
+      // A moved price: show the new one.
+      view = await api.boards().catch(() => view);
     } finally {
       trading = false;
       renderTags();
