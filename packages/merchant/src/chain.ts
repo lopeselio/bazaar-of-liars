@@ -88,6 +88,8 @@ export interface Ledger {
   /** v3.9: price boards across the city. */
   buyFromBoard?(a: { player: string; agentId: string; goodId: string; price: number }): Promise<string>;
   sellToBoard?(a: { saleId: string; player: string; goodId: string }): Promise<string>;
+  /** Give back an agent's cap for an authorization that was never used. */
+  releaseAuth?(authId: string): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -149,6 +151,7 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     expireTip: (tipId) => call("expire_tip", { tip_id: tipId }, "FINAL"),
     buyFromBoard: (a) => call("buy_from_board", { player: a.player, agent_id: a.agentId, good_id: a.goodId, price: a.price }, "FINAL"),
     sellToBoard: (a) => call("sell_to_board", { sale_id: a.saleId, player: a.player, good_id: a.goodId }, "FINAL"),
+    releaseAuth: (authId) => call("release_auth", { auth_id: authId }),
   };
 }
 
