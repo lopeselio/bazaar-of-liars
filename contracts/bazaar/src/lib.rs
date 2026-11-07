@@ -53,6 +53,11 @@
 //! standard `nep245` mint / burn / transfer events for every movement. Goods in escrow (a haggle in
 //! progress, stock on a player's stall) are held by this contract's own account.
 //!
+//! ## Signing in (v3.6)
+//! A guest who signs in with NEAR Auth gets a real NEAR account. `merge_player` moves everything
+//! the guest earned (coins, goods, street cred, merchants' memory, a stall) to that account, once,
+//! and only into an account the game hasn't seen yet.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -921,6 +926,44 @@ impl Bazaar {
                 self.orders.remove(&id);
             }
         }
+    }
+
+    // ---------- signing in ----------
+
+    /// Server: move a guest's progress to the NEAR account they just signed in with. `merchant_ids`
+    /// and `good_ids` list what to carry over (memory and goods). Only into an account the game
+    /// hasn't seen, so progress can't be merged over someone else's.
+    pub fn merge_player(&mut self, from: AccountId, to: AccountId, merchant_ids: Vec<String>, good_ids: Vec<String>) {
+        self.require_server();
+        require!(from != to, "from and to must differ");
+        require!(self.agent_of(&from).is_none() && self.agent_of(&to).is_none(), "agents can't be merged");
+        require!(self.coins.contains_key(&from), "nothing to carry over");
+        require!(!self.coins.contains_key(&to) && self.cred.get(&to).is_none(), "that account already has progress");
+        require!(merchant_ids.len() <= 32 && good_ids.len() <= 16, "too many ids");
+        let coins = self.coins_of(from.clone());
+        self.coins.remove(&from);
+        self.set_coins(&to, coins);
+        for g in &good_ids {
+            let n = self.goods_of(from.clone(), g.clone());
+            self.move_goods(&from, &to, g, n, "signed in");
+        }
+        if let Some(c) = self.cred.remove(&from) {
+            self.cred.insert(to.clone(), c);
+        }
+        if let Some(x) = self.server_xp.remove(&from) {
+            self.server_xp.insert(to.clone(), x);
+        }
+        for m in &merchant_ids {
+            if let Some(mem) = self.memory.remove(&memory_key(&from, m)) {
+                self.memory.insert(memory_key(&to, m), mem);
+            }
+        }
+        if let Some(slot) = self.stall_slot_of(&from) {
+            let mut st = self.stalls.get(&slot).cloned().unwrap();
+            st.owner = to.clone();
+            self.stalls.insert(slot, st);
+        }
+        emit("player_merged", json!({ "from": from, "to": to, "coins": coins }));
     }
 
     // ---------- dock work ----------
@@ -2207,5 +2250,52 @@ mod tests {
         let kept = c.mt_resolve_transfer(player(), acc("market.testnet"), vec!["rug".into()], vec![U128(1)], Err(PromiseError::Failed));
         assert_eq!(kept, vec![U128(0)]);
         assert_eq!(c.mt_balance_of(player(), "rug".into()), U128(1));
+    }
+
+    // ---------- signing in ----------
+
+    fn implicit() -> AccountId {
+        acc("d5a0c6f3b0e1d2c3b4a5968778695a4b3c2d1e0f9e8d7c6b5a4938271605f4e3")
+    }
+
+    #[test]
+    fn a_guest_brings_their_progress_to_a_new_account() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        c.award_cred(player(), 4, "caught_bluff".into());
+        c.merge_player(player(), implicit(), vec!["farrukh".into(), "zaria".into()], vec!["rug".into(), "saffron".into()]);
+        assert_eq!(c.coins_of(implicit()), STARTER_COINS - 60);
+        assert_eq!(c.mt_balance_of(implicit(), "rug".into()), U128(1));
+        assert_eq!(c.cred_of(implicit()).xp, 10 + 4);
+        assert_eq!(c.memory_of(implicit(), "farrukh".into()), Memory { lowballs: 0, deals: 1 });
+        assert_eq!(c.coins_of(player()), 0);
+        assert_eq!(c.mt_balance_of(player(), "rug".into()), U128(0));
+        assert_eq!(c.cred_of(player()), Cred::default());
+        assert_eq!(c.mt_supply("rug".into()), Some(U128(103)), "nothing created or lost");
+    }
+
+    #[test]
+    #[should_panic(expected = "already has progress")]
+    fn progress_never_merges_over_an_existing_account() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        c.set_coins(&implicit(), 5);
+        c.merge_player(player(), implicit(), vec![], vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "nothing to carry over")]
+    fn an_unknown_guest_has_nothing_to_merge() {
+        let mut c = setup();
+        c.merge_player(player(), implicit(), vec![], vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "only the game server")]
+    fn only_the_server_merges() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        ctx("player.testnet", 100);
+        c.merge_player(player(), implicit(), vec![], vec![]);
     }
 }
