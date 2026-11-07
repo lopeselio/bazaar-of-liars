@@ -121,6 +121,8 @@ describe("parsing and presentation", () => {
     expect(present("{OFFER}? My floor is 21. {PRICE}, no less than {CLAIM}.", d, 12)).toBe("12? My floor is …. 30, no less than 25.");
     expect(present("Deal for sixty-two, friend!", d)).toBe("Deal for …, friend! [30 coins] Not a coin below 25.");
     expect(present("Hmm, no.", d)).toBe("Hmm, no. [30 coins] Not a coin below 25.");
+    // The player offered exactly the claimed limit: echoing their offer isn't stating the claim.
+    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25)).toBe("25? You wound me. 30. It is the lowest I could ever go. Not a coin below 25.");
   });
 
   it("a {CLAIM} outside a bluffing counter is blanked", () => {
