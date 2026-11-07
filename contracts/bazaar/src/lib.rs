@@ -1562,6 +1562,17 @@ impl Bazaar {
         emit("board_trade", json!({ "player": player, "agent": agent_id, "good_id": good_id, "side": "player_buys", "price": price }));
     }
 
+    /// Server: drop an agent's spend authorization that was never used (a board sale that
+    /// failed after the agent signed), giving its daily cap back. Not for a haggle in progress.
+    pub fn release_auth(&mut self, auth_id: String) {
+        self.require_server();
+        require!(!self.haggles.contains_key(&auth_id), "that authorization belongs to a haggle");
+        let auth = self.auths.remove(&auth_id).unwrap_or_else(|| env::panic_str("no such authorization"));
+        let a = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("unknown agent"));
+        self.charge_cap(&a.id, -(auth.max as i64));
+        emit("auth_released", json!({ "auth_id": auth_id, "agent": a.id, "max": auth.max }));
+    }
+
     /// Server: an agent buys one unit from a player at its posted price. The agent signed
     /// `authorize_spend(sale_id, price)` first; the price is exactly what it signed for.
     pub fn sell_to_board(&mut self, sale_id: String, player: AccountId, good_id: String) {
@@ -3077,5 +3088,16 @@ mod tests {
         c.authorize_spend("q-1".into(), 80);
         ctx("server.testnet", 100);
         c.sell_to_board("q-1".into(), player(), "saffron".into());
+    }
+
+    #[test]
+    fn an_unused_authorization_can_be_released() {
+        let mut c = setup();
+        ctx("deli.testnet", 100);
+        c.authorize_spend("q-1".into(), 80);
+        assert_eq!(c.agent("deli").spent_today, 80);
+        ctx("server.testnet", 100);
+        c.release_auth("q-1".into());
+        assert_eq!(c.agent("deli").spent_today, 0);
     }
 }
