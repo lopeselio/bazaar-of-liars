@@ -1719,7 +1719,7 @@ impl Bazaar {
         let st = self.stalls.get(&slot).cloned().unwrap_or_else(|| env::panic_str("no such deed"));
         let me = env::predecessor_account_id();
         require!(me == self.server || me == st.owner, "only the deed's owner or the game server can certify it");
-        require!(env::attached_deposit() >= NearToken::from_yoctonear(1), "attach 1 yoctoNEAR for the MPC signer");
+        require!(env::attached_deposit() == NearToken::from_yoctonear(1), "attach exactly 1 yoctoNEAR for the MPC signer");
         let height = env::block_height();
         let message = deed_message(&slot, &st.owner, &env::current_account_id(), height);
         let request = MpcSignRequest { path: DEED_KEY_PATH.into(), payload_v2: MpcPayload { ecdsa: hex(&eip191_hash(&message)) }, domain_id: 0 };
@@ -1736,9 +1736,17 @@ impl Bazaar {
     pub fn on_deed_certified(&mut self, slot: String, owner: AccountId, message: String, block_height: u64) -> Option<DeedCertificate> {
         let sig = env::promise_result_checked(0, 2048).ok().and_then(|b| near_sdk::serde_json::from_slice::<MpcSignature>(&b).ok());
         let Some(sig) = sig.and_then(|s| eth_signature(&s)) else {
-            emit("deed_certify_failed", json!({ "slot": slot }));
+            emit("deed_certify_failed", json!({ "slot": slot, "reason": "no signature" }));
             return None;
         };
+        // Signatures can come back out of order: never replace a newer certificate, and never
+        // certify someone who sold the deed while the MPC network was signing.
+        let newer = raw_get::<DeedCertificate>(&cert_key(&slot)).is_some_and(|c| c.block_height >= block_height);
+        let still_owner = self.stalls.get(&slot).is_some_and(|st| st.owner == owner);
+        if newer || !still_owner {
+            emit("deed_certify_failed", json!({ "slot": slot, "reason": if newer { "a newer certificate exists" } else { "the deed changed hands" } }));
+            return None;
+        }
         let cert = DeedCertificate { slot: slot.clone(), owner, message, signature: sig, block_height };
         raw_put(&cert_key(&slot), &cert);
         emit("deed_certified", json!({ "slot": slot, "owner": cert.owner, "signature": cert.signature, "block_height": block_height }));
@@ -3932,6 +3940,30 @@ mod tests {
         let cert = c.on_deed_certified("corner-1".into(), player(), "m".into(), 100).unwrap();
         assert_eq!(c.deed_certificate("corner-1".into()), Some(cert.clone()));
         assert!(cert.signature.ends_with("1c") && cert.signature.len() == 132);
+        // A late answer for an older request doesn't replace it.
+        with_result("bazaar.testnet", near_sdk::PromiseResult::Successful(MPC_ANSWER.as_bytes().to_vec()));
+        assert!(c.on_deed_certified("corner-1".into(), player(), "older".into(), 90).is_none());
+        assert_eq!(c.deed_certificate("corner-1".into()).unwrap().message, "m");
+    }
+
+    #[test]
+    fn a_deed_sold_while_signing_is_not_certified_for_the_seller() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("player.testnet");
+        c.nft_transfer(bob(), "corner-1".into(), None, None);
+        with_result("bazaar.testnet", near_sdk::PromiseResult::Successful(MPC_ANSWER.as_bytes().to_vec()));
+        assert!(c.on_deed_certified("corner-1".into(), player(), "m".into(), 100).is_none());
+        assert!(c.deed_certificate("corner-1".into()).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly 1 yoctoNEAR")]
+    fn certifying_takes_exactly_the_fee() {
+        let mut c = setup();
+        licensed(&mut c);
+        testing_env!(VMContextBuilder::new().predecessor_account_id(player()).attached_deposit(near_sdk::NearToken::from_near(1)).build());
+        let _ = c.certify_deed("corner-1".into());
     }
 
     #[test]
@@ -3944,7 +3976,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "attach 1 yoctoNEAR")]
+    #[should_panic(expected = "attach exactly 1 yoctoNEAR")]
     fn certifying_pays_the_mpc_fee() {
         let mut c = setup();
         licensed(&mut c);
