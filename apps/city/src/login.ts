@@ -44,16 +44,20 @@ export function initLogin(d: { hud: HTMLElement; guestId: string; toast: (m: str
     b.textContent = "🔑 Signing in…";
     try {
       const c = await client();
-      await c.loginWithPopup();
+      // Picking a Google account or typing an email code easily takes more than Auth0's default 60 s.
+      await c.loginWithPopup(undefined, { timeoutInSeconds: 300 });
       const claims = await c.getIdTokenClaims();
       if (!claims?.__raw) throw new Error("No ID token came back from the sign-in.");
       const s = await api.startSession(claims.__raw);
       saveSession({ account: s.account, publicKey: s.publicKey, token: s.token, exp: s.exp });
       await offerLink(s.player);
     } catch (e) {
-      d.toast(`Sign-in didn't finish: ${(e as Error).message}`);
+      const msg = (e as Error).message || String(e);
+      console.error("NEAR Auth sign-in failed:", e);
+      d.toast(`Sign-in didn't finish: ${msg}`);
       b.disabled = false;
-      b.textContent = "🔑 Sign in · Google or email";
+      b.textContent = "🔑 Sign-in failed · try again";
+      b.title = msg; // stays visible after the toast fades
     }
   }
 
