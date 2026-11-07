@@ -301,9 +301,10 @@ export function initAuctions(d: AuctionDeps) {
     if (t - last < 0.2) return;
     last = t;
     const live = !!l && phase(l) === "bidding";
-    beam.visible = live;
     const p = d.cm.getActiveEntity().position;
     const dist = Math.hypot(PIER.x - p.x, PIER.z - p.z);
+    // The beam guides the way; standing in it, it would only block the view of the ship.
+    beam.visible = live && dist > REACH;
     const was = atPier;
     atPier = dist < REACH && !d.busy();
     if (open && was !== atPier) render();
