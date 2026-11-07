@@ -35,6 +35,9 @@ importers:
       '@bazaar/merchant':
         specifier: workspace:*
         version: link:../../packages/merchant
+      '@bazaar/verify':
+        specifier: workspace:*
+        version: link:../../packages/verify
       redis:
         specifier: 6.3.0
         version: 6.3.0
