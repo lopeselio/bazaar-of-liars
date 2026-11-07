@@ -352,7 +352,11 @@ async function auctionsView(player: string) {
     revealClose: a.reveal_close_ms,
     status: a.status,
     // Sealed bids show only who bid and the deposit; amounts appear as they're revealed.
-    bids: a.bids.map((b) => ({ who: name(b.bidder), mine: b.bidder === player, agent: b.agent, deposit: b.deposit, amount: b.amount })),
+    // Deposits stay hidden too while bidding is open: a deposit bounds the bid it covers.
+    bids: a.bids.map((b) => {
+      const mine = b.bidder === player;
+      return { who: name(b.bidder), mine, agent: b.agent, deposit: mine || Date.now() >= a.bids_close_ms ? b.deposit : null, amount: b.amount };
+    }),
     winner: a.winner ? name(a.winner) : null,
     youWon: a.winner === player,
     price: a.price,
@@ -385,7 +389,8 @@ async function auctionAction(id: string, action: string, body: Record<string, un
     } catch (e) {
       throw refusal(e, "The auctioneer didn't take that bid. Try again.");
     }
-    await store.pushNews({ t: Date.now(), kind: "auction", text: `A player sealed a bid at Pier 34 (deposit ${deposit})`, tx: explorerTx(ledger.network, tx), agents: [] });
+    // The bid is onchain now: nothing after this may fail the request, or the browser would drop its salt.
+    await store.pushNews({ t: Date.now(), kind: "auction", text: "A player sealed a bid at Pier 34", tx: explorerTx(ledger.network, tx), agents: [] }).catch(() => {});
   } else {
     const amount = Math.floor(Number(body.amount));
     const salt = String(body.salt ?? "");
@@ -397,7 +402,8 @@ async function auctionAction(id: string, action: string, body: Record<string, un
     }
   }
   market.invalidate();
-  return { ok: true, txUrl: explorerTx(ledger.network, tx), auctions: await auctionsView(player), player: await playerView(player) };
+  const [auctions, me] = await Promise.all([auctionsView(player).catch(() => null), playerView(player).catch(() => null)]);
+  return { ok: true, txUrl: explorerTx(ledger.network, tx), auctions, player: me };
 }
 
 // ---------- player stalls ----------

@@ -244,7 +244,8 @@ export interface AuctionLot {
   bidsClose: number;
   revealClose: number;
   status: "bidding" | "settled" | "unsold";
-  bids: { who: string; mine: boolean; agent: boolean; deposit: number; amount: number | null }[];
+  /** `deposit` is null for others' bids while bidding is open. */
+  bids: { who: string; mine: boolean; agent: boolean; deposit: number | null; amount: number | null }[];
   winner: string | null;
   youWon: boolean;
   price: number;
@@ -256,7 +257,7 @@ export interface AuctionsView {
   windows: { bidMs: number; revealMs: number; gapMs: number };
   pier: { x: number; z: number };
 }
-type AuctionResult = { ok: true; txUrl: string; auctions: AuctionsView; player: PlayerView };
+type AuctionResult = { ok: true; txUrl: string; auctions: AuctionsView | null; player: PlayerView | null };
 
 export const api = {
   /** `origins`: where NEAR Auth's Auth0 client allows sign-in to return to. */
