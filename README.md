@@ -1,7 +1,7 @@
 # Bazaar of Liars
 
 A trading game against AI merchants who bluff. Read their tells, call their lies, buy low and sell high, and the chain proves every bluff was fair.
-Built at NEAR HACKATHON (1–14 Nov 2026). Tracks: Games With Real Economies, Privacy & Private AI, Agent Economy, NFTs That Do Something.
+Built at NEAR HACKATHON (1–14 Nov 2026). Tracks: Games With Real Economies, Privacy & Private AI, Agent Economy, NFTs That Do Something, AI Swarms.
 
 ## What it is
 

@@ -22,7 +22,7 @@ The team decides these at submit time: project name, team lead, contact email, t
 
 ## Tracks
 
-Chosen: **`games`** (primary), **`privacy`**, **`agents`**, **`nfts`**. Also worth considering: **`swarms`** (agents bidding against each other in sealed-bid auctions, informants, a trading economy between agents).
+Chosen: **`games`** (primary), **`privacy`**, **`agents`**, **`nfts`**, **`swarms`**.
 
 | Track | Why it fits | Hints it uses |
 |---|---|---|
@@ -30,6 +30,7 @@ Chosen: **`games`** (primary), **`privacy`**, **`agents`**, **`nfts`**. Also wor
 | Privacy & Private AI | Every merchant line is produced by a TEE model on NEAR AI Cloud, attested (Intel TDX + NVIDIA) and signed; the model never sees the merchant's real limit, only the engine's decision and the merchant's mood; when a haggle ends the server deletes it from its store (Redis without persistence), the secret is revealed onchain for anyone to check, and the player keeps the proof | Private AI, TEE, NEAR AI Cloud |
 | Agent Economy | Agents with their own sub-accounts earn, spend, hire runners, bid in auctions and sell tips; each key can only authorize spends within an onchain daily cap | Agent commerce, function-call keys, Chain Signatures |
 | NFTs That Do Something | A deed is the stall: transferring it moves the business, the seller's stock and till go home | NEP-171, Chain Signatures |
+| AI Swarms | Thirteen agents, each a NEAR sub-account with its own purse and capped key, coordinate through markets nobody scripts: merchants restock from the wholesaler and hire a runner, rival traders buy low and sell high, the wholesaler, merchants and traders bid against each other (and players) in sealed-bid cargo auctions, and customers post delivery bounties; alongside them, informants sell tips the contract checks. Prices and stock emerge from what they do | Multi-agent systems, sub-accounts, sealed bidding |
 
 ## Description (the `idea` field, 1688 of 2000 characters)
 
