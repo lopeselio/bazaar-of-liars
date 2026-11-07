@@ -52,6 +52,8 @@ import {
   type MerchantSecret,
   type PlayerMemory,
   type Reason,
+  BUYS_PER_WINDOW,
+  BUY_WINDOW_MS,
 } from "@bazaar/core";
 import { explorerTx, readAgents, readDeedAsks, type DeedAsk, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
@@ -223,6 +225,8 @@ export class Market {
       const sales = await this.store.count(`sales:${merchant.id}`);
       return rollSellSecret(this.rng, merchant, GOODS[merchant.goodId], h, sales, memory);
     }
+    if ((await this.store.count(`buys:${merchant.id}`)) >= BUYS_PER_WINDOW)
+      return { refusal: `${short(merchant.id)} has bought enough ${GOODS[merchant.buysGoodId].name.toLowerCase()} for now. Try again in a few minutes, or sell elsewhere.` };
     const h = await this.holdings(merchant.id, merchant.buysGoodId);
     const p = rollBuySecret(this.rng, merchant, GOODS[merchant.buysGoodId], h, memory);
     if (!p) return { refusal: `${short(merchant.id)} is too broke to buy anything right now.` };
@@ -240,6 +244,7 @@ export class Market {
   async onPlayerDeal(merchantId: string, side: "sell" | "buy", goodId: string, price: number, closeTx: string | null) {
     this.invalidate();
     if (side === "sell") await this.store.bump(`sales:${merchantId}`, DEMAND_MS);
+    else await this.store.bump(`buys:${merchantId}`, BUY_WINDOW_MS);
     await this.say({
       kind: "sale",
       text: side === "sell" ? `A player bought ${GOODS[goodId].name} from ${short(merchantId)} for ${price}` : `${short(merchantId)} bought a player's ${GOODS[goodId].name} for ${price}`,
@@ -331,9 +336,11 @@ export class Market {
       const [goodId] = held;
       const buyer = MERCHANTS.find((m) => m.buysGoodId === goodId)!;
       const b = agents.find((a) => a.id === buyer.id)!;
+      if ((await this.store.count(`buys:${buyer.id}`)) >= BUYS_PER_WINDOW) return;
       const p = rollBuySecret(this.rng, buyer, GOODS[goodId], { coins: b.coins, stock: b.stock[goodId], costBasis: 0 }, await this.memoryOf(traderId, buyer.id));
       if (!p) return;
       const r = await this.agentHaggle({ agentId: traderId, seller: buyer, secret: p.secret, escrow: p.escrow, bot: "seller", authorize: 1 });
+      if (r.price !== null) await this.store.bump(`buys:${buyer.id}`, BUY_WINDOW_MS);
       await this.say({
         kind: "trade",
         text: r.price === null ? `${short(traderId)} couldn't get a price from ${short(buyer.id)} for a ${GOODS[goodId].name}` : `${short(traderId)} sold a ${GOODS[goodId].name} to ${short(buyer.id)} for ${r.price}`,
