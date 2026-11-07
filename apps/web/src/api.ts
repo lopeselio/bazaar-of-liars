@@ -107,6 +107,8 @@ export interface TurnOut {
   refused: { reason: "budget"; budget: number; price: number } | null;
   claim: number | null;
   call: "caught" | "honest" | null;
+  /** Coaching from what the player can see (never the secret): e.g. the merchant barely moved. */
+  hint: string | null;
   ms: number;
   end?: Ending;
 }
