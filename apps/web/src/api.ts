@@ -167,7 +167,7 @@ export interface MarketAgent {
 }
 export interface NewsItem {
   t: number;
-  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction" | "rumour" | "route";
+  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction" | "rumour" | "route" | "event";
   text: string;
   tx?: string;
   agents: string[];

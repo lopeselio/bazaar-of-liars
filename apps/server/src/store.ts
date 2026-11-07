@@ -64,7 +64,7 @@ export interface Store {
 /** One line in the street's news feed. */
 export interface NewsItem {
   t: number;
-  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction" | "rumour" | "route";
+  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction" | "rumour" | "route" | "event";
   text: string;
   /** Explorer link for the transaction that settled it. */
   tx?: string;

@@ -19,6 +19,11 @@ import {
   AGENTS,
   BOTS,
   SHIP_GAP_MS,
+  EVENT_GAP_MS,
+  eventHeadline,
+  bountyMultiplier,
+  tradersLieLow,
+  type StreetEvent,
   TIP_RESOLVE_WINDOW_MS,
   informantById,
   type TipClaim,
@@ -48,7 +53,7 @@ import {
   type PlayerMemory,
   type Reason,
 } from "@bazaar/core";
-import { explorerTx, readAgents, readAuctions, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
+import { explorerTx, readAgents, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
 const GOOD_IDS = Object.keys(GOODS);
@@ -102,6 +107,7 @@ export class Market {
   private orderCache: { at: number; orders: MarketOrder[] } | null = null;
   private stallCache: { at: number; stalls: OnchainStall[] } | null = null;
   private auctionCache: { at: number; auctions: OnchainAuction[] } | null = null;
+  private eventCache: { at: number; event: StreetEvent | null } | null = null;
   private rng = mulberry32(Date.now() % 2 ** 31);
 
   constructor(
@@ -142,6 +148,7 @@ export class Market {
     this.orderCache = null;
     this.stallCache = null;
     this.auctionCache = null;
+    this.eventCache = null;
   }
 
   /** Player-owned stalls (v3.3). */
@@ -384,9 +391,11 @@ export class Market {
 
     const open = orders.filter((x) => x.status === "open" && x.deadline_ms >= now);
     const idle = CUSTOMERS.filter((c) => !open.some((o) => o.customer === c.id));
+    const boost = bountyMultiplier(await this.event());
     for (let n = open.length; n < OPEN_ORDERS_TARGET && idle.length; n++) {
       const c = idle.splice(Math.floor(this.rng() * idle.length), 1)[0];
       const t = orderTerms(this.rng, c, GOOD_VALUES);
+      t.bounty = Math.round(t.bounty * boost);
       const me = (await this.agents(0)).find((a) => a.id === c.id);
       if (!me) continue;
       if (me.coins < t.bounty) {
@@ -491,6 +500,7 @@ export class Market {
    */
   async harbour() {
     await this.resolveTips().catch((e) => console.error("rumours:", (e as Error).message));
+    await this.streetEvents().catch((e) => console.error("events:", (e as Error).message));
     const now = Date.now();
     const recent = await this.auctions(0);
     for (const a of recent.filter((x) => x.status === "bidding")) {
@@ -615,6 +625,26 @@ export class Market {
     if (done.length) await this.editPending((ids) => ids.filter((x) => !done.includes(x)));
   }
 
+  // ---------- street events ----------
+
+  /** The current or most recent street event (v3.10). */
+  async event(maxAgeMs = 3000): Promise<StreetEvent | null> {
+    if (this.eventCache && Date.now() - this.eventCache.at < maxAgeMs) return this.eventCache.event;
+    const event = await readEvent(this.ledger.network, this.ledger.contractId).catch(() => null);
+    this.eventCache = { at: Date.now(), event };
+    return event;
+  }
+
+  /** Start the next event when one is due; the contract decides what it is. */
+  private async streetEvents() {
+    const last = await this.event(0);
+    if (last && Date.now() < last.start_ms + EVENT_GAP_MS + 5000) return;
+    const tx = await this.ledger.startEvent!(`ev-${Date.now().toString(36)}`);
+    this.invalidate();
+    const e = await this.event(0);
+    if (e) await this.say({ kind: "event", text: eventHeadline(e, (g) => GOODS[g]?.name ?? g), tx: explorerTx(this.ledger.network, tx), agents: [] });
+  }
+
   /** One round of the agents acting on their own. Errors are logged, never thrown. */
   async tick() {
     const step = async (name: string, f: () => Promise<void>) => {
@@ -628,6 +658,10 @@ export class Market {
     await step("consume", () => this.consume());
     await step("customers", () => this.customers());
     const traders = AGENTS.filter((a) => a.kind === "trader");
+    if (tradersLieLow(await this.event())) {
+      await this.say({ kind: "event", text: "Ivy and Rex are lying low while the inspectors walk Canal Street", agents: traders.map((t) => t.id) });
+      return;
+    }
     const t = traders[Math.floor(this.rng() * traders.length)];
     if (t && this.rng() < 0.6) await step(`trade ${t.id}`, () => this.trade(t.id));
     const shopper = traders[Math.floor(this.rng() * traders.length)];
