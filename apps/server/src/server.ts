@@ -16,6 +16,9 @@
  *                                       earned since their last visit)
  *   POST /api/stalls/{licence|stock|withdraw|collect} {player,…}  run your own stall
  *   POST /api/dockwork {player,x,z}     a broke player works a shift at Pier 34 for the wholesaler
+ *   GET  /api/auctions?player=…         the cargo ship lot at Pier 34 (sealed bids) and recent results
+ *   POST /api/auctions/:id/bid {player,commitment,deposit,x,z}  seal a bid (hashed in the browser)
+ *   POST /api/auctions/:id/reveal {player,amount,salt}           open it once bidding closes
  *   GET  /api/auth/config               the NEAR Auth (Auth0) tenant the browser signs in with
  *   POST /api/auth/session {idToken}    verify a NEAR Auth login; returns the player's NEAR account + session
  *   POST /api/auth/link {guest}         (signed in) bring a guest's progress to the account
@@ -32,7 +35,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, BROKE_BELOW, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -100,6 +103,19 @@ if (market && MARKET_TICK_MS > 0)
       await store.unlock("market-tick", token);
     }
   }, MARKET_TICK_MS).unref();
+// The harbour runs on a shorter beat than the street: bid and reveal windows are minutes long.
+if (market && MARKET_TICK_MS > 0)
+  setInterval(async () => {
+    const token = await store.lock("harbour-tick", 60_000).catch(() => null);
+    if (!token) return;
+    try {
+      await market.harbour();
+    } catch (e) {
+      console.error("harbour:", (e as Error).message);
+    } finally {
+      await store.unlock("harbour-tick", token);
+    }
+  }, 10_000).unref();
 
 const restore = (rec: LiveRecord) => HaggleSession.restore(rec.snap, llm, attestor, ledger ?? undefined);
 
@@ -310,6 +326,76 @@ async function dockWork(body: Record<string, unknown>) {
   market.invalidate();
   await store.pushNews({ t: Date.now(), kind: "hire", text: `Auntie Wu hired a broke player to unload crates at Pier 34 for ${DOCK_WAGE}`, tx: explorerTx(ledger.network, tx), agents: ["wu"] });
   return { wage: DOCK_WAGE, txUrl: explorerTx(ledger.network, tx), player: await playerView(player) };
+}
+
+// ---------- cargo ship auctions at Pier 34 ----------
+
+const refusal = (e: unknown, fallback: string) => {
+  const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
+  return new HttpError(409, m ? sentence(m[1]) : fallback);
+};
+
+async function auctionsView(player: string) {
+  if (!market) return { lot: null, recent: [], windows: { bidMs: BID_WINDOW_MS, revealMs: REVEAL_WINDOW_MS, gapMs: SHIP_GAP_MS }, pier: DOCK };
+  const all = await market.auctions();
+  const name = (account: string) => AGENTS.find((a) => signers?.[a.id]?.account === account)?.name ?? (account === player ? "you" : `player ${shortPlayer(account)}`);
+  const view = (a: (typeof all)[number]) => ({
+    id: a.id,
+    goodId: a.good_id,
+    goodName: GOODS[a.good_id]?.name ?? a.good_id,
+    qty: a.qty,
+    reserve: a.reserve,
+    opened: a.opened_ms,
+    bidsClose: a.bids_close_ms,
+    revealClose: a.reveal_close_ms,
+    status: a.status,
+    // Sealed bids show only who bid and the deposit; amounts appear as they're revealed.
+    bids: a.bids.map((b) => ({ who: name(b.bidder), mine: b.bidder === player, agent: b.agent, deposit: b.deposit, amount: b.amount })),
+    winner: a.winner ? name(a.winner) : null,
+    youWon: a.winner === player,
+    price: a.price,
+  });
+  const lot = all.find((a) => a.status === "bidding") ?? null;
+  return {
+    lot: lot ? view(lot) : null,
+    recent: all.filter((a) => a.status !== "bidding").slice(0, 5).map(view),
+    nextShip: (all[0]?.opened_ms ?? 0) + SHIP_GAP_MS,
+    windows: { bidMs: BID_WINDOW_MS, revealMs: REVEAL_WINDOW_MS, gapMs: SHIP_GAP_MS },
+    pier: DOCK,
+  };
+}
+
+async function auctionAction(id: string, action: string, body: Record<string, unknown>) {
+  if (!market || !ledger?.commitBid) throw new HttpError(404, "auctions need the agent economy");
+  const player = String(body.player ?? "");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
+  let tx: string;
+  if (action === "bid") {
+    if (Math.hypot(num(body.x) - DOCK.x, num(body.z) - DOCK.z) > PIER_REACH) throw new HttpError(409, "Walk to Pier 34 at the west end of Canal Street to bid.");
+    const commitment = String(body.commitment ?? "");
+    const deposit = Math.floor(Number(body.deposit));
+    if (!/^[0-9a-f]{64}$/.test(commitment)) throw new HttpError(400, "a sealed bid is a sha256 hash");
+    const p = await purse(player);
+    if (!p.known) throw new HttpError(409, "Make your first deal on Canal Street before bidding at the docks.");
+    if (!(deposit >= 1 && deposit <= p.coins)) throw new HttpError(402, `Your deposit can't be more than your ${p.coins} coins.`);
+    try {
+      tx = await ledger.commitBid({ auctionId: id, bidId: `b-${Date.now().toString(36)}`, bidder: player, commitment, deposit });
+    } catch (e) {
+      throw refusal(e, "The auctioneer didn't take that bid. Try again.");
+    }
+    await store.pushNews({ t: Date.now(), kind: "auction", text: `A player sealed a bid at Pier 34 (deposit ${deposit})`, tx: explorerTx(ledger.network, tx), agents: [] });
+  } else {
+    const amount = Math.floor(Number(body.amount));
+    const salt = String(body.salt ?? "");
+    if (!(amount >= 0) || !/^[0-9a-f]{32}$/.test(salt)) throw new HttpError(400, "a reveal needs the bid and its salt");
+    try {
+      tx = await ledger.revealBid!({ auctionId: id, bidder: player, amount, salt });
+    } catch (e) {
+      throw refusal(e, "The reveal didn't go through. Try again.");
+    }
+  }
+  market.invalidate();
+  return { ok: true, txUrl: explorerTx(ledger.network, tx), auctions: await auctionsView(player), player: await playerView(player) };
 }
 
 // ---------- player stalls ----------
@@ -709,6 +795,9 @@ createServer(async (req, res) => {
       return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
     }
     if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(body));
+    if (req.method === "GET" && url.startsWith("/api/auctions")) return send(res, 200, await auctionsView(new URL(url, "http://x").searchParams.get("player") ?? ""));
+    const am = url.match(/^\/api\/auctions\/([a-z0-9_-]{1,64})\/(bid|reveal)$/);
+    if (req.method === "POST" && am) return send(res, 200, await auctionAction(am[1], am[2], body));
     const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect)$/);
     if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], body));
     const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
