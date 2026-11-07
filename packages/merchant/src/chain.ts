@@ -85,6 +85,9 @@ export interface Ledger {
   sellTip?(a: { tipId: string; informant: string; player: string; commitment: string; price: number; checkMs: number }): Promise<string>;
   resolveTip?(a: { tipId: string; claim: TipClaim; salt: string }): Promise<string>;
   expireTip?(tipId: string): Promise<string>;
+  /** v3.9: price boards across the city. */
+  buyFromBoard?(a: { player: string; agentId: string; goodId: string; price: number }): Promise<string>;
+  sellToBoard?(a: { saleId: string; player: string; goodId: string }): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -144,6 +147,8 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     sellTip: (a) => call("sell_tip", { tip_id: a.tipId, informant: a.informant, player: a.player, commitment: a.commitment, price: a.price, check_ms: a.checkMs }, "FINAL"),
     resolveTip: (a) => call("resolve_tip", { tip_id: a.tipId, claim: a.claim, salt: a.salt }, "FINAL"),
     expireTip: (tipId) => call("expire_tip", { tip_id: tipId }, "FINAL"),
+    buyFromBoard: (a) => call("buy_from_board", { player: a.player, agent_id: a.agentId, good_id: a.goodId, price: a.price }, "FINAL"),
+    sellToBoard: (a) => call("sell_to_board", { sale_id: a.saleId, player: a.player, good_id: a.goodId }, "FINAL"),
   };
 }
 
