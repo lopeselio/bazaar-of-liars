@@ -523,6 +523,9 @@ button:disabled {
 #bz-ship[hidden],
 #bz-pier-prompt[hidden],
 #bz-auction[hidden],
+#bz-inf-prompt[hidden],
+#bz-rumour[hidden],
+#bz-tips-chip[hidden],
 #bz-dock-prompt[hidden],
 #bz-own-prompt[hidden],
 #bz-own[hidden],
@@ -1383,7 +1386,8 @@ button:disabled {
   color: #2a1a08;
   font: 700 15px var(--bz-font);
 }
-#bz-auction {
+#bz-auction,
+#bz-rumour {
   position: fixed;
   right: 16px;
   top: 64px;
@@ -1397,31 +1401,38 @@ button:disabled {
   font: 14px/1.4 var(--bz-font);
   animation: bz-slide 0.25s ease;
 }
-#bz-auction header {
+#bz-auction,
+#bz-rumour header {
   display: flex;
   justify-content: space-between;
   gap: 8px;
 }
-#bz-auction h2 {
+#bz-auction,
+#bz-rumour h2 {
   margin: 0;
   font-size: 20px;
   color: var(--bz-gold);
 }
 #bz-auction header p,
 #bz-auction .bz-note,
-#bz-auction .bz-dim {
+#bz-auction .bz-dim,
+#bz-rumour header p,
+#bz-rumour .bz-note,
+#bz-rumour .bz-dim {
   margin: 0;
   font-size: 13px;
   color: var(--bz-dim);
 }
-#bz-auction h4 {
+#bz-auction,
+#bz-rumour h4 {
   margin: 4px 0 0;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--bz-dim);
 }
-#bz-auction > button {
+#bz-auction,
+#bz-rumour > button {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--bz-gold);
@@ -1430,13 +1441,66 @@ button:disabled {
   font: 600 14px var(--bz-font);
   cursor: pointer;
 }
-#bz-auc-x {
+#bz-auc-x,
+#bz-rum-x {
   background: none;
   border: 0;
   color: var(--bz-dim);
   font-size: 18px;
   cursor: pointer;
   align-self: start;
+}
+
+/* ---------- the rumour network ---------- */
+.bz-inf-tag b {
+  color: #c9a2e8;
+}
+#bz-inf-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  transform: translateX(-50%);
+  z-index: 46;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--bz-bg);
+  border: 1px solid #c9a2e8;
+  color: var(--bz-ink);
+  font: 600 16px var(--bz-font);
+}
+#bz-inf-prompt kbd {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #c9a2e8;
+  color: #24123a;
+  font: 700 15px var(--bz-font);
+}
+#bz-rumour > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.bz-whisper {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid #c9a2e8;
+  border-radius: 8px;
+  background: rgba(201, 162, 232, 0.12);
+  font-style: italic;
+}
+#bz-rumour a {
+  color: var(--bz-gold);
+}
+#bz-tips-chip {
+  color: var(--bz-ink);
+  font: 600 13px var(--bz-font);
+  cursor: pointer;
+  text-align: left;
 }
 
 /* ---------- signing in ---------- */

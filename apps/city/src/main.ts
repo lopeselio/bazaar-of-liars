@@ -14,6 +14,7 @@ import { initCred } from "./cred";
 import { initOwnStalls } from "./ownstalls";
 import { initDocks } from "./docks";
 import { initAuctions } from "./auctions";
+import { initRumours } from "./rumours";
 import { currentPlayer, initLogin } from "./login";
 
 interface Bridge {
@@ -238,7 +239,7 @@ void refreshPurse();
 
 let agents: Record<string, MarketAgent> = {};
 let seenNews = 0;
-const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫", order: "📮", delivery: "✅", stall: "🏪", auction: "⚓" };
+const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫", order: "📮", delivery: "✅", stall: "🏪", auction: "⚓", rumour: "🕵️" };
 const ago = (t: number) => {
   const s = Math.max(1, Math.round((Date.now() - t) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
@@ -323,6 +324,20 @@ initAuctions({
   toast,
   burst,
   goodIcon: GOOD_ICON,
+  busy: () => !!current,
+});
+
+// ---------- the rumour network: informants around the city ----------
+
+initRumours({
+  scene: bridge.scene,
+  camera: () => bridge.cameraSystem.camera,
+  player: PLAYER,
+  cm,
+  frame: bridge.frame,
+  me: () => me,
+  refreshPurse,
+  toast,
   busy: () => !!current,
 });
 
