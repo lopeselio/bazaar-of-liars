@@ -284,6 +284,7 @@ export function present(modelText: string, decision: MerchantReply, offer?: numb
   t = t.replaceAll("{OFFER}", offer !== undefined ? String(offer) : "…");
   if (decision.action !== "walk" && !new RegExp(`(?<!\\d)(?<!\\d\\.)${decision.price}(?!\\d)(?!\\.\\d)`).test(t)) t += ` [${decision.price} coins]`;
   // The engine made a claim the player can call, so the player must see it.
-  if (claim !== undefined && !hadClaim && !new RegExp(`(?<!\\d)${claim}(?!\\d)`).test(t)) t += side === "sell" ? ` Not a coin below ${claim}.` : ` I can't pay more than ${claim}.`;
+  // A number equal to the claim that is only the player's offer echoed back doesn't count.
+  if (claim !== undefined && !hadClaim && (claim === offer || !new RegExp(`(?<!\\d)${claim}(?!\\d)`).test(t))) t += side === "sell" ? ` Not a coin below ${claim}.` : ` I can't pay more than ${claim}.`;
   return t;
 }
