@@ -14,7 +14,8 @@
  *   POST /api/orders/:id/deliver {player,x,z,mode}  hand it over at the drop site
  *   GET  /api/stalls?player=…&visit=1   the stall slots, and the player's own stall (with what it
  *                                       earned since their last visit)
- *   POST /api/stalls/{licence|stock|withdraw|collect} {player,…}  run your own stall
+ *   POST /api/stalls/{licence|stock|withdraw|collect|list|unlist|buydeed} {player,…}  run your own
+ *                                       stall; list, unlist or buy a stall's deed (a NEP-171 NFT)
  *   POST /api/dockwork {player,x,z}     a broke player works a shift at Pier 34 for the wholesaler
  *   GET  /api/auctions?player=…         the cargo ship lot at Pier 34 (sealed bids) and recent results
  *   POST /api/auctions/:id/bid {player,commitment,deposit,x,z}  seal a bid (hashed in the browser)
@@ -40,7 +41,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -655,13 +656,15 @@ async function raidCheck(player: string, goods: Record<string, number>) {
 const shortPlayer = (p: string) => p.slice(0, 12);
 
 async function stallsView(player: string, visit: boolean) {
-  if (!market) return { slots: [], mine: null, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL };
-  const stalls = await market.stalls();
+  const deedTerms = { deedTax: DEED_TAX_PCT, maxDeedPrice: MAX_DEED_PRICE };
+  if (!market) return { slots: [], mine: null, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL, ...deedTerms };
+  const [stalls, asks] = await Promise.all([market.stalls(), market.deedAsks().catch(() => [])]);
+  const askOf = (slot: string) => asks.find((a) => a.slot === slot)?.price ?? null;
   const slots = STALL_SLOTS.map((slot) => {
     const st = stalls.find((x) => x.slot === slot);
     return st
-      ? { slot, owner: st.owner === player ? "you" : shortPlayer(st.owner), mine: st.owner === player, listings: st.listings.filter((l) => l.qty > 0), sold: st.sold }
-      : { slot, owner: null, mine: false, listings: [], sold: 0 };
+      ? { slot, owner: st.owner === player ? "you" : shortPlayer(st.owner), mine: st.owner === player, listings: st.listings.filter((l) => l.qty > 0), sold: st.sold, ask: askOf(slot), deedUrl: deedUrl(slot) }
+      : { slot, owner: null, mine: false, listings: [], sold: 0, ask: null, deedUrl: null };
   });
   const own = PLAYER_RE.test(player) ? stalls.find((x) => x.owner === player) : undefined;
   let away: { sold: number; earned: number } | null = null;
@@ -671,8 +674,12 @@ async function stallsView(player: string, visit: boolean) {
     if (seen && (own.sold > seen.sold || own.earned > seen.earned)) away = { sold: own.sold - seen.sold, earned: own.earned - seen.earned };
     await store.putJSON(`stallSeen:${player}`, { sold: own.sold, earned: own.earned }, 90 * 24 * 3_600_000);
   }
-  return { slots, mine: own ?? null, away, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL };
+  const mine = own ? { ...own, ask: askOf(own.slot), suggestedAsk: suggestedAsk(own.earned), deedUrl: deedUrl(own.slot) } : null;
+  return { slots, mine, away, licencePrice: LICENCE_PRICE, licenceLevel: LICENCE_LEVEL, ...deedTerms };
 }
+
+/** The deed's page on the explorer (it's a NEP-171 token of the game contract). */
+const deedUrl = (slot: string) => (ledger ? `https://${ledger.network === "testnet" ? "testnet." : ""}nearblocks.io/nft-token/${ledger.contractId}/${slot}` : null);
 
 async function stallAction(action: string, body: Record<string, unknown>) {
   if (!market || !ledger?.buyLicence) throw new HttpError(404, "stalls need the agent economy");
@@ -681,16 +688,18 @@ async function stallAction(action: string, body: Record<string, unknown>) {
   const goodId = String(body.goodId ?? "");
   const qty = Math.floor(Number(body.qty ?? 0));
   const price = Math.floor(Number(body.price ?? 0));
+  const slot = String(body.slot ?? "");
   let tx: string;
+  let news: string | null = null;
   try {
     if (action === "licence") {
-      const slot = String(body.slot ?? "");
       if (!(STALL_SLOTS as readonly string[]).includes(slot)) throw new HttpError(400, "no such stall slot");
       const cred = await credOf(player);
       if ((cred?.level ?? 1) < LICENCE_LEVEL) throw new HttpError(403, `A licence needs street cred level ${LICENCE_LEVEL}.`);
       const p = await purse(player);
       if (p.coins < LICENCE_PRICE) throw new HttpError(402, `A licence costs ${LICENCE_PRICE} coins; you have ${p.coins}.`);
       tx = await ledger.buyLicence({ player, slot });
+      news = `A player opened a stall on Canal Street (${slot}). Its deed is an NFT now.`;
     } else if (action === "stock") {
       if (!GOODS[goodId]) throw new HttpError(400, "unknown good");
       if (!(qty >= 0 && qty <= 20 && price >= 1 && price <= MAX_STALL_PRICE)) throw new HttpError(400, `stock 0–20 at a price of 1–${MAX_STALL_PRICE}`);
@@ -700,6 +709,26 @@ async function stallAction(action: string, body: Record<string, unknown>) {
       tx = await ledger.withdrawStock!({ player, goodId, qty });
     } else if (action === "collect") {
       tx = await ledger.collectTill!(player);
+    } else if (action === "list") {
+      if (!ledger.listDeed) throw new HttpError(404, "the deed market isn't open");
+      if (!(price >= 1 && price <= MAX_DEED_PRICE)) throw new HttpError(400, `ask 1–${MAX_DEED_PRICE} coins for a deed`);
+      tx = await ledger.listDeed({ player, price });
+      news = `A stall deed on Canal Street is for sale: ${price} coins`;
+    } else if (action === "unlist") {
+      if (!ledger.unlistDeed) throw new HttpError(404, "the deed market isn't open");
+      tx = await ledger.unlistDeed(player);
+    } else if (action === "buydeed") {
+      if (!ledger.buyDeed) throw new HttpError(404, "the deed market isn't open");
+      const [stalls, asks] = await Promise.all([market.stalls(0), market.deedAsks(0)]);
+      const ask = asks.find((a) => a.slot === slot);
+      if (!ask) throw new HttpError(409, "That deed isn't for sale any more.");
+      if (ask.price !== price) throw new HttpError(409, `The asking price changed to ${ask.price}. Have another look.`);
+      if (ask.owner === player) throw new HttpError(409, "That's your own deed.");
+      if (stalls.some((s) => s.owner === player)) throw new HttpError(409, "You already have a stall. Sell or give it up first.");
+      const p = await purse(player);
+      if (p.coins < price) throw new HttpError(402, `The deed costs ${price} coins; you have ${p.coins}.`);
+      tx = await ledger.buyDeed({ buyer: player, slot, price });
+      news = `A stall deed on Canal Street (${slot}) changed hands for ${price} coins; the seller kept ${sellerTake(price)}`;
     } else throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) throw e;
@@ -708,7 +737,7 @@ async function stallAction(action: string, body: Record<string, unknown>) {
     throw new HttpError(409, m ? sentence(m[1]) : "The street office refused that. Try again.");
   }
   market.invalidate();
-  if (action === "licence") await store.pushNews({ t: Date.now(), kind: "stall", text: `A player opened a stall on Canal Street (${String(body.slot)})`, tx: explorerTx(ledger.network, tx), agents: [] });
+  if (news) await store.pushNews({ t: Date.now(), kind: "stall", text: news, tx: explorerTx(ledger.network, tx), agents: [] }).catch(() => {});
   return { ok: true, txUrl: explorerTx(ledger.network, tx), stalls: await stallsView(player, false), player: await playerView(player) };
 }
 
@@ -1061,7 +1090,7 @@ createServer(async (req, res) => {
     if (req.method === "GET" && url.startsWith("/api/auctions")) return send(res, 200, await auctionsView(new URL(url, "http://x").searchParams.get("player") ?? ""));
     const am = url.match(/^\/api\/auctions\/([a-z0-9_-]{1,64})\/(bid|reveal)$/);
     if (req.method === "POST" && am) return send(res, 200, await auctionAction(am[1], am[2], body));
-    const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect)$/);
+    const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect|list|unlist|buydeed)$/);
     if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], body));
     const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
     if (req.method === "POST" && om) return send(res, 200, await (om[2] === "take" ? takeOrder : deliverOrder)(om[1], body));
