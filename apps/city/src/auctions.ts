@@ -261,7 +261,11 @@ export function initAuctions(d: AuctionDeps) {
       d.toast("Bid sealed onchain. Nobody, not even the game server, can see it until bidding closes.");
       await d.refreshPurse(true);
     } catch (e) {
-      localStorage.removeItem(sealedKey(l.id));
+      try {
+        localStorage.removeItem(sealedKey(l.id));
+      } catch {
+        /* nothing was saved */
+      }
       d.toast((e as Error).message);
     } finally {
       sending = false;
