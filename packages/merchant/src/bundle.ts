@@ -137,7 +137,7 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
       add(`t${i}.sp.bound`, `${n}: the signed request was for this haggle, its committed need and this decision`, sys.includes(haggleLine(b.commitment)) && sys.includes(needLine(secret)) && sys.includes(decisionLine(decision)));
       add(`t${i}.sp.nofloor`, `${n}: the model was never told the floor`, !promptShowsFloor(sys, secret.floor));
       const offer = move.kind === "offer" ? move.price : undefined;
-      add(`t${i}.sp.display`, `${n}: shown text = signed text with only the engine's numbers filled in`, t.speech !== null && present(contentOf(t.speech.responseBody), decision, offer, secret.side) === t.display);
+      add(`t${i}.sp.display`, `${n}: shown text = signed text with only the engine's numbers filled in`, t.speech !== null && [false, true].some((legacy) => present(contentOf(t.speech!.responseBody), decision, offer, secret.side, legacy) === t.display));
     }
   });
 

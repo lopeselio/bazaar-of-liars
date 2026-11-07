@@ -260,7 +260,12 @@ export function wordsToNumber(w: string): number {
  *  - every other number → "…" (no wrong prices, no leaks)
  *  - if the price never appears, it's appended
  */
-export function present(modelText: string, decision: MerchantReply, offer?: number, side: Side = "sell"): string {
+/**
+ * `legacy`: how bundles recorded before 2026-11-07 rendered a claim equal to the player's offer
+ * (the echoed offer counted as stating the claim). The verifier accepts either rendering: both
+ * fill in only the engine's numbers.
+ */
+export function present(modelText: string, decision: MerchantReply, offer?: number, side: Side = "sell", legacy = false): string {
   let t = modelText.trim().replace(/^"|"$/g, "");
   const claim = claims(decision) ? decision.statedFloor : undefined;
   // On a walk-away no price survives: only the player's own offer may be echoed.
@@ -285,6 +290,6 @@ export function present(modelText: string, decision: MerchantReply, offer?: numb
   if (decision.action !== "walk" && !new RegExp(`(?<!\\d)(?<!\\d\\.)${decision.price}(?!\\d)(?!\\.\\d)`).test(t)) t += ` [${decision.price} coins]`;
   // The engine made a claim the player can call, so the player must see it.
   // A number equal to the claim that is only the player's offer echoed back doesn't count.
-  if (claim !== undefined && !hadClaim && (claim === offer || !new RegExp(`(?<!\\d)${claim}(?!\\d)`).test(t))) t += side === "sell" ? ` Not a coin below ${claim}.` : ` I can't pay more than ${claim}.`;
+  if (claim !== undefined && !hadClaim && ((!legacy && claim === offer) || !new RegExp(`(?<!\\d)${claim}(?!\\d)`).test(t))) t += side === "sell" ? ` Not a coin below ${claim}.` : ` I can't pay more than ${claim}.`;
   return t;
 }
