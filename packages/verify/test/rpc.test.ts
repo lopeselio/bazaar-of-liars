@@ -61,6 +61,13 @@ describe("rpc failover", () => {
     expect(lost.calls.map((c) => c.url)).toEqual(["a"]);
   });
 
+  it("a transaction status query is a read: it fails over on a 5xx", async () => {
+    const status = { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tx", params: {} }) };
+    const { f, calls } = fake({ a: [() => new Response("bad", { status: 502 })], b: [ok] });
+    expect((await failover(["a", "b"], f).fetch("a", status)).status).toBe(200);
+    expect(calls.map((c) => c.url)).toEqual(["a", "b"]);
+  });
+
   it("when every endpoint refuses, the last refusal comes back", async () => {
     expect((await failover(["a", "b"], fake({ a: [busy], b: [busy] }).f).fetch("a", read)).status).toBe(429);
     await expect(failover(["x"], fake({}).f).fetch("x", read)).rejects.toThrow("fetch failed");
