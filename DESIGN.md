@@ -158,6 +158,21 @@ Every eight minutes or so a cargo ship docks at Pier 34 and its lot is auctioned
 - **Releasing cap never fails.** Handing an agent back cap it reserved (at settlement, or a haggle that falls through) is never blocked by its cap, even if the owner lowered the cap meanwhile. Otherwise a lowered cap could freeze an auction for good.
 - **No migration.** Auction state lives under its own raw storage keys (`x:…`), outside the root contract struct, so v3.7 deployed as a plain code upgrade.
 
+## The rumour network (v3.8)
+
+Informants around the city sell tips about the next few minutes. It's the Bazaar of *Liars*, so some of them lie, and the contract keeps score.
+
+- **Where.** Madame Vex and Pigeon Pete are just off Canal Street. The Deacon is in Bryant Park and Lulu Lightfingers is under the Times Square billboards, so exploring the map pays. Walk up and press **F**.
+- **What a tip is.** A claim about a merchant's stock at a check time 4 minutes away: "Tobin will have no saffron" (so he'll pay well for one) or "Zaria will have at least 2 rugs" (so she won't). The claim is chosen by rules (`packages/core/rumours.ts`). An honest informant says what the shelves suggest; a liar says something false right now. Each informant's honesty is secret.
+- **Private AI.** The informant puts the claim in their own voice with the same TEE-hosted model on NEAR AI Cloud that voices the merchants. The model only words the tip; it can't change the facts.
+- **Privacy, then proof.**
+  - `sell_tip` puts only `sha256("bazaar-tip|tip|informant|merchant|good|le-or-ge|n|check_ms|salt")` onchain, and holds the price. Other players can't learn the tip, and the informant can't change it later.
+  - At the check time, `resolve_tip` reveals the claim. The contract checks it against the hash, then against the merchant's real stock right then.
+  - A true tip is paid (the price is burned). A lie is refunded.
+  - Either way it goes on the informant's public record (`informants()`: sold, truths, lies, never revealed), which floats over their head in the city.
+  - A tip the server never reveals can be expired by anyone after 15 minutes: refunded, and counted against the informant.
+- **Limits.** A player who buys a tip and then trades with that merchant can change the outcome. The worst they get is their own money back on a tip they spoiled. The check runs when the server resolves it, within seconds of the check time, not at an exact block.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
