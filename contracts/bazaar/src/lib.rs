@@ -1557,6 +1557,8 @@ impl Bazaar {
         self.add_coins(&player, -(price as i64));
         self.add_coins(&a.account, price as i64);
         self.move_goods(&a.account, &player, &good_id, 1, "board sale");
+        // Counts as trading with that agent, for any tip about it the player holds.
+        raw_put(&last_trade_key(&player, &agent_id), &env::block_timestamp_ms());
         emit("board_trade", json!({ "player": player, "agent": agent_id, "good_id": good_id, "side": "player_buys", "price": price }));
     }
 
@@ -1570,6 +1572,7 @@ impl Bazaar {
         require!(self.agent_of(&player).is_none(), "agents don't trade at boards");
         let price = auth.max;
         self.move_goods(&player, &auth.agent, &good_id, 1, "board purchase");
+        raw_put(&last_trade_key(&player, &a.id), &env::block_timestamp_ms());
         self.add_coins(&auth.agent, -(price as i64));
         self.add_coins(&player, price as i64);
         let key = goods_key(&auth.agent, &good_id);
