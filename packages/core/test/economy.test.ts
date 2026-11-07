@@ -116,3 +116,29 @@ describe("Canal Street economy", () => {
     expect(deals).toBeGreaterThan(300);
   });
 });
+
+describe("trade loop balance", () => {
+  // Buy a good from the merchant who sells it, haul it, sell it to one who wants it.
+  // Skill should pay; taking every price should not.
+  const trip = (buyBot: keyof typeof BOTS, sellBot: keyof typeof BOTS) => {
+    const rng = mulberry32(7);
+    let paid = 0, got = 0;
+    for (let i = 0; i < 600; i++) {
+      for (const buyer of MERCHANTS) {
+        const seller = MERCHANTS.find((m) => m.goodId === buyer.buysGoodId)!;
+        const a = playSecret(rollSellSecret(rng, seller, GOODS[seller.goodId], { coins: 300, stock: 3, costBasis: 0 }, 1).secret, seller.personality, BOTS[buyBot]).state;
+        const b = playSecret(rollBuySecret(rng, buyer, GOODS[buyer.buysGoodId], { coins: 300, stock: 1, costBasis: 0 })!.secret, buyer.personality, BOTS[sellBot]).state;
+        if (a.status !== "deal" || b.status !== "deal") continue;
+        paid += a.dealPrice!;
+        got += b.dealPrice!;
+      }
+    }
+    return got / paid - 1;
+  };
+  it("a sharp trader (calls bluffs, reads tells) makes a profit", () => {
+    expect(trip("sharp", "sellReader")).toBeGreaterThan(0.02);
+  });
+  it("a trader who takes every price loses", () => {
+    expect(trip("sucker", "sucker")).toBeLessThan(-0.15);
+  });
+});
