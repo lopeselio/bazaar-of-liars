@@ -192,6 +192,19 @@ The map is the market. Prices differ across town, so carrying goods pays, and th
 - **Failure-safe.** One board trade per player runs at a time, at the price the player was shown or not at all. If a buyer signs but the sale then fails, `release_auth` gives its daily cap back.
 - **Tips stay honest.** Trading at a merchant's board counts as trading with that merchant for the rumour network (a tip you hold about it becomes void).
 
+## Street events (v3.10)
+
+Every twelve minutes or so something happens on the street, and the contract decides what: `start_event` rolls it from the block's random seed. Each event lasts 4 minutes, and a banner at the top of the screen says what's on and for how long.
+
+- **🎉 Festival (40%).** Buyers at the boards pay 25% more, and customers' delivery bounties rise by 25%.
+- **📉 Shortage of one good (30%).** It costs 30% more at Wu's docks board, and buyers pay 40% more for it, so carrying that good uptown pays.
+- **🚨 Inspector raid on Canal Street (30%).**
+  - An unlicensed player who opens a haggle there loses whatever they carry above 5 of any good. The contract's `inspect` confiscates (burns) it, once per player per raid.
+  - A stall licence exempts you. The contract checks it, so licences are worth more.
+  - The banner warns you if you're over the limit, before you walk in.
+  - Rival traders Ivy and Rex lie low until it's over.
+- **Agents react.** Customers post richer orders at festivals, traders stop trading in raids, and board prices follow every event. The server reads the event from the contract, so all replicas agree.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
