@@ -17,8 +17,8 @@ const memoryLevels = (m: PlayerMemory = { lowballs: 0, deals: 0 }) => ({
 /**
  * Roll a merchant's hidden hand for one haggle.
  * Selling: floor ~ 0.75–1.05× base value, opening ask well above it.
- * Buying: ceiling ~ 1.3–1.6× base value (as in economy.ts), so buying well from one merchant
- * and selling well to another who wants the good is a real (but not guaranteed) profit.
+ * Buying: ceiling ~ 1.05–1.35× base value (about economy.ts with one in stock), so a good
+ * bought cheaply at the docks sells at a profit to a merchant who wants it, if you haggle well.
  */
 export function rollSecret(rng: Rng, merchant: Merchant, good: Good, side: Side = "sell", memory?: PlayerMemory): MerchantSecret {
   const bluff = merchant.personality.bluff;
@@ -29,7 +29,7 @@ export function rollSecret(rng: Rng, merchant: Merchant, good: Good, side: Side 
     const markup = 1.35 + 0.45 * rng() + 0.2 * bluff;
     return { side, merchantId: merchant.id, goodId: good.id, floor, need, seed, listPrice: Math.round(floor * markup), ...memoryLevels(memory) };
   }
-  const ceiling = Math.round(good.baseValue * (1.3 + 0.3 * rng()));
+  const ceiling = Math.round(good.baseValue * (1.05 + 0.3 * rng()));
   const need = pickWeighted(rng, NEEDS);
   const seed = Math.floor(rng() * 2 ** 31);
   const opening = 0.7 + 0.15 * rng() - 0.1 * bluff;

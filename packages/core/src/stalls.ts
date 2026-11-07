@@ -43,7 +43,7 @@ export const suggestedAsk = (earned: number) => Math.min(MAX_DEED_PRICE, Math.ma
 
 /**
  * Would a rival trader buy this listing? A trader buys when it can resell for more: the price
- * must sit under what a buying merchant usually pays (about street value). Cheaper listings sell
+ * must sit under what a buying merchant opens at (about street value; its ceiling is higher). Cheaper listings sell
  * more often; at or above street value they rarely do.
  */
 export function traderWouldBuy(price: number, baseValue: number, coins: number, rng: Rng): boolean {

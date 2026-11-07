@@ -45,6 +45,10 @@ export const MAX_PURSE_SHARE = 0.6;
 export const runnerFee = (qty: number) => 3 + qty;
 /** Most a merchant will pay per unit at wholesale, as a share of the street value. */
 export const WHOLESALE_BID_MAX = 0.7;
+/** A merchant buys at most this many units from players and traders per window, so nobody can
+ * drain its purse by selling to it again and again. */
+export const BUYS_PER_WINDOW = 3;
+export const BUY_WINDOW_MS = 15 * 60_000;
 /** Daily spending cap written into each agent's onchain policy. */
 export const DAILY_CAP: Record<string, number> = { merchant: 400, trader: 600, wholesaler: 400, runner: 50, customer: 500, cab: 0 };
 /** Most coins a customer's business brings in per day: the money that funds its bounties. */
@@ -106,15 +110,16 @@ export function rollSellSecret(rng: Rng, merchant: Merchant, good: Good, h: Hold
 /**
  * The ceiling a merchant commits to when buying one unit of the good it wants.
  * It wants the good more when it has few, and can never commit more than it can pay.
- * Pitched so a trade route pays for a player who haggles well at both ends (pnpm sim: about
- * +5% a round trip when calling bluffs) and loses for one who takes every price (about −25%).
+ * Pitched against Auntie Wu's wholesale board (base × 0.78–1.08), the cheapest place to buy:
+ * a player who takes a merchant's opening bid for a good bought from Wu about breaks even, one
+ * who haggles well toward the ceiling profits (pnpm sim prints the route).
  * `escrow` is what the contract locks from the merchant's purse for this haggle.
  */
 export function buyCeiling(good: Good, h: Holdings, rng: Rng) {
   const reasons: Reason[] = [{ label: `Street value of ${good.name}`, effect: String(good.baseValue) }];
   const want = h.stock === 0 ? 1.2 : h.stock === 1 ? 1.08 : 1 - 0.06 * Math.min(4, h.stock - 1);
   reasons.push({ label: h.stock === 0 ? "Has none and wants one" : `Already has ${h.stock}`, effect: pct(want) });
-  const noise = 1.3 + 0.3 * rng();
+  const noise = 1.0 + 0.25 * rng();
   const escrow = Math.floor(h.coins * MAX_PURSE_SHARE);
   let ceiling = Math.round(good.baseValue * want * noise);
   if (ceiling > escrow) {
