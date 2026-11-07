@@ -205,6 +205,16 @@ Every twelve minutes or so something happens on the street, and the contract dec
   - Rival traders Ivy and Rex lie low until it's over.
 - **Agents react.** Customers post richer orders at festivals, traders stop trading in raids, and board prices follow every event. The server reads the event from the contract, so all replicas agree.
 
+## Property deeds (v3.11)
+
+Stall licences used to be a row in the contract. Now each one is a deed: a NEP-171 NFT of the game contract, token id = the slot (`corner-1` … `corner-4`). There are only four, so a deed is scarce, and it's the one asset in the game a player can sell to another player.
+
+- **Standards.** NEP-171 core (`nft_transfer` with 1 yoctoNEAR, `nft_transfer_call` with a receiver that can hand the deed back, `nft_token`), NEP-177 metadata (a parchment picture drawn by the contract as an SVG data URI, so nothing to host) and NEP-181 enumeration, so wallets and nearblocks show it. Every mint, transfer and burn emits the standard `nep171` event.
+- **Lifecycle.** `buy_licence` mints the deed (still 150 coins burned and street cred level 3). `release_stall` burns it.
+- **Deed market.** The owner lists the deed at a price (`list_deed`, up to 5000). Any player without a stall can `buy_deed` at exactly that price, so a price the buyer didn't see can't be charged. The seller gets the price less 5% (burned). No street cred is needed to buy: a deed is the shortcut past level 3, so a busy stall's deed is worth more than the licence fee. The panel suggests an ask from what the stall has earned.
+- **What moves with it.** The slot only. When a deed changes hands by sale, wallet transfer or sign-in, the stall's stock and till go home with the old owner, and the new owner starts with an empty stall. Nobody holds two stalls: the contract refuses a transfer to an account that already has one, and refuses a sign-in merge that would stack two.
+- **No migration.** Asks live under raw `x:deedask:` storage keys, and the deed itself is the existing stall record.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
