@@ -249,10 +249,23 @@ export interface OnchainHaggle {
   salt: string | null;
 }
 
+export interface TxInfo {
+  blockTimeMs: number;
+  signerId: string;
+  receiverId: string;
+  /** The transaction's function calls, with JSON args (null if not JSON). */
+  calls?: Array<{ method: string; args: Record<string, unknown> | null }>;
+  /** The transaction and the contract's receipt both succeeded. */
+  ok?: boolean;
+}
+
 export interface ChainReader {
   getHaggle(network: Network, contractId: string, haggleId: string): Promise<OnchainHaggle | null>;
-  /** Timestamp (ms) of the block that included the transaction, and who signed it. */
-  txInfo(network: Network, txHash: string, signerId: string): Promise<{ blockTimeMs: number; signerId: string; receiverId: string }>;
+  /**
+   * Who signed the transaction, its function calls, whether it succeeded, and the time (ms) of
+   * the block where the contract executed it (when its effects, e.g. a commitment, were onchain).
+   */
+  txInfo(network: Network, txHash: string, signerId: string): Promise<TxInfo>;
 }
 
 /** Errors that mean "this node no longer has it": ask an archival node instead. */
@@ -287,7 +300,21 @@ async function rpc<T>(network: Network, method: string, params: unknown): Promis
   }
 }
 
-type TxResult = { transaction: { signer_id: string; receiver_id: string }; transaction_outcome?: { block_hash: string } };
+type Status = { SuccessValue?: string; SuccessReceiptId?: string; Failure?: unknown };
+type TxResult = {
+  transaction: { signer_id: string; receiver_id: string; actions?: Array<{ FunctionCall?: { method_name: string; args: string } } | string> };
+  transaction_outcome?: { block_hash: string; outcome?: { receipt_ids?: string[] } };
+  receipts_outcome?: Array<{ id: string; block_hash: string; outcome: { executor_id: string; status: Status } }>;
+  status?: Status;
+};
+const jsonArgs = (b64: string) => {
+  try {
+    const v = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+};
 
 export const nearReader: ChainReader = {
   async getHaggle(network, contractId, haggleId) {
@@ -300,11 +327,17 @@ export const nearReader: ChainReader = {
     let tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "NONE" });
     if (!tx.transaction_outcome) tx = await rpc<TxResult>(network, "tx", { tx_hash: txHash, sender_account_id: signerId, wait_until: "EXECUTED_OPTIMISTIC" });
     if (!tx.transaction_outcome) throw new Error("tx: no outcome yet");
-    const block = await rpc<{ header: { timestamp_nanosec: string } }>(network, "block", { block_id: tx.transaction_outcome.block_hash });
+    // The contract's own receipt: its block is when the call's effects were onchain.
+    const first = tx.transaction_outcome.outcome?.receipt_ids?.[0];
+    const receipt = tx.receipts_outcome?.find((r) => r.id === first) ?? tx.receipts_outcome?.find((r) => r.outcome.executor_id === tx.transaction.receiver_id);
+    const block = await rpc<{ header: { timestamp_nanosec: string } }>(network, "block", { block_id: (receipt ?? tx.transaction_outcome).block_hash });
+    const calls = (tx.transaction.actions ?? []).flatMap((a) => (typeof a === "object" && a.FunctionCall ? [{ method: a.FunctionCall.method_name, args: jsonArgs(a.FunctionCall.args) }] : []));
     return {
       blockTimeMs: Number(BigInt(block.header.timestamp_nanosec) / 1_000_000n),
       signerId: tx.transaction.signer_id,
       receiverId: tx.transaction.receiver_id,
+      calls,
+      ok: !!tx.status && tx.status.Failure === undefined && !!receipt && receipt.outcome.status.Failure === undefined,
     };
   },
 };
