@@ -189,6 +189,7 @@ The map is the market. Prices differ across town, so carrying goods pays, and th
   - A HUD chip shows the best spread right now ("🧶 Pier 34 47 → Midtown East 84 +37"). Click it to be guided: a banner with an arrow and a green beam lead to where you buy, then to where you sell.
   - Boards stand beside the customers' delivery drop points, so a delivery run and a trade run can share a trip.
 - **Why it's a loop.** Ships bring goods in at auction, Wu buys lots there and sells them on, players carry them uptown, and customers' income pays for them. Every leg is a signed, settled transaction.
+- **Failure-safe.** One board trade per player runs at a time, at the price the player was shown or not at all. If a buyer signs but the sale then fails, `release_auth` gives its daily cap back.
 - **Tips stay honest.** Trading at a merchant's board counts as trading with that merchant for the rumour network (a tip you hold about it becomes void).
 
 ## Fair-play protocol (the core NEAR feature)
