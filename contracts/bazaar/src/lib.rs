@@ -98,12 +98,19 @@
 //! When a deed changes hands the stall's stock and till go home with the old owner, and nobody
 //! holds two stalls. Asks live under raw "x:deedask:" keys, so no migration.
 //!
+//! ## Deeds certified on Ethereum (v3.12)
+//! `certify_deed` asks NEAR's MPC network (Chain Signatures, `v1.signer-prod.testnet`) to sign a
+//! statement of who owns a deed, with a secp256k1 key derived for this contract (path
+//! "bazaar-deeds"). The statement is signed as an Ethereum personal message (EIP-191), so the
+//! signature recovers to the bazaar's Ethereum address with `ecrecover` on any EVM chain. Only this
+//! contract can sign with that key, so a valid signature means the NEAR contract said it.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
 use near_sdk::json_types::U128;
 use near_sdk::store::{IterableMap, LookupMap};
-use near_sdk::{AccountId, BorshStorageKey, Gas, PanicOnDefault, PromiseError, PromiseOrValue, env, ext_contract, near, require};
+use near_sdk::{AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue, env, ext_contract, near, require};
 
 /// NEP-245 receiver interface, for `mt_transfer_call`.
 #[ext_contract(ext_mt_receiver)]
@@ -755,6 +762,104 @@ fn deed_svg(slot: &str) -> String {
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'><rect width='300' height='300' fill='rgb(42,26,14)'/><rect x='24' y='24' width='252' height='252' rx='10' fill='rgb(240,224,188)' stroke='rgb(176,120,40)' stroke-width='6'/><text x='150' y='82' font-family='Georgia,serif' font-size='22' text-anchor='middle' fill='rgb(90,46,8)'>DEED</text><text x='150' y='128' font-family='Georgia,serif' font-size='17' text-anchor='middle' fill='rgb(60,40,20)'>A stall on Canal Street</text><text x='150' y='178' font-family='Georgia,serif' font-size='34' font-weight='bold' text-anchor='middle' fill='rgb(140,60,10)'>{name}</text><text x='150' y='236' font-family='Georgia,serif' font-size='13' text-anchor='middle' fill='rgb(90,70,50)'>Bazaar of Liars</text></svg>"
     );
     format!("data:image/svg+xml;base64,{}", base64(svg.as_bytes()))
+}
+
+// ---------- v3.12: deeds certified on Ethereum (Chain Signatures) ----------
+
+/// The NEAR MPC network's signer, and the key path the bazaar signs deed certificates under.
+pub const MPC_SIGNER_TESTNET: &str = "v1.signer-prod.testnet";
+pub const DEED_KEY_PATH: &str = "bazaar-deeds";
+const GAS_FOR_MPC_SIGN: Gas = Gas::from_tgas(50);
+const GAS_FOR_CERTIFIED: Gas = Gas::from_tgas(10);
+
+/// The MPC signer's request (domain 0 is secp256k1).
+#[near(serializers = [json])]
+pub struct MpcPayload {
+    #[serde(rename = "Ecdsa")]
+    pub ecdsa: String,
+}
+#[near(serializers = [json])]
+pub struct MpcSignRequest {
+    pub path: String,
+    pub payload_v2: MpcPayload,
+    pub domain_id: u32,
+}
+
+#[near(serializers = [json])]
+pub struct AffinePoint {
+    pub affine_point: String,
+}
+#[near(serializers = [json])]
+pub struct Scalar {
+    pub scalar: String,
+}
+/// What the MPC signer returns for a secp256k1 request.
+#[near(serializers = [json])]
+pub struct MpcSignature {
+    pub scheme: String,
+    pub big_r: AffinePoint,
+    pub s: Scalar,
+    pub recovery_id: u8,
+}
+
+/// A deed's ownership, signed by the bazaar's Ethereum key (held by NEAR's MPC network, derived
+/// for this contract). `signature` is the 65-byte Ethereum signature (r, s, v) over `message`
+/// with the EIP-191 personal-message prefix, so `ecrecover` on any EVM chain returns the bazaar's
+/// Ethereum address.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeedCertificate {
+    pub slot: String,
+    pub owner: AccountId,
+    pub message: String,
+    pub signature: String,
+    pub block_height: u64,
+}
+
+fn cert_key(slot: &str) -> String {
+    format!("x:cert:{slot}")
+}
+
+/// The words a certificate signs. Ascii only, so its length in bytes is its length.
+pub fn deed_message(slot: &str, owner: &AccountId, contract: &AccountId, block_height: u64) -> String {
+    format!("Bazaar of Liars deed {slot} (NEAR contract {contract}) is owned by {owner} as of NEAR block {block_height}.")
+}
+
+/// keccak256 of the EIP-191 personal message: what Ethereum's `personal_sign` signs.
+pub fn eip191_hash(message: &str) -> [u8; 32] {
+    let prefixed = format!("\x19Ethereum Signed Message:\n{}{}", message.len(), message);
+    env::keccak256_array(prefixed.as_bytes())
+}
+
+#[ext_contract(ext_mpc)]
+pub trait MpcSigner {
+    fn sign(&mut self, request: MpcSignRequest);
+}
+
+/// The MPC signer for this network.
+fn mpc_signer() -> AccountId {
+    let on_testnet = env::current_account_id().as_str().ends_with(".testnet");
+    (if on_testnet { MPC_SIGNER_TESTNET } else { "v1.signer" }).parse().unwrap()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+}
+
+/// The MPC signature as an Ethereum signature: r (big R's x coordinate), s, v = 27 + recovery id.
+fn eth_signature(sig: &MpcSignature) -> Option<String> {
+    if sig.scheme != "Secp256k1" || sig.recovery_id > 1 {
+        return None;
+    }
+    let big_r = unhex(&sig.big_r.affine_point)?;
+    let s = unhex(&sig.s.scalar)?;
+    if big_r.len() != 33 || s.len() != 32 {
+        return None;
+    }
+    Some(format!("0x{}{}{:02x}", hex(&big_r[1..]), hex(&s), 27 + sig.recovery_id))
 }
 
 /// sha256 of the canonical preimage, lowercase hex.
@@ -1601,6 +1706,54 @@ impl Bazaar {
 
     pub fn deed_asks(&self) -> Vec<DeedAsk> {
         self.deed_list().into_iter().filter_map(|st| raw_get::<u64>(&deed_ask_key(&st.slot)).map(|price| DeedAsk { slot: st.slot, owner: st.owner, price })).collect()
+    }
+
+    // ---------- deeds certified on Ethereum (v3.12) ----------
+
+    /// The deed's owner (or the server for them): ask NEAR's MPC network to sign, with the
+    /// bazaar's Ethereum key, a statement of who owns this deed right now. The signature is an
+    /// ordinary Ethereum personal-message signature, so `ecrecover` on any EVM chain checks it.
+    /// Attach at least 1 yoctoNEAR (the MPC signer's fee), and about 100 Tgas.
+    #[payable]
+    pub fn certify_deed(&mut self, slot: String) -> Promise {
+        let st = self.stalls.get(&slot).cloned().unwrap_or_else(|| env::panic_str("no such deed"));
+        let me = env::predecessor_account_id();
+        require!(me == self.server || me == st.owner, "only the deed's owner or the game server can certify it");
+        require!(env::attached_deposit() >= NearToken::from_yoctonear(1), "attach 1 yoctoNEAR for the MPC signer");
+        let height = env::block_height();
+        let message = deed_message(&slot, &st.owner, &env::current_account_id(), height);
+        let request = MpcSignRequest { path: DEED_KEY_PATH.into(), payload_v2: MpcPayload { ecdsa: hex(&eip191_hash(&message)) }, domain_id: 0 };
+        ext_mpc::ext(mpc_signer())
+            .with_static_gas(GAS_FOR_MPC_SIGN)
+            .with_attached_deposit(env::attached_deposit())
+            .sign(request)
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_CERTIFIED).on_deed_certified(slot, st.owner, message, height))
+    }
+
+    /// The MPC network answered. Store the certificate; never panic (a failed or timed-out
+    /// signature is logged and returns null).
+    #[private]
+    pub fn on_deed_certified(&mut self, slot: String, owner: AccountId, message: String, block_height: u64) -> Option<DeedCertificate> {
+        let sig = env::promise_result_checked(0, 2048).ok().and_then(|b| near_sdk::serde_json::from_slice::<MpcSignature>(&b).ok());
+        let Some(sig) = sig.and_then(|s| eth_signature(&s)) else {
+            emit("deed_certify_failed", json!({ "slot": slot }));
+            return None;
+        };
+        let cert = DeedCertificate { slot: slot.clone(), owner, message, signature: sig, block_height };
+        raw_put(&cert_key(&slot), &cert);
+        emit("deed_certified", json!({ "slot": slot, "owner": cert.owner, "signature": cert.signature, "block_height": block_height }));
+        Some(cert)
+    }
+
+    /// The latest certificate for a deed (it may name a previous owner: check `owner`).
+    pub fn deed_certificate(&self, slot: String) -> Option<DeedCertificate> {
+        raw_get(&cert_key(&slot))
+    }
+
+    /// Where the bazaar's Ethereum key lives: the MPC signer and the key path. The key is derived
+    /// from (this contract's account, the path), so only this contract can sign with it.
+    pub fn deed_signer(&self) -> (AccountId, String) {
+        (mpc_signer(), DEED_KEY_PATH.to_string())
     }
 
     // ---------- cargo ship auctions (v3.7) ----------
@@ -3735,5 +3888,86 @@ mod tests {
         licensed(&mut c);
         ctx("owner.testnet", 100);
         c.register_agent("sly".into(), "Sly".into(), player(), AgentKind::Trader, 100, 0, vec![]);
+    }
+
+    // ---------- deeds certified on Ethereum (v3.12) ----------
+
+    fn with_result(caller: &str, r: near_sdk::PromiseResult) {
+        near_sdk::test_utils::testing_env_with_promise_results(
+            VMContextBuilder::new().predecessor_account_id(acc(caller)).current_account_id(acc("bazaar.testnet")).block_height(100).build(),
+            r,
+        );
+    }
+    /// A real secp256k1 answer from v1.signer-prod.testnet.
+    const MPC_ANSWER: &str = r#"{"scheme":"Secp256k1","big_r":{"affine_point":"0278423b200088ded3acb9f5d778f368c5c061d4e6a506adfa659ea9546e51a3dd"},"s":{"scalar":"39445432811092efa3713a542871c2e61cb343b28730d9123396ed4b693a92b0"},"recovery_id":1}"#;
+
+    #[test]
+    fn the_certificate_hash_is_ethereums_personal_message_hash() {
+        ctx("server.testnet", 100);
+        // ethers.hashMessage("hello world")
+        assert_eq!(hex(&eip191_hash("hello world")), "d9eba16ed0ecae432b71fe008c98cc872bb4cc214d3220a36f365326cf807d68");
+        let m = deed_message("corner-1", &player(), &acc("bazaar.testnet"), 100);
+        assert_eq!(m, "Bazaar of Liars deed corner-1 (NEAR contract bazaar.testnet) is owned by player.testnet as of NEAR block 100.");
+        assert_eq!(hex(&eip191_hash(&m)), "395955eb911b37b887c031c48dc68d3e239364d554354fbd9cdbf64a7b5572cc");
+    }
+
+    #[test]
+    fn an_mpc_signature_becomes_an_ethereum_signature() {
+        let sig: MpcSignature = near_sdk::serde_json::from_str(MPC_ANSWER).unwrap();
+        assert_eq!(eth_signature(&sig).unwrap(), "0x78423b200088ded3acb9f5d778f368c5c061d4e6a506adfa659ea9546e51a3dd39445432811092efa3713a542871c2e61cb343b28730d9123396ed4b693a92b01c");
+        let bad: MpcSignature = near_sdk::serde_json::from_str(&MPC_ANSWER.replace("Secp256k1", "Ed25519")).unwrap();
+        assert!(eth_signature(&bad).is_none());
+    }
+
+    #[test]
+    fn a_signed_certificate_is_stored_and_a_failed_one_is_not() {
+        let mut c = setup();
+        licensed(&mut c);
+        with_result("bazaar.testnet", near_sdk::PromiseResult::Failed);
+        assert!(c.on_deed_certified("corner-1".into(), player(), "m".into(), 100).is_none());
+        assert!(c.deed_certificate("corner-1".into()).is_none());
+        with_result("bazaar.testnet", near_sdk::PromiseResult::Successful(b"not json".to_vec()));
+        assert!(c.on_deed_certified("corner-1".into(), player(), "m".into(), 100).is_none());
+        with_result("bazaar.testnet", near_sdk::PromiseResult::Successful(MPC_ANSWER.as_bytes().to_vec()));
+        let cert = c.on_deed_certified("corner-1".into(), player(), "m".into(), 100).unwrap();
+        assert_eq!(c.deed_certificate("corner-1".into()), Some(cert.clone()));
+        assert!(cert.signature.ends_with("1c") && cert.signature.len() == 132);
+    }
+
+    #[test]
+    #[should_panic(expected = "only the deed's owner or the game server")]
+    fn only_the_owner_or_server_certifies_a_deed() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("bob.testnet");
+        let _ = c.certify_deed("corner-1".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "attach 1 yoctoNEAR")]
+    fn certifying_pays_the_mpc_fee() {
+        let mut c = setup();
+        licensed(&mut c);
+        ctx("player.testnet", 100);
+        let _ = c.certify_deed("corner-1".into());
+    }
+
+    #[test]
+    fn the_owner_can_ask_for_a_certificate() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("player.testnet");
+        let _ = c.certify_deed("corner-1".into());
+    }
+
+    #[test]
+    fn a_receiver_that_returns_nothing_hands_the_deed_back() {
+        let mut c = setup();
+        licensed(&mut c);
+        one_yocto("player.testnet");
+        let _ = c.nft_transfer_call(bob(), "corner-1".into(), None, None, "".into());
+        with_result("bazaar.testnet", near_sdk::PromiseResult::Successful(vec![]));
+        assert!(!c.nft_resolve_transfer(player(), bob(), "corner-1".into(), None));
+        assert_eq!(c.nft_token("corner-1".into()).unwrap().owner_id, player());
     }
 }
