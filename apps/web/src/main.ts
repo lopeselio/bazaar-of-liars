@@ -353,6 +353,7 @@ async function say(text: string) {
     if (r.call === "caught") addSys(`Caught! ${esc(first)} was bluffing, and the price collapses.`, "caught");
     if (r.call === "honest") addSys(`${esc(first)} was telling the truth, and is offended.`, "honest");
     if (r.action === "final") addSys("That's their final price.");
+    if (r.hint) addSys(`💡 ${esc(r.hint)}`, "hint");
     if (r.action === "accept") addSys(`🤝 Deal at <b>${r.price}</b> coins`, "deal");
     if (r.action === "walk") addSys(`${esc(m.name)} has had enough and turns away.`, "bad");
     if (r.action === "left") addSys("You walk away from the stall.");

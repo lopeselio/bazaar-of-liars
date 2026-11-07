@@ -321,6 +321,10 @@ button:disabled {
 .bz-sys.good {
   color: var(--bz-green);
 }
+.bz-sys.hint {
+  font-style: italic;
+  opacity: 0.85;
+}
 .bz-sys.bad {
   color: var(--bz-red);
 }
