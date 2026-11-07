@@ -26,6 +26,21 @@ export const MAX_STALL_PRICE = 500;
 /** What the stall owner keeps from a sale. */
 export const ownerTake = (price: number) => price - Math.floor((price * STALL_COMMISSION_PCT) / 100);
 
+// ---------- property deeds (v3.11) ----------
+// Each licence is a NEP-171 NFT: the deed to its slot. Owners can sell it on the deed market.
+
+/** Share of a deed sale the street keeps, in percent (burned). */
+export const DEED_TAX_PCT = 5;
+/** Highest asking price for a deed. */
+export const MAX_DEED_PRICE = 5000;
+/** What the seller keeps from a deed sale. */
+export const sellerTake = (price: number) => price - Math.floor((price * DEED_TAX_PCT) / 100);
+/**
+ * A fair asking price to suggest: the licence fee plus a few days of what the stall has earned,
+ * so a busy stall asks more. Always within the market's limit.
+ */
+export const suggestedAsk = (earned: number) => Math.min(MAX_DEED_PRICE, Math.max(LICENCE_PRICE, Math.round((LICENCE_PRICE + earned * 1.5) / 10) * 10));
+
 /**
  * Would a rival trader buy this listing? A trader buys when it can resell for more: the price
  * must sit under what a buying merchant usually pays (about street value). Cheaper listings sell
