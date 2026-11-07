@@ -174,6 +174,23 @@ Informants around the city sell tips about the next few minutes. It's the Bazaar
 - **No spoiling a tip.** Trading with a merchant changes its stock, so a buyer could turn an honest tip into a "lie" and get a refund. The contract notes when each player last traded with each merchant. A tip whose buyer traded with that merchant before the check is **void**: the buyer pays, and the informant's record doesn't change.
 - **Limits.** An honest informant can still be wrong: agents restock and trade in the meantime. The check runs when the server resolves the tip, within seconds of the check time, not at an exact block.
 
+## Price boards and trade routes (v3.9)
+
+The map is the market. Prices differ across town, so carrying goods pays, and the travel is the work.
+
+- **Boards.**
+  - **Auntie Wu's board at Pier 34 sells.** Her price is lower the more stock she has (0.78–1.08× street value). She keeps 4 of each good back for the merchants' restocks.
+  - **The five customers post buy prices outside their doors.** These run from the Financial District up to the Dowager on 59th Street. A buyer pays more the further it is from Canal Street (up to +35%), and 8% less for each unit it has bought today. It stops once it's had enough.
+- **Onchain.**
+  - `buy_from_board` sells a player one unit at the posted price, never below what the stock cost the agent: the same no-loss rule as haggles.
+  - `sell_to_board` is paid out of the buyer's own purse, at exactly the price the buyer signed for with `authorize_spend`, within its daily cap.
+  - A buyer short of coins draws on its capped daily income first.
+- **The best route.**
+  - A HUD chip shows the best spread right now ("🧶 Pier 34 47 → Midtown East 84 +37"). Click it to be guided: a banner with an arrow and a green beam lead to where you buy, then to where you sell.
+  - Boards stand beside the customers' delivery drop points, so a delivery run and a trade run can share a trip.
+- **Why it's a loop.** Ships bring goods in at auction, Wu buys lots there and sells them on, players carry them uptown, and customers' income pays for them. Every leg is a signed, settled transaction.
+- **Tips stay honest.** Trading at a merchant's board counts as trading with that merchant for the rumour network (a tip you hold about it becomes void).
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
