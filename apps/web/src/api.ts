@@ -312,6 +312,13 @@ export interface BoardsView {
   best: BestRoute | null;
   reach: number;
 }
+export interface StreetEventView {
+  event: { id: string; kind: "festival" | "shortage" | "raid"; good_id: string; start_ms: number; end_ms: number; seized: number } | null;
+  active: boolean;
+  headline: string | null;
+  raidLimit: number;
+  seized: number | null;
+}
 type AuctionResult = { ok: true; txUrl: string; auctions: AuctionsView | null; player: PlayerView | null };
 
 export const api = {
@@ -346,5 +353,6 @@ export const api = {
   boards: () => call<BoardsView>("/api/boards"),
   boardTrade: (id: string, player: string, goodId: string, x: number, z: number, expectedPrice: number) =>
     call<{ ok: true; price: number; txUrl: string; boards: BoardsView | null; player: PlayerView | null }>(`/api/boards/${id}/trade`, { player, goodId, x, z, expectedPrice }),
+  event: (player: string) => call<StreetEventView>(`/api/event?player=${encodeURIComponent(player)}`),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };

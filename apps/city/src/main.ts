@@ -16,6 +16,7 @@ import { initDocks } from "./docks";
 import { initAuctions } from "./auctions";
 import { initRumours } from "./rumours";
 import { initRoutes } from "./routes";
+import { initEvents } from "./events";
 import { currentPlayer, initLogin } from "./login";
 
 interface Bridge {
@@ -240,7 +241,7 @@ void refreshPurse();
 
 let agents: Record<string, MarketAgent> = {};
 let seenNews = 0;
-const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫", order: "📮", delivery: "✅", stall: "🏪", auction: "⚓", rumour: "🕵️", route: "📈" };
+const KIND_ICON: Record<string, string> = { sale: "🛍️", restock: "📦", hire: "🛵", trade: "🔁", consume: "🔧", invest: "💰", closed: "🚫", order: "📮", delivery: "✅", stall: "🏪", auction: "⚓", rumour: "🕵️", route: "📈", event: "📣" };
 const ago = (t: number) => {
   const s = Math.max(1, Math.round((Date.now() - t) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
@@ -358,6 +359,18 @@ initRoutes({
   goodName: (id) => merchants.flatMap((m) => [m.good, m.buys]).find((g) => g.id === id)?.name ?? id,
   busy: () => !!current,
 });
+
+// ---------- street events: festivals, shortages, inspector raids ----------
+
+let licensed = false;
+const checkLicence = () =>
+  api
+    .stalls(PLAYER)
+    .then((v) => (licensed = !!v.mine))
+    .catch(() => {});
+void checkLicence();
+setInterval(checkLicence, 60_000);
+initEvents({ player: PLAYER, me: () => me, hasLicence: () => licensed, toast });
 
 // ---------- player-owned stalls further along Canal Street ----------
 
