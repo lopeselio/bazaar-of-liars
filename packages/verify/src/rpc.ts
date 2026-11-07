@@ -1,12 +1,18 @@
 /**
  * RPC failover. The free public RPCs answer HTTP 429 when busy, so the server never relies on
- * one: a request the first endpoint refuses (429, 408, 5xx, or no answer) is sent unchanged to the
- * next. Resending a signed transaction is safe: it has one hash and one nonce, so NEAR runs it at
- * most once however many nodes receive it.
+ * one endpoint. Endpoints come from docs.near.org/api/rpc/providers (free, no key);
+ * NEAR_RPC_URL (comma-separated) puts your own first, for the network in NEAR_NETWORK.
+ *
+ * Reads: a refusal (408, 429, 5xx) or no answer sends the same request to the next endpoint.
+ *
+ * Transactions fail over only on 429: the node turned the request away at the door, so it never
+ * reached the chain. A 5xx, a timeout or a dropped connection is ambiguous (the transaction may
+ * already be in a block), so it goes back to near-kit unchanged, which retries the same signed
+ * transaction on the same endpoint as it always has. Failing over then could meet a node that
+ * hasn't seen the block yet, answer "invalid nonce", and have near-kit sign it a second time.
  *
  * An endpoint that refused is skipped for a short cool-down, so a rate-limited node isn't hit
- * again on the very next call. Endpoints come from docs.near.org/api/rpc/providers (free, no key).
- * NEAR_RPC_URL (comma-separated) puts your own endpoints first.
+ * again on the very next call.
  */
 export type Network = "testnet" | "mainnet";
 
@@ -20,10 +26,15 @@ const nativeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 const COOL_DOWN_MS = 30_000;
 const READ_TIMEOUT_MS = 10_000;
+/** Long enough for a FINAL wait on an MPC signature; shorter than the server's tick locks (60 s). */
+const TX_TIMEOUT_MS = 50_000;
 
-/** The endpoints for a network, your own (NEAR_RPC_URL) first. */
-export function rpcUrls(network: Network, env: string | undefined = process.env.NEAR_RPC_URL): string[] {
-  const own = (env ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+const norm = (u: string) => u.trim().replace(/\/+$/, "");
+
+/** The endpoints for a network: yours first (NEAR_RPC_URL, for NEAR_NETWORK), then the public ones. */
+export function rpcUrls(network: Network, env: { NEAR_RPC_URL?: string; NEAR_NETWORK?: string } = process.env): string[] {
+  const forThis = (env.NEAR_NETWORK ?? "testnet") === network;
+  const own = forThis ? (env.NEAR_RPC_URL ?? "").split(",").map(norm).filter(Boolean) : [];
   return [...new Set([...own, ...PUBLIC[network]])];
 }
 
@@ -32,8 +43,12 @@ export const primaryRpc = (network: Network) => rpcUrls(network)[0]!;
 
 const refused = (status: number) => status === 408 || status === 429 || status >= 500;
 
-/** Methods that wait on the chain (a transaction): no client timeout, the node decides. */
+/** Methods that put a transaction on the chain or wait on one. */
 const isTxMethod = (body: unknown) => typeof body === "string" && /"method"\s*:\s*"(send_tx|broadcast_tx_commit|broadcast_tx_async|tx|EXPERIMENTAL_tx_status)"/.test(body);
+
+const discard = (r: Response | Error | null) => {
+  if (r instanceof Response) r.body?.cancel().catch(() => {});
+};
 
 export interface Failover {
   fetch(url: string, init: RequestInit): Promise<Response>;
@@ -44,11 +59,10 @@ export interface Failover {
 /** A fetch that tries each endpoint of `urls` in turn (healthy ones first). */
 export function failover(urls: string[], base: typeof fetch = nativeFetch, now: () => number = Date.now): Failover {
   const coolUntil = new Map<string, number>();
+  const cool = (u: string) => coolUntil.set(u, now() + COOL_DOWN_MS);
   const order = () => {
     const t = now();
-    const ok = urls.filter((u) => (coolUntil.get(u) ?? 0) <= t);
-    const cooling = urls.filter((u) => (coolUntil.get(u) ?? 0) > t);
-    return [...ok, ...cooling];
+    return [...urls.filter((u) => (coolUntil.get(u) ?? 0) <= t), ...urls.filter((u) => (coolUntil.get(u) ?? 0) > t)];
   };
   return {
     cooling: () => urls.filter((u) => (coolUntil.get(u) ?? 0) > now()),
@@ -56,15 +70,25 @@ export function failover(urls: string[], base: typeof fetch = nativeFetch, now: 
       const tx = isTxMethod(init.body);
       let last: Response | Error | null = null;
       for (const u of order()) {
+        let res: Response;
         try {
-          const res = await base(u, tx ? init : { ...init, signal: init.signal ?? AbortSignal.timeout(READ_TIMEOUT_MS) });
-          if (!refused(res.status)) return res;
-          if (last instanceof Response) await last.body?.cancel().catch(() => {});
-          last = res;
+          res = await base(u, { ...init, signal: init.signal ?? AbortSignal.timeout(tx ? TX_TIMEOUT_MS : READ_TIMEOUT_MS) });
         } catch (e) {
+          if (init.signal?.aborted) throw e; // the caller gave up: not the endpoint's fault
+          cool(u);
+          if (tx) throw e; // ambiguous for a transaction: near-kit retries it as before
+          discard(last);
           last = e as Error;
+          continue;
         }
-        coolUntil.set(u, now() + COOL_DOWN_MS);
+        if (!refused(res.status)) {
+          discard(last);
+          return res;
+        }
+        cool(u);
+        if (tx && res.status !== 429) return res; // ambiguous: leave it to near-kit
+        discard(last);
+        last = res;
       }
       if (last instanceof Response) return last;
       throw last ?? new Error("no RPC endpoint");
@@ -75,18 +99,22 @@ export function failover(urls: string[], base: typeof fetch = nativeFetch, now: 
 let installed = false;
 
 /**
- * Route every fetch to a known NEAR RPC endpoint through the failover. near-kit calls the
+ * Route every POST to a known NEAR RPC endpoint through the failover. near-kit calls the
  * global fetch with the URL it was given, so this covers all of its reads and transactions.
- * Other fetches pass through untouched.
+ * Other fetches (NEAR AI, Auth0, nearblocks, a Request object) pass through untouched.
  */
 export function installRpcFailover(): void {
   if (installed) return;
   installed = true;
   const lists = (Object.keys(PUBLIC) as Network[]).map((n) => ({ urls: rpcUrls(n), f: failover(rpcUrls(n)) }));
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const hit = typeof input === "string" || input instanceof URL ? lists.find((l) => l.urls.includes(url.replace(/\/$/, ""))) : undefined;
-    if (hit && init?.method === "POST") return hit.f.fetch(url, init);
-    return nativeFetch(input, init);
+  globalThis.fetch = routed(lists, nativeFetch);
+}
+
+/** The patched fetch (exported for tests). */
+export function routed(lists: Array<{ urls: string[]; f: Failover }>, base: typeof fetch): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : null;
+    const hit = url !== null && init?.method?.toUpperCase() === "POST" ? lists.find((l) => l.urls.includes(norm(url))) : undefined;
+    return hit ? hit.f.fetch(url!, init!) : base(input, init);
   }) as typeof fetch;
 }
