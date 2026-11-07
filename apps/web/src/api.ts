@@ -167,7 +167,7 @@ export interface MarketAgent {
 }
 export interface NewsItem {
   t: number;
-  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction";
+  kind: "sale" | "restock" | "hire" | "trade" | "consume" | "invest" | "closed" | "order" | "delivery" | "stall" | "auction" | "rumour";
   text: string;
   tx?: string;
   agents: string[];
@@ -257,6 +257,35 @@ export interface AuctionsView {
   windows: { bidMs: number; revealMs: number; gapMs: number };
   pier: { x: number; z: number };
 }
+export interface InformantView {
+  id: string;
+  name: string;
+  where: string;
+  x: number;
+  z: number;
+  price: number;
+  sold: number;
+  truths: number;
+  lies: number;
+  hidden: number;
+}
+export interface TipView {
+  id: string;
+  informant: string;
+  price: number;
+  checkMs: number;
+  status: "pending" | "true" | "false" | "hidden";
+  /** What the informant whispered: only for the buyer. */
+  text: string | null;
+  plain: string | null;
+  observed: number | null;
+  commitment: string;
+}
+export interface RumoursView {
+  informants: InformantView[];
+  tips: TipView[];
+  reach: number;
+}
 type AuctionResult = { ok: true; txUrl: string; auctions: AuctionsView | null; player: PlayerView | null };
 
 export const api = {
@@ -285,5 +314,8 @@ export const api = {
   bid: (id: string, player: string, commitment: string, deposit: number, x: number, z: number) =>
     call<AuctionResult>(`/api/auctions/${id}/bid`, { player, commitment, deposit, x, z }),
   reveal: (id: string, player: string, amount: number, salt: string) => call<AuctionResult>(`/api/auctions/${id}/reveal`, { player, amount, salt }),
+  rumours: (player: string) => call<RumoursView>(`/api/rumours?player=${encodeURIComponent(player)}`),
+  buyTip: (informant: string, player: string, x: number, z: number) =>
+    call<{ tip: { id: string; informant: string; text: string; plain: string; checkMs: number; price: number }; txUrl: string; player: PlayerView | null }>(`/api/rumours/${informant}/buy`, { player, x, z }),
   invest: (player: string, agentId: string, amount: number) => call<{ ok: true; txUrl: string; player: PlayerView }>("/api/invest", { player, agentId, amount }),
 };
