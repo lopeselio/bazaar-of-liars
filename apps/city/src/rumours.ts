@@ -177,6 +177,7 @@ export function initRumours(d: RumourDeps) {
 
   function close() {
     open = null;
+    near = null;
     fresh = "";
     $("bz-rumour").hidden = true;
   }
@@ -186,6 +187,7 @@ export function initRumours(d: RumourDeps) {
     if (e.code === "KeyF" && near && !open) {
       e.preventDefault();
       open = near;
+      $("bz-inf-prompt").hidden = true;
       $("bz-rumour").hidden = false;
       renderPanel(near);
     } else if (e.code === "Escape" && open) close();
