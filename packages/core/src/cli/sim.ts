@@ -8,7 +8,8 @@ import { MERCHANTS } from "../catalog.js";
 import { mulberry32 } from "../rng.js";
 import { playSecret, playSession } from "../play.js";
 import { GOODS } from "../catalog.js";
-import { rollBuySecret, rollSellSecret, type Holdings } from "../economy.js";
+import { rollBuySecret, type Holdings } from "../economy.js";
+import { askPrice } from "../routes.js";
 
 const short = (name: string) => name.replace(/^Old /, "").split(" ")[0]!;
 
@@ -54,35 +55,31 @@ for (const merchant of MERCHANTS) {
 }
 console.log("overpay = share of (list − floor) paid above the secret floor; lower is better haggling.");
 
-// ---------- trade loop: buy from the merchant who sells a good, sell it to one who buys it ----------
-// Priced by the live game's rules (economy.ts), for a seller with a few on the shelf and a buyer
-// holding one: the usual state on Canal Street. A good trader should profit; a careless one shouldn't.
-const SELLER: Holdings = { coins: 300, stock: 3, costBasis: 0 };
+// ---------- trade loop: buy a good at Auntie Wu's board, sell it to the merchant who wants it ----------
+// Priced by the live game's rules (economy.ts, routes.ts): Wu with a well-stocked board, a buyer
+// holding one. A careless trader should about break even; a good haggler should profit.
 const BUYER: Holdings = { coins: 300, stock: 1, costBasis: 0 };
-console.log(`\nTrade loop — ${SESSIONS * HAGGLES} round trips per route (live pricing; seller has 3, buyer has 1)\n`);
-console.log("route".padEnd(44) + "  bought   sold   margin  profitable");
-console.log("-".repeat(82));
+console.log(`\nTrade loop — ${SESSIONS * HAGGLES} trips per route (Wu's board, then a merchant who holds one)\n`);
+console.log("route".padEnd(40) + "  bought   sold   margin  profitable");
+console.log("-".repeat(78));
 for (const buyer of MERCHANTS) {
-  for (const seller of MERCHANTS.filter((m) => m.goodId === buyer.buysGoodId)) {
-    for (const [buyBot, sellBot] of [["sharp", "sellReader"], ["reader", "sellReader"], ["sucker", "sucker"]] as const) {
-      const rng = mulberry32(SEED);
-      let paid = 0, got = 0, trips = 0, wins = 0;
-      for (let i = 0; i < SESSIONS * HAGGLES; i++) {
-        const a = playSecret(rollSellSecret(rng, seller, GOODS[seller.goodId]!, SELLER, 1).secret, seller.personality, BOTS[buyBot]!).state;
-        const bp = rollBuySecret(rng, buyer, GOODS[buyer.buysGoodId]!, BUYER)!;
-        const b = playSecret(bp.secret, buyer.personality, BOTS[sellBot]!).state;
-        if (a.status !== "deal" || b.status !== "deal") continue;
-        trips++;
-        paid += a.dealPrice!;
-        got += b.dealPrice!;
-        if (b.dealPrice! > a.dealPrice!) wins++;
-      }
-      console.log(
-        `${short(seller.name)} → ${short(buyer.name)} (${buyBot}/${sellBot})`.padEnd(44) +
-          (paid / trips).toFixed(0).padStart(8) + (got / trips).toFixed(0).padStart(7) +
-          pct(got / paid - 1).padStart(9) + pct(wins / trips).padStart(12),
-      );
+  const good = GOODS[buyer.buysGoodId]!;
+  const wu = askPrice(good.baseValue, 8, 0)!;
+  for (const sellBot of ["sellReader", "seller", "sucker"] as const) {
+    const rng = mulberry32(SEED);
+    let got = 0, trips = 0, wins = 0;
+    for (let i = 0; i < SESSIONS * HAGGLES; i++) {
+      const b = playSecret(rollBuySecret(rng, buyer, good, BUYER)!.secret, buyer.personality, BOTS[sellBot]!).state;
+      if (b.status !== "deal") continue;
+      trips++;
+      got += b.dealPrice!;
+      if (b.dealPrice! > wu) wins++;
     }
+    console.log(
+      `Wu → ${short(buyer.name)}, ${good.id} (${sellBot})`.padEnd(40) +
+        String(wu).padStart(8) + (got / trips).toFixed(0).padStart(7) +
+        pct(got / trips / wu - 1).padStart(9) + pct(wins / trips).padStart(12),
+    );
   }
 }
-console.log("margin = average sale ÷ average purchase − 1, over round trips where both haggles closed.");
+console.log("margin = average sale ÷ Wu's price − 1, over sales that closed.");

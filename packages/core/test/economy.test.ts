@@ -6,6 +6,7 @@ import {
   LOT_SIZE,
   MERCHANTS,
   WHOLESALER,
+  askPrice,
   buyCeiling,
   mulberry32,
   nextCostBasis,
@@ -118,27 +119,36 @@ describe("Canal Street economy", () => {
 });
 
 describe("trade loop balance", () => {
-  // Buy a good from the merchant who sells it, haul it, sell it to one who wants it.
-  // Skill should pay; taking every price should not.
-  const trip = (buyBot: keyof typeof BOTS, sellBot: keyof typeof BOTS) => {
-    const rng = mulberry32(7);
+  // Buy a good at Auntie Wu's board (the cheapest place), sell it to the merchant who wants it.
+  // Haggling well should pay; taking the opening bid should about break even, never a sure win.
+  const margin = (sellBot: keyof typeof BOTS, seed: number) => {
+    const rng = mulberry32(seed);
     let paid = 0, got = 0;
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 400; i++) {
       for (const buyer of MERCHANTS) {
-        const seller = MERCHANTS.find((m) => m.goodId === buyer.buysGoodId)!;
-        const a = playSecret(rollSellSecret(rng, seller, GOODS[seller.goodId], { coins: 300, stock: 3, costBasis: 0 }, 1).secret, seller.personality, BOTS[buyBot]).state;
-        const b = playSecret(rollBuySecret(rng, buyer, GOODS[buyer.buysGoodId], { coins: 300, stock: 1, costBasis: 0 })!.secret, buyer.personality, BOTS[sellBot]).state;
-        if (a.status !== "deal" || b.status !== "deal") continue;
-        paid += a.dealPrice!;
+        const good = GOODS[buyer.buysGoodId];
+        const b = playSecret(rollBuySecret(rng, buyer, good, { coins: 300, stock: 1, costBasis: 0 })!.secret, buyer.personality, BOTS[sellBot]).state;
+        if (b.status !== "deal") continue;
+        paid += askPrice(good.baseValue, 8, 0)!;
         got += b.dealPrice!;
       }
     }
     return got / paid - 1;
   };
-  it("a sharp trader (calls bluffs, reads tells) makes a profit", () => {
-    expect(trip("sharp", "sellReader")).toBeGreaterThan(0.02);
+  it.each([1, 2, 3])("haggling well profits, taking the opening bid about breaks even (seed %i)", (seed) => {
+    expect(margin("sellReader", seed)).toBeGreaterThan(0.1);
+    const careless = margin("sucker", seed);
+    expect(careless).toBeGreaterThan(-0.05);
+    expect(careless).toBeLessThan(0.1);
   });
-  it("a trader who takes every price loses", () => {
-    expect(trip("sucker", "sucker")).toBeLessThan(-0.15);
+  it("even when Wu is low on stock and dearest, no merchant's opening bid is a sure win against her", () => {
+    const rng = mulberry32(9);
+    for (const buyer of MERCHANTS) {
+      const good = GOODS[buyer.buysGoodId];
+      const wuDearest = Math.round(good.baseValue * 1.08);
+      let above = 0;
+      for (let i = 0; i < 500; i++) if (rollBuySecret(rng, buyer, good, { coins: 300, stock: 1, costBasis: 0 })!.secret.listPrice > wuDearest) above++;
+      expect(above / 500).toBeLessThan(0.2);
+    }
   });
 });
