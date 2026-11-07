@@ -755,10 +755,16 @@ async function stallAction(action: string, body: Record<string, unknown>) {
       const own = (await market.stalls(0)).find((s) => s.owner === player);
       if (!own) throw new HttpError(409, "You don't have a stall.");
       // Each signature costs the server gas; one per player every few minutes is plenty.
+      // The lock is atomic across replicas, and a failed attempt gives it back.
       const key = `certify:${player}`;
-      if (await store.getJSON(key)) throw new HttpError(429, "Your deed was certified a moment ago. Try again in a few minutes.");
-      await store.putJSON(key, 1, 5 * 60_000);
-      tx = await ledger.certifyDeed(own.slot);
+      const token = await store.lock(key, 5 * 60_000);
+      if (!token) throw new HttpError(429, "Your deed was certified a moment ago. Try again in a few minutes.");
+      try {
+        tx = await ledger.certifyDeed(own.slot);
+      } catch (e) {
+        await store.unlock(key, token).catch(() => {});
+        throw e;
+      }
       certCache.delete(own.slot);
       news = `A stall deed on Canal Street (${own.slot}) was certified on Ethereum by NEAR's MPC network`;
     } else if (action === "buydeed") {
