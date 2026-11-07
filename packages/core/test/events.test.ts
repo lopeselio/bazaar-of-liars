@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askMultiplier, bidMultiplier, orderBoost, raidSeizes, tradersLieLow, type StreetEvent } from "../src/index.js";
+import { askMultiplier, bidMultiplier, bountyMultiplier, raidSeizes, tradersLieLow, type StreetEvent } from "../src/index.js";
 
 const ev = (kind: StreetEvent["kind"], good_id = ""): StreetEvent => ({ id: "e", kind, good_id, start_ms: 1000, end_ms: 5000, seized: 0 });
 
@@ -15,7 +15,7 @@ describe("street events", () => {
     expect(bidMultiplier(ev("shortage", "lamp"), "lamp", 2000)).toBe(1.4);
   });
   it("festivals bring orders, raids send traders to ground", () => {
-    expect(orderBoost(ev("festival"), 2000)).toEqual({ extraOrders: 3, bounty: 1.25 });
+    expect(bountyMultiplier(ev("festival"), 2000)).toBe(1.25);
     expect(tradersLieLow(ev("raid"), 2000)).toBe(true);
     expect(tradersLieLow(ev("festival"), 2000)).toBe(false);
   });
