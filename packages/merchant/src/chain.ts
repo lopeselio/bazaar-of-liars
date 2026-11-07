@@ -13,6 +13,7 @@
 import { Near } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
 import type { MerchantSecret, StreetEvent, TipClaim } from "@bazaar/core";
+import type { DeedCertificate } from "@bazaar/verify";
 
 export type Network = "testnet" | "mainnet";
 
@@ -97,6 +98,8 @@ export interface Ledger {
   listDeed?(a: { player: string; price: number }): Promise<string>;
   unlistDeed?(player: string): Promise<string>;
   buyDeed?(a: { buyer: string; slot: string; price: number }): Promise<string>;
+  /** v3.12: have NEAR's MPC network sign the deed's ownership for Ethereum (waits for the signature). */
+  certifyDeed?(slot: string): Promise<string>;
 }
 
 export function nearLedger(cfg: { network: Network; contractId: string; serverId: string; privateKey?: string }): Ledger {
@@ -110,10 +113,10 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
   });
   // open: optimistic (the haggle starts sooner; its block time is what the verifier checks).
   // close: FINAL, so anyone reading the reveal right after sees it.
-  const call = async (method: string, args: object, waitUntil: "EXECUTED_OPTIMISTIC" | "FINAL" = "EXECUTED_OPTIMISTIC") => {
+  const call = async (method: string, args: object, waitUntil: "EXECUTED_OPTIMISTIC" | "FINAL" = "EXECUTED_OPTIMISTIC", opts: { gas?: `${number} Tgas`; attachedDeposit?: `${bigint} yocto` } = {}) => {
     const r = await near
       .transaction(cfg.serverId)
-      .functionCall(cfg.contractId, method, args, { gas: "30 Tgas" })
+      .functionCall(cfg.contractId, method, args, { gas: "30 Tgas", ...opts })
       .send({ waitUntil });
     return r.transaction.hash as string;
   };
@@ -164,6 +167,8 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     listDeed: (a) => call("list_deed", { player: a.player, price: a.price }, "FINAL"),
     unlistDeed: (player) => call("unlist_deed", { player }, "FINAL"),
     buyDeed: (a) => call("buy_deed", { buyer: a.buyer, slot: a.slot, price: a.price }, "FINAL"),
+    // The MPC network answers a few blocks later; FINAL waits for its callback too.
+    certifyDeed: (slot) => call("certify_deed", { slot }, "FINAL", { gas: "100 Tgas", attachedDeposit: "1 yocto" }),
   };
 }
 
@@ -465,4 +470,10 @@ export interface DeedAsk {
 export async function readDeedAsks(network: Network, contractId: string): Promise<DeedAsk[]> {
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<DeedAsk[]>(contractId, "deed_asks", {}, { finality: "optimistic" })) ?? [];
+}
+
+/** A deed's latest Ethereum certificate (v3.12). It may name a previous owner. */
+export async function readDeedCertificate(network: Network, contractId: string, slot: string): Promise<DeedCertificate | null> {
+  const near = new Near({ network, rpcUrl: RPC[network] });
+  return (await near.view<DeedCertificate | null>(contractId, "deed_certificate", { slot }, { finality: "optimistic" })) ?? null;
 }
