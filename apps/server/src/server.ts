@@ -16,6 +16,12 @@
  *                                       earned since their last visit)
  *   POST /api/stalls/{licence|stock|withdraw|collect} {player,…}  run your own stall
  *   POST /api/dockwork {player,x,z}     a broke player works a shift at Pier 34 for the wholesaler
+ *   GET  /api/auth/config               the NEAR Auth (Auth0) tenant the browser signs in with
+ *   POST /api/auth/session {idToken}    verify a NEAR Auth login; returns the player's NEAR account + session
+ *   POST /api/auth/link {guest}         (signed in) bring a guest's progress to the account
+ *
+ * Players are guests ("guest-<hex>", anyone holding the id) or NEAR accounts (64-hex implicit
+ * accounts from NEAR Auth). Anything done as a NEAR account needs that account's session token.
  *
  * State: live haggles, market days and rate limits sit in a Store (store.ts): Redis when
  * REDIS_URL is set, so any number of replicas can serve the same haggle; memory otherwise.
@@ -28,6 +34,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
 import { AGENTS, BROKE_BELOW, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
+import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
 import {
   HaggleSession,
@@ -67,7 +74,8 @@ const TURN_LOCK_MS = 120_000;
 const LIVE_TTL_MS = 3 * IDLE_MS;
 const DAY_TTL_MS = 30 * 24 * 3_600_000;
 const GOOD_IDS = Object.keys(GOODS);
-const PLAYER_RE = /^guest-[0-9a-f]{8,16}$/;
+const PLAYER_RE = /^(guest-[0-9a-f]{8,16}|[0-9a-f]{64})$/;
+const GUEST_RE = /^guest-[0-9a-f]{8,16}$/;
 
 const llm = new NearAiClient(KEY);
 const attestor = nearAiAttestor(KEY);
@@ -183,7 +191,7 @@ async function invest(body: Record<string, unknown>) {
   const player = String(body.player ?? "");
   const agentId = String(body.agentId ?? "");
   const amount = Math.floor(Number(body.amount));
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   if (!MERCHANTS.some((m) => m.id === agentId)) throw new HttpError(400, "you can only invest in a merchant");
   if (!(amount >= 5 && amount <= 500)) throw new HttpError(400, "invest between 5 and 500 coins");
   const p = await purse(player);
@@ -227,7 +235,7 @@ async function listOrders(player: string) {
 async function takeOrder(id: string, body: Record<string, unknown>) {
   if (!market) throw new HttpError(404, "deliveries need the agent economy");
   const player = String(body.player ?? "");
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const x = num(body.x);
   const z = num(body.z);
   if (Number.isNaN(x) || Number.isNaN(z)) throw new HttpError(400, "where are you?");
@@ -249,7 +257,7 @@ async function takeOrder(id: string, body: Record<string, unknown>) {
 async function deliverOrder(id: string, body: Record<string, unknown>) {
   if (!market || !ledger?.fulfilOrder) throw new HttpError(404, "deliveries need the agent economy");
   const player = String(body.player ?? "");
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const job = await store.getJSON<Job>(`job:${player}`);
   if (!job || job.orderId !== id) throw new HttpError(409, "Take the job first.");
   const o = (await market.orders(0)).find((x) => x.id === id);
@@ -285,7 +293,7 @@ async function deliverOrder(id: string, body: Record<string, unknown>) {
 async function dockWork(body: Record<string, unknown>) {
   if (!market || !ledger?.payWages || !signers?.wu) throw new HttpError(404, "dock work needs the agent economy");
   const player = String(body.player ?? "");
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   if (Math.hypot(num(body.x) - DOCK.x, num(body.z) - DOCK.z) > DOCK_REACH) throw new HttpError(409, "Walk to the docks at the west end of Canal Street first.");
   const p = await purse(player);
   if (p.coins >= BROKE_BELOW) throw new HttpError(409, `Auntie Wu only takes on workers who are broke (under ${BROKE_BELOW} coins).`);
@@ -331,7 +339,7 @@ async function stallsView(player: string, visit: boolean) {
 async function stallAction(action: string, body: Record<string, unknown>) {
   if (!market || !ledger?.buyLicence) throw new HttpError(404, "stalls need the agent economy");
   const player = String(body.player ?? "");
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const goodId = String(body.goodId ?? "");
   const qty = Math.floor(Number(body.qty ?? 0));
   const price = Math.floor(Number(body.price ?? 0));
@@ -366,9 +374,52 @@ async function stallAction(action: string, body: Record<string, unknown>) {
   return { ok: true, txUrl: explorerTx(ledger.network, tx), stalls: await stallsView(player, false), player: await playerView(player) };
 }
 
+// ---------- signing in with NEAR Auth ----------
+
+const auth = authFromEnv();
+
+/** A NEAR-account player can only be acted for with that account's session. */
+function guardPlayer(player: unknown, authed: string | null) {
+  if (typeof player === "string" && isAccountPlayer(player) && authed !== player) throw new HttpError(401, "Sign in again to play as this account.");
+}
+
+async function startSession(body: Record<string, unknown>) {
+  const idToken = String(body.idToken ?? "");
+  let sub: string;
+  try {
+    sub = await verifyIdToken(idToken, auth);
+  } catch (e) {
+    if (e instanceof AuthError) throw new HttpError(401, `Sign-in failed: ${e.message}.`);
+    throw e;
+  }
+  // The key NEAR Auth controls for this identity, and so the player's NEAR account.
+  const publicKey = await derivedPublicKey(sub, auth);
+  const account = implicitAccount(publicKey);
+  const s = issueSession(account, auth);
+  return { account, publicKey, token: s.token, exp: s.exp, player: await playerView(account) };
+}
+
+async function linkGuest(body: Record<string, unknown>, authed: string | null) {
+  if (!authed) throw new HttpError(401, "Sign in first.");
+  if (!ledger?.mergePlayer) throw new HttpError(404, "linking needs the onchain ledger");
+  const guest = String(body.guest ?? "");
+  if (!GUEST_RE.test(guest)) throw new HttpError(400, "that isn't a guest id");
+  try {
+    await ledger.mergePlayer({ from: guest, to: authed, merchantIds: [...MERCHANTS.map((m) => m.id), "wu"], goodIds: GOOD_IDS });
+  } catch (e) {
+    const m = (e as Error).message.match(/Smart contract panicked: ([^"\n]+)/);
+    throw new HttpError(409, m ? sentence(m[1]) : "Couldn't bring that progress over. Try again.");
+  }
+  // Server-side records follow the player too.
+  const day = await store.getDay(guest);
+  if (day) await store.putDay(authed, day, DAY_TTL_MS);
+  market?.invalidate();
+  return { ok: true, player: await playerView(authed) };
+}
+
 async function nextDay(body: Record<string, unknown>) {
   const player = String(body.player ?? "");
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const p = await purse(player);
   const d = await dayOf(player, worth(p));
   if (d.left > 0) throw new HttpError(409, `The sun is still up: ${d.left} haggle${d.left === 1 ? "" : "s"} left today.`);
@@ -474,7 +525,7 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
   const player = String(body.player ?? "");
   const side: Side = body.side === "buy" ? "buy" : "sell";
   if (!merchant) throw new HttpError(400, "unknown merchant");
-  if (!PLAYER_RE.test(player)) throw new HttpError(400, "player must look like guest-<hex>");
+  if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   await rateLimit(ip);
 
   // One haggle per player at a time, so two tabs can't overspend the same coins.
@@ -553,7 +604,7 @@ async function openHaggle(body: Record<string, unknown>, ip: string) {
   };
 }
 
-async function turn(id: string, body: Record<string, unknown>) {
+async function turn(id: string, body: Record<string, unknown>, authed: string | null = null) {
   const text = String(body.text ?? "").trim().slice(0, MAX_TEXT);
   if (!text) throw new HttpError(400, "say something");
   if (!(await store.getLive(id))) throw new HttpError(404, "This haggle is over (or never existed).");
@@ -562,6 +613,7 @@ async function turn(id: string, body: Record<string, unknown>) {
     // Re-read under the lock: another replica may have just played a turn or closed it.
     const l = await store.getLive(id);
     if (!l) throw new HttpError(404, "This haggle is over (or never existed).");
+    guardPlayer(l.player, authed);
     const session = restore(l);
     const t0 = Date.now();
     // Out of turns: walk the player out.
@@ -621,9 +673,15 @@ function serveStatic(url: string, res: ServerResponse): boolean {
 
 createServer(async (req, res) => {
   const url = req.url ?? "/";
+  const authed = sessionAccount(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""), auth);
   // Behind a hosting proxy the real client is the last X-Forwarded-For hop (the first is client-supplied).
   const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",").pop()?.trim() || req.socket.remoteAddress || "?";
   try {
+    const body: Record<string, unknown> = req.method === "POST" && url.startsWith("/api/") ? await readJson(req) : {};
+    guardPlayer(body.player, authed);
+    if (req.method === "GET" && url === "/api/auth/config") return send(res, 200, { domain: auth.domain, clientId: auth.clientId });
+    if (req.method === "POST" && url === "/api/auth/session") return send(res, 200, await startSession(body));
+    if (req.method === "POST" && url === "/api/auth/link") return send(res, 200, await linkGuest(body, authed));
     if (req.method === "GET" && url === "/api/merchants")
       return send(res, 200, {
         merchants: MERCHANTS.map((m) => ({ id: m.id, name: m.name, good: GOODS[m.goodId], buys: GOODS[m.buysGoodId] })),
@@ -637,26 +695,26 @@ createServer(async (req, res) => {
     }
     if (req.method === "GET" && url === "/api/leaderboard")
       return send(res, 200, { leaders: ledger ? await readLeaderboard(ledger.network, ledger.contractId) : [] });
-    if (req.method === "POST" && url === "/api/haggle") return send(res, 200, await openHaggle(await readJson(req), ip));
-    if (req.method === "POST" && url === "/api/day/next") return send(res, 200, await nextDay(await readJson(req)));
+    if (req.method === "POST" && url === "/api/haggle") return send(res, 200, await openHaggle(body, ip));
+    if (req.method === "POST" && url === "/api/day/next") return send(res, 200, await nextDay(body));
     if (req.method === "GET" && url === "/api/market") {
       if (!market) return send(res, 200, { agents: [], news: [], onchain: false });
       return send(res, 200, { agents: await market.agents(), news: await market.news(25), onchain: true, contractId: ledger!.contractId });
     }
-    if (req.method === "POST" && url === "/api/invest") return send(res, 200, await invest(await readJson(req)));
+    if (req.method === "POST" && url === "/api/invest") return send(res, 200, await invest(body));
     if (req.method === "GET" && url.startsWith("/api/orders"))
       return send(res, 200, await listOrders(new URL(url, "http://x").searchParams.get("player") ?? ""));
     if (req.method === "GET" && url.startsWith("/api/stalls")) {
       const q = new URL(url, "http://x").searchParams;
       return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
     }
-    if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(await readJson(req)));
+    if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(body));
     const sm = url.match(/^\/api\/stalls\/(licence|stock|withdraw|collect)$/);
-    if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], await readJson(req)));
+    if (req.method === "POST" && sm) return send(res, 200, await stallAction(sm[1], body));
     const om = url.match(/^\/api\/orders\/([a-z0-9_-]{1,64})\/(take|deliver)$/);
-    if (req.method === "POST" && om) return send(res, 200, await (om[2] === "take" ? takeOrder : deliverOrder)(om[1], await readJson(req)));
+    if (req.method === "POST" && om) return send(res, 200, await (om[2] === "take" ? takeOrder : deliverOrder)(om[1], body));
     const m = url.match(/^\/api\/haggle\/([0-9a-f-]{36})\/turn$/);
-    if (req.method === "POST" && m) return send(res, 200, await turn(m[1], await readJson(req)));
+    if (req.method === "POST" && m) return send(res, 200, await turn(m[1], body, authed));
     if (url.startsWith("/api/")) throw new HttpError(404, "not found");
     if (req.method === "GET" && serveStatic(url, res)) return;
     throw new HttpError(404, "not found");
