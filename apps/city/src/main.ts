@@ -13,6 +13,7 @@ import { initJobs } from "./jobs";
 import { initCred } from "./cred";
 import { initOwnStalls } from "./ownstalls";
 import { initDocks } from "./docks";
+import { currentPlayer, initLogin } from "./login";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -69,7 +70,10 @@ function playerId() {
   }
   return id;
 }
-const PLAYER = playerId();
+/** The guest id this browser has always had, kept so its progress can be brought to an account. */
+const GUEST = playerId();
+/** Who we play as: the signed-in NEAR account, or the guest. */
+const PLAYER = currentPlayer(GUEST);
 
 // ---------- DOM ----------
 
@@ -226,6 +230,7 @@ async function refreshPurse(bump = false) {
   }
 }
 $("bz-hud").hidden = false;
+initLogin({ hud: $("bz-hud"), guestId: GUEST, toast });
 void refreshPurse();
 
 // ---------- the agent economy: purses, shelves and the street wire ----------

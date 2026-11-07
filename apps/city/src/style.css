@@ -518,6 +518,7 @@ button:disabled {
 }
 
 #bz-hud[hidden],
+#bz-link[hidden],
 #bz-broke[hidden],
 #bz-dock-prompt[hidden],
 #bz-own-prompt[hidden],
@@ -1314,4 +1315,50 @@ button:disabled {
   background: var(--bz-green);
   color: #0d2a1a;
   font: 700 15px var(--bz-font);
+}
+
+/* ---------- signing in ---------- */
+#bz-signin,
+#bz-acct {
+  pointer-events: auto;
+  color: var(--bz-ink);
+  font: 600 13px var(--bz-font);
+  text-align: left;
+}
+#bz-signin {
+  cursor: pointer;
+  border-color: #9fd0ff;
+}
+#bz-signin:disabled {
+  opacity: 0.7;
+}
+#bz-acct {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#bz-acct a {
+  color: #9fd0ff;
+  text-decoration: none;
+}
+#bz-signout {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--bz-edge);
+  background: none;
+  color: var(--bz-dim);
+  font: 12px var(--bz-font);
+  cursor: pointer;
+}
+#bz-link {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 6, 4, 0.6);
+}
+#bz-link .bz-note {
+  color: var(--bz-dim);
 }
