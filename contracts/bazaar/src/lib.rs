@@ -58,6 +58,16 @@
 //! the guest earned (coins, goods, street cred, merchants' memory, a stall) to that account, once,
 //! and only into an account the game hasn't seen yet.
 //!
+//! ## Cargo ship auctions (v3.7)
+//! Every few minutes a cargo ship docks at Pier 34 (`ship_arrives`). The contract rolls the lot
+//! itself from the block's random seed (good, quantity, reserve) and mints it into escrow. Players
+//! and agents post sealed bids (`commit_bid`: a hash plus a deposit; an agent signs
+//! `authorize_spend` for its deposit first). After bidding closes, bids are revealed and checked
+//! against their hashes (`reveal_bid`); then anyone can `settle_auction`. The highest bid at or
+//! above the reserve wins and pays its bid to the harbour (burned); everyone else is refunded,
+//! less a 10% penalty for a bid never revealed. An unsold lot sails on (burned). This state lives
+//! under raw "x:" storage keys, so it deployed without a migration.
+//!
 //! The commitment preimage MUST stay byte-identical to `packages/core/src/secrets.ts`.
 
 use near_sdk::serde_json::json;
@@ -425,6 +435,83 @@ pub const SERVER_XP_PER_DAY: u64 = 80;
 pub const CUSTOMER_INCOME_PER_DAY: u64 = 400;
 /// Most open orders at once, across all customers.
 pub const MAX_OPEN_ORDERS: usize = 40;
+
+// ---------- v3.7: cargo ship auctions ----------
+//
+// New features keep their state under their own raw storage keys ("x:…"), outside the root
+// struct, so they deploy without a state migration. Prefix bytes never collide with the root
+// collections (their StorageKey prefixes are single bytes 0..=14).
+
+/// Base value of each good, for an auction's reserve. Matches packages/core catalog.ts.
+pub const GOOD_BASE: [(&str, u64); 3] = [("rug", 60), ("saffron", 40), ("lamp", 25)];
+/// At most one ship this often.
+pub const SHIP_GAP_MS: u64 = 8 * 60_000;
+/// Sealed bids are taken for this long after a ship docks…
+pub const BID_WINDOW_MS: u64 = 150_000;
+/// …then bidders reveal for this long, then anyone can settle.
+pub const REVEAL_WINDOW_MS: u64 = 75_000;
+pub const MAX_BIDS: usize = 24;
+/// An unrevealed bid's deposit comes back less this share (burned), so nobody bids and then
+/// decides whether to reveal once they see the others.
+pub const UNREVEALED_PENALTY_PCT: u64 = 10;
+pub const XP_AUCTION_WIN: u64 = 10;
+const BID_DOMAIN: &str = "bazaar-bid";
+const RECENT_AUCTIONS: usize = 12;
+
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuctionStatus {
+    Bidding,
+    Settled,
+    Unsold,
+}
+
+/// A sealed bid: only its commitment and deposit are public until it's revealed.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bid {
+    pub bidder: AccountId,
+    /// sha256("bazaar-bid|auction|bidder|amount|salt"), lowercase hex.
+    pub commitment: String,
+    /// Coins locked with the bid; at least the amount, and any round figure above it.
+    pub deposit: u64,
+    pub agent: bool,
+    pub committed_ms: u64,
+    pub amount: Option<u64>,
+}
+
+/// One cargo ship's lot, sold by sealed-bid, first-price auction at Pier 34.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Auction {
+    pub id: String,
+    pub good_id: String,
+    pub qty: u32,
+    pub reserve: u64,
+    pub opened_ms: u64,
+    pub bids_close_ms: u64,
+    pub reveal_close_ms: u64,
+    pub status: AuctionStatus,
+    pub bids: Vec<Bid>,
+    pub winner: Option<AccountId>,
+    pub price: u64,
+}
+
+/// The commitment a bidder posts: must stay byte-identical to packages/core auctions.ts.
+pub fn bid_commitment(auction_id: &str, bidder: &AccountId, amount: u64, salt: &str) -> String {
+    hex(&env::sha256(format!("{BID_DOMAIN}|{auction_id}|{bidder}|{amount}|{salt}").as_bytes()))
+}
+
+fn raw_get<T: near_sdk::borsh::BorshDeserialize>(key: &str) -> Option<T> {
+    env::storage_read(key.as_bytes()).map(|b| T::try_from_slice(&b).unwrap_or_else(|_| env::panic_str("corrupt raw state")))
+}
+fn raw_put<T: near_sdk::borsh::BorshSerialize>(key: &str, v: &T) {
+    env::storage_write(key.as_bytes(), &near_sdk::borsh::to_vec(v).unwrap());
+}
+fn auction_key(id: &str) -> String {
+    format!("x:auc:{id}")
+}
 
 /// sha256 of the canonical preimage, lowercase hex.
 pub fn commitment_of(s: &Secret, salt: &str) -> String {
@@ -1097,6 +1184,164 @@ impl Bazaar {
         self.add_coins(&player, st.till as i64);
         self.stalls.remove(&st.slot);
         emit("stall_released", json!({ "player": player, "slot": st.slot }));
+    }
+
+    // ---------- cargo ship auctions (v3.7) ----------
+
+    /// Server: a cargo ship docks at Pier 34. The contract rolls the lot itself from the block's
+    /// random seed (which good, how many, the reserve), mints it into escrow, and opens sealed
+    /// bidding. At most one ship every `SHIP_GAP_MS`.
+    pub fn ship_arrives(&mut self, auction_id: String) -> Auction {
+        self.require_server();
+        require!(is_id(&auction_id), "auction_id must be [a-z0-9_-]{1,64}");
+        require!(raw_get::<Auction>(&auction_key(&auction_id)).is_none(), "auction_id already used");
+        let now = env::block_timestamp_ms();
+        let last: u64 = raw_get("x:lastship").unwrap_or(0);
+        require!(last == 0 || now >= last + SHIP_GAP_MS, "the next ship isn't due yet");
+        let seed = env::random_seed();
+        let (good, base) = GOOD_BASE[usize::from(seed[0]) % GOOD_BASE.len()];
+        let qty = 4 + u32::from(seed[1]) % 7; // 4..=10
+        let reserve = base * u64::from(qty) / 2;
+        self.mint_goods(&env::current_account_id(), good, qty, "cargo ship");
+        let a = Auction {
+            id: auction_id.clone(),
+            good_id: good.to_string(),
+            qty,
+            reserve,
+            opened_ms: now,
+            bids_close_ms: now + BID_WINDOW_MS,
+            reveal_close_ms: now + BID_WINDOW_MS + REVEAL_WINDOW_MS,
+            status: AuctionStatus::Bidding,
+            bids: vec![],
+            winner: None,
+            price: 0,
+        };
+        raw_put(&auction_key(&auction_id), &a);
+        raw_put("x:lastship", &now);
+        let mut recent: Vec<String> = raw_get("x:auctions").unwrap_or_default();
+        recent.insert(0, auction_id);
+        recent.truncate(RECENT_AUCTIONS);
+        raw_put("x:auctions", &recent);
+        emit("ship_arrived", json!({ "auction_id": a.id, "good_id": a.good_id, "qty": qty, "reserve": reserve, "bids_close_ms": a.bids_close_ms, "reveal_close_ms": a.reveal_close_ms }));
+        a
+    }
+
+    fn auction(&self, id: &str) -> Auction {
+        raw_get(&auction_key(id)).unwrap_or_else(|| env::panic_str("unknown auction"))
+    }
+
+    /// Server: post a sealed bid and lock its deposit. A player's coins are locked directly; an
+    /// agent must have signed `authorize_spend(bid_id, deposit)` with its own key first. One bid
+    /// per bidder per auction, before bidding closes.
+    pub fn commit_bid(&mut self, auction_id: String, bid_id: String, bidder: AccountId, commitment: String, deposit: u64) {
+        self.require_server();
+        let mut a = self.auction(&auction_id);
+        let now = env::block_timestamp_ms();
+        require!(a.status == AuctionStatus::Bidding && now < a.bids_close_ms, "bidding on this lot has closed");
+        require!(is_lower_hex(&commitment, 64), "commitment must be 64 lowercase hex chars");
+        require!(a.bids.len() < MAX_BIDS, "the auctioneer has all the bids he can take");
+        require!(!a.bids.iter().any(|b| b.bidder == bidder), "you've already bid on this lot");
+        require!(deposit >= a.reserve, "the deposit must cover the reserve");
+        let agent = self.agent_of(&bidder).is_some();
+        if agent {
+            let auth = self.auths.remove(&bid_id).unwrap_or_else(|| env::panic_str("the agent hasn't authorized this bid"));
+            require!(auth.agent == bidder && auth.max == deposit, "the agent authorized a different bid");
+        }
+        self.add_coins(&bidder, -(deposit as i64));
+        a.bids.push(Bid { bidder: bidder.clone(), commitment, deposit, agent, committed_ms: now, amount: None });
+        emit("bid_committed", json!({ "auction_id": auction_id, "bidder": bidder, "deposit": deposit }));
+        raw_put(&auction_key(&auction_id), &a);
+    }
+
+    /// Server, relaying the bidder's reveal: open a sealed bid after bidding closes. The contract
+    /// checks it against the commitment and the deposit.
+    pub fn reveal_bid(&mut self, auction_id: String, bidder: AccountId, amount: u64, salt: String) {
+        self.require_server();
+        let mut a = self.auction(&auction_id);
+        let now = env::block_timestamp_ms();
+        require!(now >= a.bids_close_ms, "bids are still sealed: wait for bidding to close");
+        require!(a.status == AuctionStatus::Bidding && now < a.reveal_close_ms, "the reveal window has closed");
+        require!(is_lower_hex(&salt, 32), "salt must be 32 lowercase hex chars");
+        let want = bid_commitment(&auction_id, &bidder, amount, &salt);
+        let b = a.bids.iter_mut().find(|b| b.bidder == bidder).unwrap_or_else(|| env::panic_str("no bid from that bidder"));
+        require!(b.amount.is_none(), "bid already revealed");
+        require!(b.commitment == want, "reveal does not match the sealed bid");
+        require!(amount <= b.deposit, "the bid is more than its deposit");
+        b.amount = Some(amount);
+        emit("bid_revealed", json!({ "auction_id": auction_id, "bidder": bidder, "amount": amount }));
+        raw_put(&auction_key(&auction_id), &a);
+    }
+
+    /// Anyone, after the reveal window: the highest revealed bid at or above the reserve wins
+    /// (ties go to the earlier bid) and pays its bid, which the harbour keeps (burned). Everyone
+    /// else gets their deposit back; an unrevealed bid loses `UNREVEALED_PENALTY_PCT`. An unsold
+    /// lot sails on (burned).
+    pub fn settle_auction(&mut self, auction_id: String) -> Auction {
+        let mut a = self.auction(&auction_id);
+        require!(a.status == AuctionStatus::Bidding, "already settled");
+        require!(env::block_timestamp_ms() >= a.reveal_close_ms, "bidders can still reveal");
+        let win = a
+            .bids
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.amount.filter(|&m| m >= a.reserve).map(|m| (i, m)))
+            .max_by(|x, y| x.1.cmp(&y.1).then(y.0.cmp(&x.0)))
+            .map(|(i, _)| i);
+        for (i, b) in a.bids.clone().iter().enumerate() {
+            let (refund, burn, spent) = match (Some(i) == win, b.amount) {
+                (true, Some(m)) => (b.deposit - m, m, m),
+                (false, Some(_)) => (b.deposit, 0, 0),
+                (_, None) => {
+                    let p = b.deposit * UNREVEALED_PENALTY_PCT / 100;
+                    (b.deposit - p, p, p)
+                }
+            };
+            self.add_coins(&b.bidder, refund as i64);
+            self.burned += burn;
+            if let Some(ag) = self.agent_of(&b.bidder) {
+                // Release the part of its daily cap the agent didn't end up spending.
+                self.charge_cap(&ag.id, spent as i64 - b.deposit as i64);
+            }
+        }
+        let here = env::current_account_id();
+        match win {
+            Some(i) => {
+                let b = a.bids[i].clone();
+                let price = b.amount.unwrap();
+                if b.agent {
+                    let key = goods_key(&b.bidder, &a.good_id);
+                    let held = u64::from(self.goods_of(b.bidder.clone(), a.good_id.clone()));
+                    let old = self.cost_basis.get(&key).copied().unwrap_or(0);
+                    self.cost_basis.insert(key, (old * held + price * 100) / (held + u64::from(a.qty)));
+                } else {
+                    self.grant(&b.bidder, XP_AUCTION_WIN, "auction");
+                }
+                self.move_goods(&here, &b.bidder, &a.good_id, a.qty, "auction");
+                a.status = AuctionStatus::Settled;
+                a.winner = Some(b.bidder);
+                a.price = price;
+            }
+            None => {
+                self.burn_goods(&here, &a.good_id, a.qty, "unsold: the ship sailed on");
+                a.status = AuctionStatus::Unsold;
+            }
+        }
+        emit("auction_settled", json!({ "auction_id": auction_id, "status": a.status, "winner": a.winner, "price": a.price, "good_id": a.good_id, "qty": a.qty, "bids": a.bids.len() }));
+        raw_put(&auction_key(&auction_id), &a);
+        a
+    }
+
+    pub fn get_auction(&self, auction_id: String) -> Option<Auction> {
+        raw_get(&auction_key(&auction_id))
+    }
+
+    /// The most recent auctions, newest first.
+    pub fn auctions(&self) -> Vec<Auction> {
+        raw_get::<Vec<String>>("x:auctions").unwrap_or_default().iter().filter_map(|id| raw_get(&auction_key(id))).collect()
+    }
+
+    pub fn last_ship_ms(&self) -> u64 {
+        raw_get("x:lastship").unwrap_or(0)
     }
 
     // ---------- haggles ----------
@@ -2298,4 +2543,138 @@ mod tests {
         ctx("player.testnet", 100);
         c.merge_player(player(), implicit(), vec![], vec![]);
     }
+
+    // ---------- cargo ship auctions ----------
+
+    fn at_ms(caller: &str, ms: u64, seed: u8) {
+        testing_env!(VMContextBuilder::new().predecessor_account_id(acc(caller)).current_account_id(acc("bazaar.testnet")).block_timestamp(ms * 1_000_000).random_seed([seed; 32]).build());
+    }
+    const T0: u64 = 1_000_000;
+    const BSALT: &str = "ffeeddccbbaa99887766554433221100";
+
+    /// A player with coins (bought a rug, so they're known) and a ship in port.
+    fn port() -> (Bazaar, Auction) {
+        let mut c = setup();
+        buy_rug(&mut c, "h1"); // player: 200 - 60 = 140 coins
+        at_ms("server.testnet", T0, 1);
+        let a = c.ship_arrives("ship-1".into());
+        (c, a)
+    }
+    fn bid(c: &mut Bazaar, who: &AccountId, amount: u64, deposit: u64) {
+        let h = bid_commitment("ship-1", who, amount, BSALT);
+        c.commit_bid("ship-1".into(), format!("b-{}", who.as_str().replace('.', "-")), who.clone(), h, deposit);
+    }
+
+    #[test]
+    fn a_ship_rolls_its_own_lot_and_mints_it_into_escrow() {
+        let (c, a) = port();
+        // seed byte 1: good index 1 % 3 = saffron, qty 4 + 1 % 7 = 5, reserve 40 * 5 / 2.
+        assert_eq!((a.good_id.as_str(), a.qty, a.reserve), ("saffron", 5, 100));
+        assert_eq!(c.goods_of(acc("bazaar.testnet"), "saffron".into()), 5);
+        assert_eq!(a.bids_close_ms, T0 + BID_WINDOW_MS);
+    }
+
+    #[test]
+    #[should_panic(expected = "the next ship isn't due yet")]
+    fn ships_come_no_more_often_than_the_gap() {
+        let (mut c, _) = port();
+        at_ms("server.testnet", T0 + SHIP_GAP_MS - 1, 2);
+        c.ship_arrives("ship-2".into());
+    }
+
+    #[test]
+    fn the_highest_revealed_bid_wins_and_everyone_else_is_refunded() {
+        let (mut c, _) = port();
+        // Ivy (an agent) signs for her deposit; the player locks theirs directly.
+        at_ms("ivy.testnet", T0 + 1000, 1);
+        c.authorize_spend("b-ivy-testnet".into(), 150);
+        at_ms("server.testnet", T0 + 2000, 1);
+        bid(&mut c, &acc("ivy.testnet"), 120, 150);
+        bid(&mut c, &player(), 130, 140);
+        assert_eq!(c.coins_of(player()), 0);
+        at_ms("server.testnet", T0 + BID_WINDOW_MS, 1);
+        c.reveal_bid("ship-1".into(), acc("ivy.testnet"), 120, BSALT.into());
+        c.reveal_bid("ship-1".into(), player(), 130, BSALT.into());
+        at_ms("anyone.testnet", T0 + BID_WINDOW_MS + REVEAL_WINDOW_MS, 1);
+        let burned = c.stats().burned;
+        let a = c.settle_auction("ship-1".into());
+        assert_eq!((a.status, a.winner, a.price), (AuctionStatus::Settled, Some(player()), 130));
+        assert_eq!(c.coins_of(player()), 10);
+        assert_eq!(c.goods_of(player(), "saffron".into()), 5);
+        assert_eq!(c.coins_of(acc("ivy.testnet")), 300);
+        assert_eq!(c.agent("ivy").spent_today, 0, "Ivy's unused cap is released");
+        assert_eq!(c.stats().burned, burned + 130);
+        assert_eq!(c.goods_of(acc("bazaar.testnet"), "saffron".into()), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "reveal does not match the sealed bid")]
+    fn a_bid_cannot_change_after_it_is_sealed() {
+        let (mut c, _) = port();
+        bid(&mut c, &player(), 110, 140);
+        at_ms("server.testnet", T0 + BID_WINDOW_MS, 1);
+        c.reveal_bid("ship-1".into(), player(), 139, BSALT.into());
+    }
+
+    #[test]
+    #[should_panic(expected = "bids are still sealed")]
+    fn nobody_reveals_while_bidding_is_open() {
+        let (mut c, _) = port();
+        bid(&mut c, &player(), 110, 140);
+        c.reveal_bid("ship-1".into(), player(), 110, BSALT.into());
+    }
+
+    #[test]
+    #[should_panic(expected = "the agent hasn't authorized this bid")]
+    fn the_server_cannot_bid_an_agents_coins() {
+        let (mut c, _) = port();
+        bid(&mut c, &acc("ivy.testnet"), 120, 150);
+    }
+
+    #[test]
+    #[should_panic(expected = "bidding on this lot has closed")]
+    fn late_bids_are_refused() {
+        let (mut c, _) = port();
+        at_ms("server.testnet", T0 + BID_WINDOW_MS, 1);
+        bid(&mut c, &player(), 110, 140);
+    }
+
+    #[test]
+    fn an_unrevealed_bid_pays_a_penalty_and_an_unsold_lot_sails_on() {
+        let (mut c, _) = port();
+        bid(&mut c, &player(), 120, 140);
+        at_ms("anyone.testnet", T0 + BID_WINDOW_MS + REVEAL_WINDOW_MS, 1);
+        let a = c.settle_auction("ship-1".into());
+        assert_eq!(a.status, AuctionStatus::Unsold);
+        assert_eq!(c.coins_of(player()), 140 - 14);
+        assert_eq!(c.mt_supply("saffron".into()), Some(U128(3)), "only Zaria's opening stock is left");
+    }
+
+    #[test]
+    fn bids_under_the_reserve_do_not_win() {
+        let (mut c, _) = port();
+        bid(&mut c, &player(), 100, 140);
+        at_ms("server.testnet", T0 + BID_WINDOW_MS, 1);
+        // Reserve is 100, so exactly 100 wins.
+        c.reveal_bid("ship-1".into(), player(), 100, BSALT.into());
+        at_ms("anyone.testnet", T0 + BID_WINDOW_MS + REVEAL_WINDOW_MS, 1);
+        assert_eq!(c.settle_auction("ship-1".into()).price, 100);
+        assert_eq!(c.cred_of(player()).xp, XP_DEAL + XP_STREAK_BONUS + XP_AUCTION_WIN);
+    }
+
+    #[test]
+    #[should_panic(expected = "bidders can still reveal")]
+    fn auctions_cannot_settle_early() {
+        let (mut c, _) = port();
+        at_ms("anyone.testnet", T0 + BID_WINDOW_MS, 1);
+        c.settle_auction("ship-1".into());
+    }
+
+    #[test]
+    fn bid_commitment_matches_typescript() {
+        ctx("x.testnet", 1);
+        // Vector from packages/core bidCommitment() (see auctions.test.ts).
+        assert_eq!(bid_commitment("ship-1", &acc("guest-0011223344556677"), 130, BSALT), BID_VECTOR);
+    }
+    const BID_VECTOR: &str = "e10e213e549b9d04319420abddca6d9ce7f818e37bac0a776e02bebfa8fe9c67";
 }
