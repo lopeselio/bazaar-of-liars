@@ -197,7 +197,14 @@ async function verifyOnchain(b: ProofBundle, c: ChainRecord, reader: ChainReader
     // The contract refuses a reused haggle id, so a successful open_haggle carrying this id and
     // commitment is this haggle's own commitment, not some earlier transaction to the contract.
     const opens = tx.calls?.some((x) => x.method === "open_haggle" && x.args?.haggle_id === b.haggleId && x.args?.commitment === b.commitment) ?? false;
-    add("chain.opentx", "That transaction is this haggle's open_haggle, with this commitment, and it succeeded", opens && tx.ok === true, opens ? (tx.ok ? undefined : "the transaction failed") : "not an open_haggle call for this haggle and commitment");
+    // ...and the contract recorded the haggle in the block where that call ran.
+    const sameBlock = tx.blockHeight === undefined || tx.blockHeight === h.opened_block;
+    add(
+      "chain.opentx",
+      "That transaction is this haggle's open_haggle, with this commitment, and it succeeded",
+      opens && tx.ok === true && sameBlock,
+      !opens ? "not an open_haggle call for this haggle and commitment" : !tx.ok ? "the transaction failed" : !sameBlock ? `ran in block ${tx.blockHeight}, but the contract recorded the haggle at ${h.opened_block}` : undefined,
+    );
     const created = firstReply ? createdOf(firstReply.responseBody) : undefined;
     if (created !== undefined)
       add(

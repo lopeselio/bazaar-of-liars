@@ -292,6 +292,14 @@ describe("onchain commit + settle", () => {
     expect(await failed({ ...b, chain: { ...b.chain!, openTx: b.chain!.closeTx! } })).toContain("chain.opentx");
   });
 
+  it("detects an open_haggle that ran in a different block from the contract's record", async () => {
+    const { b, chain } = await playOnchain(["10", "take"]);
+    chain.txs.get(b.chain!.openTx)!.blockHeight = 2;
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok).map((c) => c.id)).toContain("chain.opentx");
+    chain.txs.get(b.chain!.openTx)!.blockHeight = 1; // the fake contract records opened_block 1
+    expect((await verifyBundle(b, { ...opts, chain: chain.reader })).filter((c) => !c.ok)).toEqual([]);
+  });
+
   it("detects an open_haggle transaction that failed", async () => {
     const { b, chain } = await playOnchain(["10", "take"]);
     chain.txs.get(b.chain!.openTx)!.ok = false;
