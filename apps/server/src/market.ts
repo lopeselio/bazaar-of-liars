@@ -19,6 +19,9 @@ import {
   AGENTS,
   BOTS,
   SHIP_GAP_MS,
+  TIP_RESOLVE_WINDOW_MS,
+  informantById,
+  type TipClaim,
   agentBid,
   bidCommitment,
   depositFor,
@@ -477,6 +480,7 @@ export class Market {
    * the agents bid and reveal, and settle a lot when its reveal window closes.
    */
   async harbour() {
+    await this.resolveTips().catch((e) => console.error("rumours:", (e as Error).message));
     const now = Date.now();
     const recent = await this.auctions(0);
     for (const a of recent.filter((x) => x.status === "bidding")) {
@@ -516,6 +520,58 @@ export class Market {
         tx: explorerTx(this.ledger.network, tx),
         agents: [],
       });
+  }
+
+  // ---------- the rumour network ----------
+
+  /** A tip sold: remember its claim and salt (server-side only) until its check time. */
+  async rememberTip(t: { id: string; informant: string; player: string; claim: TipClaim; salt: string; checkMs: number; text: string }) {
+    await this.store.putJSON(`tip:${t.id}`, t, 2 * 3_600_000);
+    const pending = (await this.store.getJSON<string[]>("tips:pending")) ?? [];
+    await this.store.putJSON("tips:pending", [...pending.filter((x) => x !== t.id), t.id].slice(-200), 24 * 3_600_000);
+  }
+
+  /** What a player was told, for their own tips. */
+  async tipSecret(id: string) {
+    return this.store.getJSON<{ id: string; informant: string; player: string; claim: TipClaim; salt: string; checkMs: number; text: string }>(`tip:${id}`);
+  }
+
+  /** Reveal every tip whose check time has come; the contract checks it against real stock. */
+  private async resolveTips() {
+    const pending = (await this.store.getJSON<string[]>("tips:pending")) ?? [];
+    if (!pending.length) return;
+    const now = Date.now();
+    const left: string[] = [];
+    for (const id of pending) {
+      const t = await this.tipSecret(id);
+      if (!t) continue;
+      if (now < t.checkMs + 1500) {
+        left.push(id);
+        continue;
+      }
+      try {
+        if (now >= t.checkMs + TIP_RESOLVE_WINDOW_MS) await this.ledger.expireTip!(id);
+        else {
+          const tx = await this.ledger.resolveTip!({ tipId: id, claim: t.claim, salt: t.salt });
+          const inf = informantById(t.informant);
+          // The outcome is public now; the claim was revealed onchain with it.
+          const stock = (await this.agents(0)).find((a) => a.id === t.claim.agent_id)?.stock[t.claim.good_id];
+          const holds = stock === undefined ? null : t.claim.at_most ? stock <= t.claim.n : stock >= t.claim.n;
+          await this.say({
+            kind: "rumour",
+            text: `${inf?.name ?? t.informant}'s tip about ${short(t.claim.agent_id)}'s ${GOODS[t.claim.good_id]?.name ?? t.claim.good_id} ${holds === false ? "was a lie: the buyer got their money back" : "came true"}`,
+            tx: explorerTx(this.ledger.network, tx),
+            agents: [t.claim.agent_id],
+          });
+        }
+        this.invalidate();
+      } catch (e) {
+        const m = (e as Error).message;
+        console.error(`rumour ${id}:`, m);
+        if (!/already resolved|unknown tip/.test(m)) left.push(id);
+      }
+    }
+    await this.store.putJSON("tips:pending", left, 24 * 3_600_000);
   }
 
   /** One round of the agents acting on their own. Errors are logged, never thrown. */
