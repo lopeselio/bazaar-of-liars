@@ -150,18 +150,23 @@ export async function derivedPublicKey(sub: string, cfg: Pick<AuthConfig, "domai
 // ---------- sessions ----------
 
 const IMPLICIT_RE = /^[0-9a-f]{64}$/;
-export const isAccountPlayer = (p: string) => IMPLICIT_RE.test(p);
+/** Named accounts, from wallet sign-in (e.g. alice.testnet). */
+export const NAMED_RE = /^(?=.{2,64}$)([a-z0-9]+[-_])*[a-z0-9]+(\.([a-z0-9]+[-_])*[a-z0-9]+)*\.(testnet|near)$/;
+/** A player who is a real NEAR account (signed in), as opposed to a guest id. */
+export const isAccountPlayer = (p: string) => IMPLICIT_RE.test(p) || NAMED_RE.test(p);
 
 export function issueSession(account: string, cfg: Pick<AuthConfig, "sessionSecret" | "sessionTtlMs">, now = Date.now()) {
   const exp = now + cfg.sessionTtlMs;
   const sig = createHmac("sha256", cfg.sessionSecret).update(`${account}.${exp}`).digest("base64url");
-  return { token: `${account}.${exp}.${sig}`, exp };
+  // Named accounts contain dots, so the account is base64url-encoded in the token.
+  return { token: `${Buffer.from(account).toString("base64url")}.${exp}.${sig}`, exp };
 }
 
 /** The account a session token is for, or null if it's forged or expired. */
 export function sessionAccount(token: string | undefined, cfg: Pick<AuthConfig, "sessionSecret">, now = Date.now()): string | null {
-  const [account, exp, sig] = (token ?? "").split(".");
-  if (!account || !exp || !sig || !IMPLICIT_RE.test(account) || Number(exp) < now) return null;
+  const [enc, exp, sig] = (token ?? "").split(".");
+  const account = enc ? Buffer.from(enc, "base64url").toString("utf8") : "";
+  if (!account || !exp || !sig || !isAccountPlayer(account) || Number(exp) < now) return null;
   const want = createHmac("sha256", cfg.sessionSecret).update(`${account}.${exp}`).digest();
   const got = Buffer.from(sig, "base64url");
   return got.length === want.length && timingSafeEqual(got, want) ? account : null;

@@ -51,7 +51,17 @@ describe("accounts and sessions", () => {
     expect(sessionAccount(t, c, now)).toBe(acct);
     expect(sessionAccount(t, c, now + 120_000)).toBeNull(); // expired
     expect(sessionAccount(t, { sessionSecret: Buffer.from("other") }, now)).toBeNull();
-    expect(sessionAccount(t.replace(acct, "cd".repeat(32)), c, now)).toBeNull();
+    const enc = (a: string) => Buffer.from(a).toString("base64url");
+    expect(sessionAccount(t.replace(enc(acct), enc("cd".repeat(32))), c, now)).toBeNull();
     expect(sessionAccount(undefined, c, now)).toBeNull();
+  });
+
+  it("carries named accounts (with dots) from wallet sign-in, and rejects ids that aren't accounts", () => {
+    const c = { sessionSecret: Buffer.from("s3cret"), sessionTtlMs: 60_000 };
+    const { token } = issueSession("alice.testnet", c, now);
+    expect(token.split(".")).toHaveLength(3);
+    expect(sessionAccount(token, c, now)).toBe("alice.testnet");
+    expect(sessionAccount(issueSession("guest-0123abcd", c, now).token, c, now)).toBeNull();
+    expect(sessionAccount(token.replace(Buffer.from("alice.testnet").toString("base64url"), Buffer.from("bob.testnet").toString("base64url")), c, now)).toBeNull();
   });
 });
