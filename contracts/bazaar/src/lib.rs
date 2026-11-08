@@ -572,6 +572,10 @@ fn work_done(account: &AccountId) {
 fn busy_key(account: &AccountId) -> String {
     format!("x:busy:{account}")
 }
+const INTENTS_KEY: &str = "x:intents";
+fn intents_identity_key(agent_id: &str) -> String {
+    format!("x:ii:{agent_id}")
+}
 fn auction_key(id: &str) -> String {
     format!("x:auc:{id}")
 }
@@ -1173,6 +1177,43 @@ impl Bazaar {
         let s = self.supply.get(good).copied().unwrap_or(0);
         self.supply.insert(good.to_string(), s.saturating_sub(u128::from(qty)));
         mt_event("mt_burn", json!({ "owner_id": from, "token_ids": [good], "amounts": [qty.to_string()], "memo": memo }));
+    }
+
+    // ---------- v3.14: NEAR Intents (barter settled by the Intents Verifier) ----------
+
+    /// Owner: the NEAR Intents Verifier this game settles barter through (our testnet deployment
+    /// of near/intents), and each agent's identity there: the implicit account of the agent's own
+    /// key, so only that key can sign the agent's intents.
+    pub fn set_intents(&mut self, verifier: AccountId, identities: Vec<(String, AccountId)>) {
+        self.require_owner();
+        raw_put(INTENTS_KEY, &verifier);
+        for (id, ident) in identities {
+            self.agent(&id); // panics on an unknown agent
+            raw_put(&intents_identity_key(&id), &ident);
+            emit("intents_identity", json!({ "agent": id, "identity": ident, "verifier": verifier }));
+        }
+    }
+
+    pub fn intents_of(&self, agent_id: String) -> Option<AccountId> {
+        raw_get(&intents_identity_key(&agent_id))
+    }
+
+    /// Server: move an agent's goods into the Verifier, credited to that agent's own intents
+    /// identity and nowhere else (NEP-245 `mt_on_transfer`, `msg` = the receiver). Anything the
+    /// Verifier doesn't take comes back to the agent through `mt_resolve_transfer`.
+    pub fn intents_deposit(&mut self, agent_id: String, good_id: String, qty: u32) -> Promise {
+        self.require_server();
+        let verifier: AccountId = raw_get(INTENTS_KEY).unwrap_or_else(|| env::panic_str("no intents verifier set"));
+        let ident: AccountId = raw_get(&intents_identity_key(&agent_id)).unwrap_or_else(|| env::panic_str("that agent has no intents identity"));
+        let a = self.agent(&agent_id);
+        require!(qty > 0, "qty must be positive");
+        require!(self.supply.contains_key(&good_id), "unknown good");
+        self.move_goods(&a.account, &verifier, &good_id, qty, "intents deposit");
+        let amounts = vec![U128(u128::from(qty))];
+        ext_mt_receiver::ext(verifier.clone())
+            .with_static_gas(GAS_FOR_RECEIVER)
+            .mt_on_transfer(a.account.clone(), vec![a.account.clone()], vec![good_id.clone()], amounts.clone(), ident.to_string())
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_RESOLVE).mt_resolve_transfer(a.account, verifier, vec![good_id], amounts))
     }
 
     // ---------- NEP-245: goods as multi tokens ----------
@@ -3008,6 +3049,60 @@ mod tests {
         let mut c = setup();
         post(&mut c, "o1", 90);
         c.expire_order("o1".into());
+    }
+
+    fn with_intents(c: &mut Bazaar) {
+        ctx("owner.testnet", 101);
+        c.set_intents(acc("intents.testnet"), vec![("farrukh".into(), acc("aa".repeat(32).as_str()))]);
+        ctx("server.testnet", 102);
+    }
+
+    #[test]
+    fn intents_deposit_moves_goods_to_the_verifier_for_the_agents_identity() {
+        let mut c = setup();
+        with_intents(&mut c);
+        assert_eq!(c.intents_of("farrukh".into()), Some(acc("aa".repeat(32).as_str())));
+        let supply = c.mt_supply("rug".into()).map(|s| s.0);
+        let _ = c.intents_deposit("farrukh".into(), "rug".into(), 2);
+        assert_eq!(c.goods_of(farrukh(), "rug".into()), 1);
+        assert_eq!(c.goods_of(acc("intents.testnet"), "rug".into()), 2);
+        assert_eq!(c.mt_supply("rug".into()).map(|s| s.0), supply, "a deposit moves goods, it doesn't mint");
+    }
+
+    #[test]
+    fn a_failed_intents_deposit_comes_back_to_the_agent() {
+        let mut c = setup();
+        with_intents(&mut c);
+        let _ = c.intents_deposit("farrukh".into(), "rug".into(), 2);
+        // The Verifier's mt_on_transfer failed: resolve refunds everything.
+        testing_env!(VMContextBuilder::new().predecessor_account_id(near_sdk::test_utils::accounts(0)).current_account_id(near_sdk::test_utils::accounts(0)).build());
+        let kept = c.mt_resolve_transfer(farrukh(), acc("intents.testnet"), vec!["rug".into()], vec![U128(2)], Err(PromiseError::Failed));
+        assert_eq!(kept, vec![U128(0)]);
+        assert_eq!(c.goods_of(farrukh(), "rug".into()), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "no intents identity")]
+    fn intents_deposit_needs_a_registered_identity() {
+        let mut c = setup();
+        with_intents(&mut c);
+        let _ = c.intents_deposit("zaria".into(), "saffron".into(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "only the game server")]
+    fn only_the_server_deposits_into_intents() {
+        let mut c = setup();
+        with_intents(&mut c);
+        ctx("farrukh.testnet", 103);
+        let _ = c.intents_deposit("farrukh".into(), "rug".into(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "only the owner")]
+    fn only_the_owner_sets_the_verifier() {
+        let mut c = setup();
+        c.set_intents(acc("evil.testnet"), vec![]);
     }
 
     #[test]
