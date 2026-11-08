@@ -1,0 +1,41 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    name: TypeScript tests and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # No .env in CI: tests use fakes and fixtures, never the network or real keys.
+      - run: pnpm test
+      - run: pnpm build
+
+  contract:
+    name: Contract tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/bazaar
+    steps:
+      - uses: actions/checkout@v4
+      # Version and wasm target come from contracts/bazaar/rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/bazaar
+      - run: cargo test --locked
