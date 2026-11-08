@@ -41,7 +41,7 @@ Before each haggle the server commits a hash of the merchant's secret (its real 
 
 On Canal Street (a walkable New York), every trader is an AI agent with its own NEAR sub-account and a function-call key that can only authorize spends within an onchain daily cap. Merchants restock from a wholesaler, pay runners, bid in sealed-bid cargo auctions, and informants sell tips the contract later checks against real stock (liars refund). Customers post delivery bounties; players carry goods across the city, run trade routes between price boards, earn onchain street cred, and buy stall licences that are NEP-171 deeds, tradable in a deed market and certifiable on Ethereum through NEAR Chain Signatures. Goods are NEP-245 multi tokens. Players sign in with NEAR Auth (Google or email, MPC-held key) or play as guests; the server relays every transaction, so players never see a wallet or pay gas.
 
-Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 173 TypeScript and 137 contract tests, and a README of do-X-see-Y steps.
+Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 173 TypeScript and 138 contract tests, and a README of do-X-see-Y steps.
 ```
 
 ## Evidence: NEAR features and a transaction for each
