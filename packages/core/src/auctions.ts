@@ -39,10 +39,13 @@ export function depositFor(amount: number, reserve: number, coins: number): numb
 
 /** Per-unit value each kind of agent puts on a lot, as a share of the good's street value. */
 const VALUE_SHARE: Record<string, number> = { wholesaler: 0.6, merchant: 0.78, trader: 0.66 };
+/** Wu sits out a lot once she already holds this many of that good: she can't resell faster, and
+ * every winning bid is burned, so hoarding drains coins out of the street. */
+export const WHOLESALER_STOCK_CAP = 40;
 
 /**
- * What an agent bids on a lot, or null if it sits this one out. Wu bids on everything (she
- * resells lots to merchants), a merchant bids on its own good when its shelf is low, and traders
+ * What an agent bids on a lot, or null if it sits this one out. Wu bids on everything she isn't
+ * already overstocked on (she resells lots to merchants), a merchant bids on its own good when its shelf is low, and traders
  * bid when they have room in their purse. Never more than the agent can spend today.
  */
 export function agentBid(
@@ -53,6 +56,7 @@ export function agentBid(
   const share = VALUE_SHARE[a.kind];
   if (share === undefined) return null;
   if (a.kind === "merchant" && (a.sells !== lot.goodId || a.stock > 3)) return null;
+  if (a.kind === "wholesaler" && a.stock > WHOLESALER_STOCK_CAP) return null;
   if (a.kind === "trader" && rng() < 0.5) return null;
   const value = Math.round(lot.baseValue * lot.qty * share * (0.9 + 0.15 * rng()));
   // Keep headroom under the purse and cap, so the deposit can round up past the bid instead of
