@@ -62,6 +62,7 @@ import {
   readTips,
   readDeedCertificate,
   agentSignersFromEnv,
+  readAgentAccounts,
   verifyBundle,
   type Ledger,
 } from "@bazaar/merchant";
@@ -97,7 +98,13 @@ const attestor = nearAiAttestor(KEY);
 const store = await storeFromEnv();
 console.log(`state store: ${store.kind}`);
 // Canal Street's agent economy (contract v3): agents with their own accounts, purses and stock.
-const signers = ledger ? agentSignersFromEnv(AGENTS.map((a) => a.id)) : null;
+const onchainAccounts = ledger
+  ? await readAgentAccounts(ledger.network, ledger.contractId).catch((e) => {
+      console.warn(`couldn't read agent accounts from the contract (${(e as Error).message}); using AGENT_ACCOUNTS`);
+      return {};
+    })
+  : {};
+const signers = ledger ? agentSignersFromEnv(AGENTS.map((a) => a.id), process.env, onchainAccounts) : null;
 const market = ledger && signers ? new Market(ledger, signers, store) : null;
 console.log(market ? `agent economy: on (v3)${Number(process.env.MARKET_TICK_MS ?? 0) > 0 ? ", agents acting" : ", agents idle here (set MARKET_TICK_MS to run them)"}` : "agent economy: off");
 // Only one deployment should run the agents against a contract: the hosted demo sets
