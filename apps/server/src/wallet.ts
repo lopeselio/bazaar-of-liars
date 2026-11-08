@@ -86,8 +86,11 @@ export async function verifyWalletSignIn(p: WalletProof, consumeNonce: (nonceB64
   const nonce = Buffer.from(p.nonce ?? "", "base64");
   if (nonce.length !== 32) throw new WalletAuthError("bad nonce");
   if (!(await consumeNonce(p.nonce))) throw new WalletAuthError("this sign-in request expired or was already used; try again");
-  const hash = nep413Hash({ message: SIGN_IN_MESSAGE, nonce, recipient: SIGN_IN_RECIPIENT, callbackUrl: p.callbackUrl ?? null });
-  if (!verifyEd25519(p.publicKey, hash, p.signature)) throw new WalletAuthError("the signature doesn't match");
+  // Wallets differ on whether the callback URL is part of the signed payload; both forms bind the
+  // same nonce, message and recipient, so accept either.
+  const forms = [p.callbackUrl ?? null, ...(p.callbackUrl ? [null] : [])];
+  const ok = forms.some((callbackUrl) => verifyEd25519(p.publicKey, nep413Hash({ message: SIGN_IN_MESSAGE, nonce, recipient: SIGN_IN_RECIPIENT, callbackUrl }), p.signature));
+  if (!ok) throw new WalletAuthError("the signature doesn't match");
   const perm = await keys(p.accountId, p.publicKey);
   if (perm !== "full") throw new WalletAuthError(perm === "none" ? "that key isn't on the account" : "sign in with a full-access key");
   return p.accountId;

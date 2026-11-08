@@ -47,6 +47,16 @@ describe("wallet sign-in (NEP-413)", () => {
     await expect(verifyWalletSignIn({ ...proof, signature: other.signed.signature }, once(), fullKey)).rejects.toThrow(/doesn't match/);
   });
 
+  it("accepts wallets that sign with or without the callback URL in the payload", async () => {
+    const { signed } = walletSign("alice.testnet");
+    const account = await verifyWalletSignIn(
+      { accountId: "alice.testnet", publicKey: signed.publicKey, signature: signed.signature, nonce: nonceB64, callbackUrl: "https://example.test/city/" },
+      once(),
+      fullKey,
+    );
+    expect(account).toBe("alice.testnet");
+  });
+
   it("only takes NEAR account ids", async () => {
     const { signed } = walletSign("x");
     await expect(verifyWalletSignIn({ accountId: "../etc", publicKey: signed.publicKey, signature: signed.signature, nonce: nonceB64 }, once(), fullKey)).rejects.toThrow(/account id/);
