@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentBid, bidCommitment, depositFor, mulberry32 } from "../src/index.js";
+import { agentBid, bidCommitment, depositFor, mulberry32, WHOLESALER_STOCK_CAP } from "../src/index.js";
 
 describe("cargo ship auctions", () => {
   it("hashes a bid exactly like the contract", () => {
@@ -29,5 +29,16 @@ describe("cargo ship auctions", () => {
     // Headroom for a deposit above the bid.
     const tight = agentBid({ kind: "wholesaler", stock: 0, coins: 1000, capLeft: 130 }, lot, mulberry32(1));
     expect(tight).toBe(110);
+  });
+});
+
+describe("Wu doesn't hoard", () => {
+  const lot = { goodId: "rug", qty: 4, reserve: 60, baseValue: 60 };
+  const wu = (stock: number) => ({ kind: "wholesaler", stock, coins: 400, capLeft: 400 });
+  it("sits out a lot once she holds more than the cap", () => {
+    expect(agentBid(wu(WHOLESALER_STOCK_CAP + 1), lot, () => 0.5)).toBeNull();
+  });
+  it("still bids while she is under it", () => {
+    expect(agentBid(wu(WHOLESALER_STOCK_CAP), lot, () => 0.5)).not.toBeNull();
   });
 });
