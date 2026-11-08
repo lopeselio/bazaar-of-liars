@@ -8,12 +8,21 @@
     "dev": "rm -rf dist && cp -R vendor/slop-newyork dist && vite build --watch"
   },
   "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@types/three": "0.186.0",
+    "@vitejs/plugin-react": "6.2.1",
     "three": "0.186.1",
     "typescript": "^5.7.2",
     "vite": "8.3.4"
   },
   "dependencies": {
-    "@auth0/auth0-spa-js": "2.28.4"
+    "@auth0/auth0-spa-js": "2.28.4",
+    "@near-wallet-selector/core": "10.1.4",
+    "@near-wallet-selector/meteor-wallet": "10.1.4",
+    "@near-wallet-selector/my-near-wallet": "10.1.4",
+    "buffer": "6.0.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   }
 }
