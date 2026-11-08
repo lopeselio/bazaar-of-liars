@@ -63,5 +63,9 @@ describe("accounts and sessions", () => {
     expect(sessionAccount(token, c, now)).toBe("alice.testnet");
     expect(sessionAccount(issueSession("guest-0123abcd", c, now).token, c, now)).toBeNull();
     expect(sessionAccount(token.replace(Buffer.from("alice.testnet").toString("base64url"), Buffer.from("bob.testnet").toString("base64url")), c, now)).toBeNull();
+    // Exactly three parts, and a plain number for the expiry.
+    expect(sessionAccount(`${token}.extra`, c, now)).toBeNull();
+    const [enc, , sig] = token.split(".");
+    expect(sessionAccount(`${enc}.Infinity.${sig}`, c, now)).toBeNull();
   });
 });
