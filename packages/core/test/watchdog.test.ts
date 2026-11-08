@@ -14,23 +14,25 @@ describe("economy watchdog", () => {
   });
 
   it("tops up an agent low on gas money from the funder", () => {
-    const r = assessEconomy(base({ agents: [agent({ balance: 0.1 })] }));
-    expect(r.topUps).toEqual([{ account: "farrukh.v3.x.testnet", amount: TOP_UP_TO - 0.1 }]);
+    const r = assessEconomy(base({ agents: [agent({ balance: 0.03 })] }));
+    expect(r.topUps).toEqual([{ account: "farrukh.v3.x.testnet", amount: TOP_UP_TO - 0.03 }]);
+    // A quiet agent still on its 0.12 NEAR opening balance needs nothing.
+    expect(assessEconomy(base({ agents: [agent({ balance: 0.12 })] })).level).toBe("ok");
     expect(r.level).toBe("warn");
   });
 
   it("alerts instead when there is no funder or it can't cover the top-up", () => {
-    expect(assessEconomy(base({ agents: [agent({ balance: 0.1 })], funderBalance: null })).level).toBe("alert");
-    const r = assessEconomy(base({ agents: [agent({ balance: 0.1 })], funderBalance: 0.3 }));
+    expect(assessEconomy(base({ agents: [agent({ balance: 0.03 })], funderBalance: null })).level).toBe("alert");
+    const r = assessEconomy(base({ agents: [agent({ balance: 0.03 })], funderBalance: 0.2 }));
     expect(r.topUps).toEqual([]);
     expect(r.level).toBe("alert");
   });
 
   it("never promises more top-ups than the funder holds", () => {
     const agents = ["a", "b", "c"].map((id) => agent({ id, account: `${id}.x`, balance: 0 }));
-    const r = assessEconomy(base({ agents, funderBalance: 1.1 }));
+    const r = assessEconomy(base({ agents, funderBalance: 0.7 }));
     expect(r.topUps).toHaveLength(2);
-    expect(r.topUps.reduce((s, t) => s + t.amount, 0)).toBeLessThanOrEqual(1.05);
+    expect(r.topUps.reduce((s, t) => s + t.amount, 0)).toBeLessThanOrEqual(0.65);
   });
 
   it("asks for a rekey when a key's allowance runs low", () => {
