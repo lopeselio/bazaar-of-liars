@@ -721,7 +721,7 @@ export class Market {
     if (this.rng() < WALK_IN_CHANCE) {
       const c = CUSTOMERS[Math.floor(this.rng() * CUSTOMERS.length)];
       const m = MERCHANTS[Math.floor(this.rng() * MERCHANTS.length)];
-      await step(`walk-in ${c.id}`, () => this.customerBuys(c.id, m.goodId, "walked into the bazaar"));
+      await step(`walk-in ${c.id}`, async () => void (await this.customerBuys(c.id, m.goodId, "walked into the bazaar")));
     }
     const traders = AGENTS.filter((a) => a.kind === "trader");
     const ev = await this.event();
