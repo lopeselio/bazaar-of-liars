@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, loadSession, saveSession, type PlayerView } from "../../../web/src/api";
 import { nearAuthAllowed, signInWithNearAuth, signOutOfNearAuth } from "./nearAuth";
-import { WALLETS, isFresh, prepareWalletSignIn, signInWithWallet, type Prepared, type WalletId } from "./wallet";
+import { signInWithWallet, signOutOfWallet, walletSessionGone } from "./wallet";
 
 const shortAcct = (a: string) => (a.length > 24 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
@@ -16,14 +16,21 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
   const [session] = useState(loadSession);
   const [step, setStep] = useState<Step>({ kind: "closed" });
   const [nearAuth, setNearAuth] = useState<{ ok: boolean; origins: string[] } | null>(null);
-  const [prepared, setPrepared] = useState<Prepared | null>(null);
 
   useEffect(() => {
-    if (step.kind !== "choose") return;
-    if (!nearAuth) nearAuthAllowed().then(setNearAuth, () => setNearAuth({ ok: false, origins: [] }));
-    // Load the wallets and a fresh challenge now, so the click can open the wallet's popup at once.
-    if (!isFresh(prepared)) prepareWalletSignIn().then(setPrepared, (e) => toast(`Couldn't load the wallets: ${(e as Error).message}`));
-  }, [step.kind, nearAuth, prepared, toast]);
+    if (step.kind === "choose" && !nearAuth) nearAuthAllowed().then(setNearAuth, () => setNearAuth({ ok: false, origins: [] }));
+  }, [step.kind, nearAuth]);
+
+  // A wallet session lives in a cookie: if the server no longer has it, drop the local marker.
+  useEffect(() => {
+    if (session && !session.token)
+      void walletSessionGone(session.account).then((gone) => {
+        if (gone) {
+          saveSession(null);
+          location.reload();
+        }
+      });
+  }, [session]);
 
   /** After signing in: offer to bring the guest's progress along, once. */
   async function signedIn(r: { account: string; player: PlayerView }) {
@@ -48,7 +55,6 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
       const msg = (e as Error).message || String(e);
       console.error("sign-in failed:", e);
       toast(`Sign-in didn't finish: ${msg}`);
-      setPrepared(null); // a used or failed challenge can't be signed again
       setStep({ kind: "choose" });
     }
   }
@@ -63,7 +69,7 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
           type="button"
           onClick={async () => {
             saveSession(null);
-            await signOutOfNearAuth();
+            await Promise.all([signOutOfNearAuth(), signOutOfWallet()]);
             location.reload();
           }}
         >
@@ -111,12 +117,10 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
                 <h3>Sign in to own your progress</h3>
                 <p className="bz-note">Your coins, goods (NEP-245) and street cred move into your own NEAR account. The game still relays every transaction, so you never pay gas.</p>
                 <div className="bz-options">
-                  {WALLETS.map((w) => (
-                    <button key={w.id} type="button" disabled={step.kind === "busy" || !isFresh(prepared)} onClick={() => void run(w.name, () => signInWithWallet(prepared!, w.id as WalletId))}>
-                      <strong>{w.name}</strong>
-                      <small>{w.note} · signs a one-time message, no transaction</small>
-                    </button>
-                  ))}
+                  <button type="button" disabled={step.kind === "busy"} onClick={() => void run("your wallet", signInWithWallet)}>
+                    <strong>NEAR wallet</strong>
+                    <small>HOT, Meteor, Intear, MyNearWallet and more · signs a one-time message, no transaction</small>
+                  </button>
                   <button
                     type="button"
                     disabled={step.kind === "busy" || !nearAuth?.ok}
