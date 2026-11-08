@@ -75,8 +75,19 @@ async function view<T>(network: Network, contract: string, method: string, args:
 
 export const readSalt = (network: Network, verifier: string) => view<string>(network, verifier, "current_salt", {});
 
-/** Dry-run a batch: throws with the Verifier's reason if it would fail. */
-export const simulateIntents = (network: Network, verifier: string, signed: SignedIntent[]) => view<unknown>(network, verifier, "simulate_intents", { signed });
+/** Dry-run a batch: throws with the Verifier's reason if it would fail, including unbalanced diffs. */
+export async function simulateIntents(network: Network, verifier: string, signed: SignedIntent[]): Promise<unknown> {
+  const out = await view<{ invariant_violated?: unknown }>(network, verifier, "simulate_intents", { signed });
+  if (out && typeof out === "object" && out.invariant_violated) throw new Error(`intents would not balance: ${JSON.stringify(out.invariant_violated)}`);
+  return out;
+}
+
+/** An agent's whole balance of the game's goods in the Verifier, by good. */
+export async function intentsHoldings(network: Network, verifier: string, gameContract: string, identity: string, goods: string[]): Promise<Record<string, number>> {
+  const ids = goods.map((g) => tokenId(gameContract, g));
+  const bal = await view<string[]>(network, verifier, "mt_batch_balance_of", { account_id: identity, token_ids: ids });
+  return Object.fromEntries(goods.map((g, i) => [g, Number(bal[i] ?? 0)]));
+}
 
 export const intentsBalance = (network: Network, verifier: string, account: string, token: string) =>
   view<string>(network, verifier, "mt_balance_of", { account_id: account, token_id: token }).then(Number);
@@ -124,3 +135,8 @@ export function barterIntents(o: { gameContract: string; verifier: string; saltH
     });
   return [side(o.a), side(o.b)];
 }
+
+/** What the game contract has registered: the Verifier, and an agent's identity there. */
+export const readIntentsVerifier = (network: Network, gameContract: string) => view<string | null>(network, gameContract, "intents_verifier", {});
+export const readIntentsIdentity = (network: Network, gameContract: string, agentId: string) =>
+  view<string | null>(network, gameContract, "intents_of", { agent_id: agentId });
