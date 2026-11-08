@@ -154,6 +154,8 @@ Live haggles, market days and rate limits sit in a shared store: Redis when `RED
 
 The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2–5 replicas) backed by Azure Managed Redis, with the keys and the Redis URL stored as Container App secrets. To check the store against a real Redis, run `docker run -d -p 6390:6379 redis:7-alpine`, then `TEST_REDIS_URL=redis://localhost:6390 pnpm --filter @bazaar/server test`. The agents act only in the deployment that sets `MARKET_TICK_MS` (the hosted demo uses `40000`), so a local `pnpm dev` against the same contract reads the market without running the agents twice. To ship a new version, run `scripts/deploy-azure.sh`. It builds the image in Azure Container Registry, rolls the app and prints the URL.
 
+**Is the agent economy healthy?** Open `/api/health/economy` on the hosted demo. You should see a `level` (`ok`, `warn` or `alert`) and a list of checks, refreshed every 10 minutes. The watchdog behind it reads each agent account's NEAR (agents pay their own gas) and its key's remaining gas allowance, along with the server's NEAR and recent street activity. It tops up any agent below 0.15 NEAR from a funder account (`FUNDER_ACCOUNT_ID`; the transfers are listed under `toppedUp`). It flags keys that need `rekey:agents`, merchants that have been broke for hours, and a street with no trades for an hour.
+
 ## Try the pieces
 
 1. Run `pnpm install`, then `pnpm test`. You should see 144 tests pass across four packages (core 66, merchant 41, verify 26, server 11), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
