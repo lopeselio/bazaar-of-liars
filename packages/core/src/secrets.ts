@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomHex, sha256Hex } from "./hash.js";
 import type { Good, Merchant, MerchantSecret, Need, PlayerMemory, Side } from "./types.js";
 import { pickWeighted, type Rng } from "./rng.js";
 
@@ -37,7 +37,7 @@ export function rollSecret(rng: Rng, merchant: Merchant, good: Good, side: Side 
 }
 
 export function newSalt(): string {
-  return randomBytes(16).toString("hex");
+  return randomHex(16);
 }
 
 /**
@@ -50,7 +50,7 @@ export function commitmentPreimage(s: MerchantSecret, saltHex: string): string {
 
 /** sha256(preimage) as lowercase hex — posted onchain before the player's first message. */
 export function commit(s: MerchantSecret, saltHex: string): string {
-  return createHash("sha256").update(commitmentPreimage(s, saltHex), "utf8").digest("hex");
+  return sha256Hex(commitmentPreimage(s, saltHex));
 }
 
 export function verifyCommitment(commitment: string, s: MerchantSecret, saltHex: string): boolean {
