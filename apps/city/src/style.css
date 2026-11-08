@@ -1673,7 +1673,8 @@ button:disabled {
   font: 12px var(--bz-font);
   cursor: pointer;
 }
-#bz-link {
+#bz-link,
+.bz-sheet {
   position: fixed;
   inset: 0;
   z-index: 80;
@@ -1690,3 +1691,29 @@ button:disabled {
 .bz-cert summary { cursor: pointer; opacity: 0.85; }
 .bz-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; word-break: break-all; opacity: 0.85; margin: 6px 0; }
 button.bz-link { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
+
+.bz-account {
+  display: contents;
+}
+.bz-options {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.bz-options button {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+}
+.bz-options button small {
+  opacity: 0.75;
+  font-size: 12px;
+}
+.bz-options button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.bz-close {
+  margin-top: 4px;
+}
