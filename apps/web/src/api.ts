@@ -351,6 +351,9 @@ export const api = {
   authConfig: () => call<{ domain: string; clientId: string; origins: string[] }>("/api/auth/config"),
   startSession: (idToken: string) => call<Session & { player: PlayerView }>("/api/auth/session", { idToken }),
   linkGuest: (guest: string) => call<{ ok: true; player: PlayerView }>("/api/auth/link", { guest }),
+  walletChallenge: () => call<{ nonce: string; message: string; recipient: string; network: string }>("/api/auth/wallet/challenge", {}),
+  walletSession: (p: { accountId: string; publicKey: string; signature: string; nonce: string; callbackUrl: string }) =>
+    call<{ account: string; token: string; exp: number; player: PlayerView }>("/api/auth/wallet/session", p),
   merchants: () => call<{ merchants: MerchantInfo[]; model: string; onchain: { network: string; contractId: string } | null }>("/api/merchants"),
   player: (id: string) => call<PlayerView>(`/api/player?id=${encodeURIComponent(id)}`),
   open: (merchantId: string, player: string, side: Side) => call<Opened>("/api/haggle", { merchantId, player, side }),
