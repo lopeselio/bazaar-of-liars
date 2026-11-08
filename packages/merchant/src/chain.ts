@@ -18,6 +18,10 @@ import { type DeedCertificate, type Network } from "@bazaar/verify";
 export type { Network };
 
 import { RPC, rpc } from "./reader.js";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { signIntents, type Intent, type SignedIntent } from "./intents.js";
 export * from "./reader.js";
 export const explorerTx = (network: Network, hash: string) =>
   `https://${network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${hash}`;
@@ -175,6 +179,8 @@ export interface AgentSigner {
   payAgent(to: string, amount: number, memo: string): Promise<string>;
   /** Customers only: post a delivery order and lock its bounty. */
   postOrder(a: { orderId: string; goodId: string; bounty: number; deadlineMs: number; site: string; express: boolean }): Promise<string>;
+  /** Sign NEAR Intents with this agent's own key (its identity there is that key's implicit account). */
+  signIntents(o: { verifier: string; saltHex: string; intents: Intent[] }): Promise<SignedIntent>;
 }
 
 export function agentSigner(cfg: { network: Network; contractId: string; account: string; privateKey?: string }): AgentSigner {
@@ -193,8 +199,12 @@ export function agentSigner(cfg: { network: Network; contractId: string; account
       .send({ waitUntil: "EXECUTED_OPTIMISTIC" });
     return r.transaction.hash as string;
   };
+  // The key itself: from AGENT_KEYS when hosted, else the local keychain file for this account.
+  const privateKey = () =>
+    cfg.privateKey ?? (JSON.parse(readFileSync(join(homedir(), ".near-credentials", cfg.network, `${cfg.account}.json`), "utf8")) as { private_key: string }).private_key;
   return {
     account: cfg.account,
+    signIntents: async (o) => signIntents({ ...o, privateKey: privateKey() }),
     authorizeSpend: (haggleId, max) => call("authorize_spend", { haggle_id: haggleId, max }),
     payAgent: (to, amount, memo) => call("pay_agent", { to, amount, memo }),
     postOrder: (a) =>

@@ -94,6 +94,19 @@ export interface BarterSide {
  * withdraws what it got back to its account in the game. Their diffs cancel, so the Verifier settles
  * them together or not at all.
  */
+/** One side's intents: give `give`, receive `get`, and withdraw what it got back to the game. */
+export function barterSide(gameContract: string, give: { good: string; qty: number }, get: { good: string; qty: number }, receiver: string, memo?: string): Intent[] {
+  return [
+    { intent: "token_diff", diff: { [tokenId(gameContract, give.good)]: String(-give.qty), [tokenId(gameContract, get.good)]: String(get.qty) }, ...(memo ? { memo } : {}) },
+    { intent: "mt_withdraw", token: gameContract, receiver_id: receiver, token_ids: [get.good], amounts: [String(get.qty)] },
+  ];
+}
+
+/** Take a deposit back out (when a barter didn't settle). */
+export const withdrawBack = (gameContract: string, good: string, qty: number, receiver: string): Intent[] => [
+  { intent: "mt_withdraw", token: gameContract, receiver_id: receiver, token_ids: [good], amounts: [String(qty)] },
+];
+
 export function barterIntents(o: { gameContract: string; verifier: string; saltHex: string; a: BarterSide; b: BarterSide; memo?: string }): SignedIntent[] {
   const side = (s: BarterSide) =>
     signIntents({
