@@ -10,25 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   </head>
   <body class="vpage">
-    <main class="vwrap">
-      <a class="vback" href="/">← Back to the bazaar</a>
-      <h1>Check a haggle yourself</h1>
-      <p class="sub">
-        Drop a proof you downloaded after a haggle, or load our sample. This page runs the same open-source verifier as
-        <code>pnpm verify:haggle</code>, here in your browser. It reads NEAR's public RPC directly and never sends the proof to our server.
-      </p>
-      <label class="vdrop" id="drop">
-        <input type="file" id="file" accept="application/json,.json" hidden />
-        <strong>Drop a proof file here</strong>
-        <span>or click to choose one</span>
-      </label>
-      <button class="btn" id="sample" type="button">Check the sample proof</button>
-      <section id="out" hidden>
-        <div class="badge" id="badge" role="status"></div>
-        <p class="sub" id="summary"></p>
-        <ul class="checks" id="list"></ul>
-      </section>
-    </main>
-    <script type="module" src="/src/verify-page.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/proof/verify-main.tsx"></script>
   </body>
 </html>
