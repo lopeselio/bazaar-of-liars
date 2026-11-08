@@ -10,7 +10,7 @@
  * SERVER_PRIVATE_KEY for a hosted deploy; agent keys likewise, or from AGENT_KEYS (a JSON map of
  * account → private key). Keys are never logged or written to a bundle.
  */
-import { Near } from "near-kit";
+import { Near, parseKey } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
 import type { MerchantSecret, StreetEvent, TipClaim } from "@bazaar/core";
 import { type DeedCertificate, type Network } from "@bazaar/verify";
@@ -21,7 +21,7 @@ import { RPC, rpc } from "./reader.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { signIntents, type Intent, type SignedIntent } from "./intents.js";
+import { implicitOf, signIntents, type Intent, type SignedIntent } from "./intents.js";
 export * from "./reader.js";
 export const explorerTx = (network: Network, hash: string) =>
   `https://${network === "testnet" ? "testnet." : ""}nearblocks.io/txns/${hash}`;
@@ -181,6 +181,8 @@ export interface AgentSigner {
   postOrder(a: { orderId: string; goodId: string; bounty: number; deadlineMs: number; site: string; express: boolean }): Promise<string>;
   /** Sign NEAR Intents with this agent's own key (its identity there is that key's implicit account). */
   signIntents(o: { verifier: string; saltHex: string; intents: Intent[] }): Promise<SignedIntent>;
+  /** The agent's identity in the Intents Verifier (implicit account of its key), or null if its key isn't available here. */
+  intentsIdentity(): string | null;
 }
 
 export function agentSigner(cfg: { network: Network; contractId: string; account: string; privateKey?: string }): AgentSigner {
@@ -202,9 +204,17 @@ export function agentSigner(cfg: { network: Network; contractId: string; account
   // The key itself: from AGENT_KEYS when hosted, else the local keychain file for this account.
   const privateKey = () =>
     cfg.privateKey ?? (JSON.parse(readFileSync(join(homedir(), ".near-credentials", cfg.network, `${cfg.account}.json`), "utf8")) as { private_key: string }).private_key;
+  const identity = (() => {
+    try {
+      return implicitOf(parseKey(privateKey()).publicKey.toString());
+    } catch {
+      return null; // no key for this agent here (e.g. missing from AGENT_KEYS)
+    }
+  })();
   return {
     account: cfg.account,
     signIntents: async (o) => signIntents({ ...o, privateKey: privateKey() }),
+    intentsIdentity: () => identity,
     authorizeSpend: (haggleId, max) => call("authorize_spend", { haggle_id: haggleId, max }),
     payAgent: (to, amount, memo) => call("pay_agent", { to, amount, memo }),
     postOrder: (a) =>
