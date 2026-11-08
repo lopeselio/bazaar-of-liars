@@ -561,3 +561,35 @@ export async function readDeedCertificate(network: Network, contractId: string, 
   const near = new Near({ network, rpcUrl: RPC[network] });
   return (await near.view<DeedCertificate | null>(contractId, "deed_certificate", { slot }, { finality: "optimistic" })) ?? null;
 }
+
+// ---------- gas and funding (the economy watchdog) ----------
+
+const YOCTO = 1e24;
+
+/** NEAR an account holds and, for a function-call key, what's left of its gas allowance. */
+export async function readAccountGas(network: Network, account: string): Promise<{ balance: number; allowance: number | null }> {
+  const acct = await rpc<{ amount: string }>(network, "query", { request_type: "view_account", finality: "final", account_id: account });
+  const keys = await rpc<{ keys: { access_key: { permission: "FullAccess" | { FunctionCall: { allowance: string | null } } } }[] }>(network, "query", {
+    request_type: "view_access_key_list",
+    finality: "final",
+    account_id: account,
+  });
+  // An agent has exactly one key; take the smallest allowance among function-call keys.
+  const allowances = keys.keys
+    .map((k) => k.access_key.permission)
+    .filter((p): p is { FunctionCall: { allowance: string | null } } => typeof p === "object" && p.FunctionCall?.allowance != null)
+    .map((p) => Number(p.FunctionCall.allowance) / YOCTO);
+  return { balance: Number(acct.amount) / YOCTO, allowance: allowances.length ? Math.min(...allowances) : null };
+}
+
+/** Send NEAR from an account whose key we hold (the watchdog's funder). Returns the tx hash. */
+export async function sendNear(cfg: { network: Network; from: string; privateKey?: string }, to: string, amountNear: number): Promise<string> {
+  const near = new Near({
+    network: cfg.network,
+    rpcUrl: RPC[cfg.network],
+    defaultSignerId: cfg.from,
+    ...(cfg.privateKey ? { privateKey: cfg.privateKey as `ed25519:${string}` } : { keyStore: new FileKeyStore("~/.near-credentials", cfg.network) }),
+  });
+  const r = await near.transaction(cfg.from).transfer(to, `${amountNear} NEAR`).send({ waitUntil: "FINAL" });
+  return r.transaction.hash as string;
+}
