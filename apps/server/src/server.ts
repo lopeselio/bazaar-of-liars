@@ -42,6 +42,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
+import { lastReport, runWatchdog } from "./watchdog.js";
 import { haggleHint, AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
@@ -136,6 +137,35 @@ if (market && HARBOUR_TICK_MS > 0)
       await store.unlock("harbour-tick", token);
     }
   }, HARBOUR_TICK_MS).unref();
+
+// Economy watchdog: on wherever the agents act; WATCHDOG_MS overrides (0 turns it off). It tops up
+// agents' gas money from FUNDER_ACCOUNT_ID (key FUNDER_PRIVATE_KEY, or the local keychain).
+const WATCHDOG_MS = Number(process.env.WATCHDOG_MS ?? (MARKET_TICK_MS > 0 ? 600_000 : 0));
+const watchdogDeps = market && ledger
+  ? {
+      store,
+      network: ledger.network,
+      serverId: process.env.SERVER_ACCOUNT_ID!,
+      funder: process.env.FUNDER_ACCOUNT_ID ? { account: process.env.FUNDER_ACCOUNT_ID, privateKey: process.env.FUNDER_PRIVATE_KEY || undefined } : null,
+      agents: () => market.agents(0),
+      news: () => market.news(25),
+    }
+  : null;
+if (watchdogDeps && WATCHDOG_MS > 0) {
+  const watch = async () => {
+    const token = await store.lock("watchdog", 5 * 60_000).catch(() => null);
+    if (!token) return;
+    try {
+      await runWatchdog(watchdogDeps);
+    } catch (e) {
+      console.error("watchdog:", (e as Error).message);
+    } finally {
+      await store.unlock("watchdog", token);
+    }
+  };
+  setTimeout(watch, 30_000).unref();
+  setInterval(watch, WATCHDOG_MS).unref();
+}
 
 const restore = (rec: LiveRecord) => HaggleSession.restore(rec.snap, llm, attestor, ledger ?? undefined);
 
@@ -1145,6 +1175,10 @@ createServer(async (req, res) => {
     if (req.method === "GET" && url === "/api/market") {
       if (!market) return send(res, 200, { agents: [], news: [], onchain: false });
       return send(res, 200, { agents: await market.agents(), news: await market.news(25), onchain: true, contractId: ledger!.contractId });
+    }
+    if (req.method === "GET" && url === "/api/health/economy") {
+      const r = await lastReport(store);
+      return send(res, 200, r ?? { level: "unknown", checks: [], note: watchdogDeps ? "first check runs 30 s after start" : "the watchdog runs only where the agents act" });
     }
     if (req.method === "POST" && url === "/api/invest") return send(res, 200, await invest(body));
     if (req.method === "GET" && url.startsWith("/api/orders"))
