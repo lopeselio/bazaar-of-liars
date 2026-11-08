@@ -47,9 +47,11 @@ export interface WatchdogReport {
   brokeSince: Record<string, number>;
 }
 
-/** Top an agent account up when it falls below this, back to TOP_UP_TO. */
-export const LOW_BALANCE = 0.15;
-export const TOP_UP_TO = 0.5;
+/** Top an agent account up when it falls below this, back to TOP_UP_TO. Most agents were funded
+ * with 0.12 NEAR and burn ~0.001 a day; the busy customers burn ~0.04, so this is a few days' notice
+ * for them and never fires for a quiet agent. */
+export const LOW_BALANCE = 0.05;
+export const TOP_UP_TO = 0.3;
 /** Below this much allowance (about 10 calls) an agent needs `rekey:agents`, which needs the owner
  * key, so the watchdog can only warn. Merchants began at 0.1 and burn ~0.001 a day, so it's well
  * below their starting allowance. */

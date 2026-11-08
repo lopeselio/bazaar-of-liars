@@ -33,11 +33,11 @@ describe("economy watchdog loop", () => {
   });
 
   it("tops up an agent low on gas from the funder and keeps the report", async () => {
-    gas["vesey-2.v3.x.testnet"] = { balance: 0.05, allowance: 0.9 };
+    gas["vesey-2.v3.x.testnet"] = { balance: 0.02, allowance: 0.9 };
     gas["farrukh.v3.x.testnet"] = { balance: 0.3, allowance: 0.09 };
     const d = deps();
     const r = await runWatchdog(d);
-    expect(sent).toEqual([{ to: "vesey-2.v3.x.testnet", amount: 0.45 }]);
+    expect(sent).toEqual([{ to: "vesey-2.v3.x.testnet", amount: 0.28 }]);
     const stored = await lastReport(d.store);
     expect(stored?.toppedUp?.[0]).toMatchObject({ account: "vesey-2.v3.x.testnet", tx: "tx123" });
     // Farrukh is broke, but only just: remembered, not yet a warning.
