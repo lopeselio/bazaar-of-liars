@@ -10,14 +10,11 @@
  * Then the player is that account. Nothing here can sign for the user.
  */
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
-import { base58Decode } from "./auth.js";
+
+import { NAMED_RE, base58Decode } from "./auth.js";
 
 export const SIGN_IN_MESSAGE = "Sign in to Bazaar of Liars";
-export const SIGN_IN_RECIPIENT = "bazaar-of-liars";
 const NEP413_TAG = 2 ** 31 + 413;
-
-/** Named testnet/mainnet accounts (implicit 64-hex accounts are matched elsewhere). */
-export const NAMED_ACCOUNT_RE = /^(?=.{2,64}$)([a-z0-9]+[-_])*[a-z0-9]+(\.([a-z0-9]+[-_])*[a-z0-9]+)*\.(testnet|near)$/;
 
 export const newNonce = () => randomBytes(32);
 
@@ -39,14 +36,18 @@ export function nep413Hash(p: { message: string; nonce: Buffer; recipient: strin
 
 /** Check an ed25519 signature ("ed25519:<b58>" key; signature base64 or "ed25519:<b58>"). */
 export function verifyEd25519(publicKey: string, message: Buffer, signature: string): boolean {
-  const [type, b58] = publicKey.split(":");
-  if (type !== "ed25519" || !b58) return false;
-  const raw = base58Decode(b58);
-  if (raw.length !== 32) return false;
-  const sig = signature.startsWith("ed25519:") ? base58Decode(signature.slice(8)) : Buffer.from(signature, "base64");
-  if (sig.length !== 64) return false;
-  const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: raw.toString("base64url") }, format: "jwk" });
-  return verify(null, message, key, sig);
+  try {
+    const [type, b58] = publicKey.split(":");
+    if (type !== "ed25519" || !b58) return false;
+    const raw = base58Decode(b58);
+    if (raw.length !== 32) return false;
+    const sig = signature.startsWith("ed25519:") ? base58Decode(signature.slice(8)) : Buffer.from(signature, "base64");
+    if (sig.length !== 64) return false;
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: raw.toString("base64url") }, format: "jwk" });
+    return verify(null, message, key, sig);
+  } catch {
+    return false; // malformed key or signature: not a valid signature
+  }
 }
 
 export type KeyReader = (accountId: string, publicKey: string) => Promise<"full" | "function-call" | "none">;
@@ -60,11 +61,23 @@ export function rpcKeyReader(rpcUrl: string): KeyReader {
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "view_access_key", finality: "final", account_id: accountId, public_key: publicKey } }),
     });
     // A missing key comes back as { result: { error: "access key … does not exist" } }, not as an RPC error.
-    const j = (await res.json()) as { result?: { permission?: "FullAccess" | object; error?: string }; error?: unknown };
+    if (!res.ok) throw new WalletRpcError(`RPC answered ${res.status}`);
+    const j = (await res.json().catch(() => {
+      throw new WalletRpcError("RPC returned something that isn't JSON");
+    })) as { result?: { permission?: "FullAccess" | object; error?: string }; error?: unknown };
     const perm = j.result?.permission;
     if (!perm) return "none";
     return perm === "FullAccess" ? "full" : "function-call";
   };
+}
+
+/**
+ * A sign-in is for one site: the challenge records the host it was asked from, the wallet signs
+ * with that host as the NEP-413 recipient (and shows it), and the wallet must return the signature
+ * to a page on that same host. A signature collected by another site can't be replayed here.
+ */
+export interface Challenge {
+  recipient: string;
 }
 
 export interface WalletProof {
@@ -77,22 +90,39 @@ export interface WalletProof {
 }
 
 export class WalletAuthError extends Error {}
+/** The chain couldn't be asked (rate limit, outage): try again, not "denied". */
+export class WalletRpcError extends Error {}
 
 /**
  * Check a signed sign-in message. `consumeNonce` must return true exactly once for a nonce we
  * issued and haven't seen used (the server keeps them in the store with a short TTL).
  */
-export async function verifyWalletSignIn(p: WalletProof, consumeNonce: (nonceB64: string) => Promise<boolean>, keys: KeyReader): Promise<string> {
+export async function verifyWalletSignIn(
+  p: WalletProof,
+  challenge: (nonceB64: string) => Promise<Challenge | null>,
+  consumeNonce: (nonceB64: string) => Promise<boolean>,
+  keys: KeyReader,
+): Promise<string> {
   const isImplicit = /^[0-9a-f]{64}$/.test(p.accountId);
-  if (!isImplicit && !NAMED_ACCOUNT_RE.test(p.accountId)) throw new WalletAuthError("that isn't a NEAR account id");
+  if (!isImplicit && !NAMED_RE.test(p.accountId)) throw new WalletAuthError("that isn't a NEAR account id");
   const nonce = Buffer.from(p.nonce ?? "", "base64");
   if (nonce.length !== 32) throw new WalletAuthError("bad nonce");
-  if (!(await consumeNonce(p.nonce))) throw new WalletAuthError("this sign-in request expired or was already used; try again");
+  const ch = await challenge(p.nonce);
+  if (!ch) throw new WalletAuthError("this sign-in request expired; try again");
+  let back: URL;
+  try {
+    back = new URL(p.callbackUrl ?? "");
+  } catch {
+    throw new WalletAuthError("the wallet must return to this site");
+  }
+  if (back.host !== ch.recipient) throw new WalletAuthError("the wallet must return to this site");
   // Wallets differ on whether the callback URL is part of the signed payload; both forms bind the
   // same nonce, message and recipient, so accept either.
-  const forms = [p.callbackUrl ?? null, ...(p.callbackUrl ? [null] : [])];
-  const ok = forms.some((callbackUrl) => verifyEd25519(p.publicKey, nep413Hash({ message: SIGN_IN_MESSAGE, nonce, recipient: SIGN_IN_RECIPIENT, callbackUrl }), p.signature));
+  const forms = [p.callbackUrl ?? null, null];
+  const ok = forms.some((callbackUrl) => verifyEd25519(p.publicKey, nep413Hash({ message: SIGN_IN_MESSAGE, nonce, recipient: ch.recipient, callbackUrl }), p.signature));
   if (!ok) throw new WalletAuthError("the signature doesn't match");
+  // Only a valid signature uses the nonce up, so a bad attempt can't burn someone's sign-in.
+  if (!(await consumeNonce(p.nonce))) throw new WalletAuthError("this sign-in request was already used; try again");
   const perm = await keys(p.accountId, p.publicKey);
   if (perm !== "full") throw new WalletAuthError(perm === "none" ? "that key isn't on the account" : "sign in with a full-access key");
   return p.accountId;
