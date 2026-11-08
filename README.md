@@ -70,7 +70,7 @@ flowchart TB
 | NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
 | NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods as NEP-245 multi tokens, merchant memory, top traders, and the agents' purses, stock and spending caps |
 | Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab` (`.v3.bazaar-liars.testnet`) | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
-| Verifier | `pnpm verify:haggle`, anyone, no API key | Replays the bundle and checks it against the chain |
+| Verifier | `pnpm verify:haggle` or `/verify.html` in a browser, anyone, no API key | Replays the bundle and checks it against the chain |
 
 Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
 
@@ -117,8 +117,9 @@ To run it yourself you need Node 22 or later, pnpm, and a NEAR AI Cloud key in `
 3. When he claims a limit ("not below 28"), a **Call the bluff** button appears. Press it. If he was lying, you see *Caught!* and the price drops toward his real floor. If he was telling the truth, he's offended and names a higher final price.
 4. Click **Take it**. The reveal card flips to show his real floor and need, how much you left on the table, **every claim he made and whether it was true**, and what each of his tells meant ("firm · 16 from the limit"), with a **✓ Fair play verified** badge.
 5. Click the badge. The evidence drawer lists the TEE attestation checks, the commitment and reveal transactions on testnet, and every replay check. **Download proof** saves the bundle, which you can check with `pnpm verify:haggle <file>`.
-6. Back in the bazaar, click **Old Farrukh**, then **Sell your Brass Lamp**. Now he's buying: he opens low, and his secret is the most he'll pay.
-7. The top bar counts down six haggles to sundown, then shows your day's profit and the **Top traders** board. The server keeps the day, so reloading the page doesn't reset it, and no new haggle opens until you press **Next day**. Your coins, goods and each merchant's memory of you are read from the contract, so they persist between visits.
+6. **Check it without trusting our server.** In the same drawer, click **Check it in your browser**. The open-source verifier, the same code as `pnpm verify:haggle`, runs on your machine and reads NEAR's public RPC itself. You should see "✓ All 50 checks passed" (the count depends on the number of turns) within a few seconds. You can also open **`/verify.html`** on the hosted demo and click **Check the sample proof**, or drop in any proof file you downloaded.
+7. Back in the bazaar, click **Old Farrukh**, then **Sell your Brass Lamp**. Now he's buying: he opens low, and his secret is the most he'll pay.
+8. The top bar counts down six haggles to sundown, then shows your day's profit and the **Top traders** board. The server keeps the day, so reloading the page doesn't reset it, and no new haggle opens until you press **Next day**. Your coins, goods and each merchant's memory of you are read from the contract, so they persist between visits.
 
 For a production build, run `pnpm build && pnpm start`. The server serves the game on port 8787.
 
