@@ -42,7 +42,10 @@ const TX_TIMEOUT_MS = 50_000;
 const norm = (u: string) => u.trim().replace(/\/+$/, "");
 
 /** The endpoints for a network: yours first (NEAR_RPC_URL, for NEAR_NETWORK), then the public ones. */
-export function rpcUrls(network: Network, env: { NEAR_RPC_URL?: string; NEAR_NETWORK?: string } = process.env): string[] {
+// Node has process.env; a browser doesn't (there it's just the public endpoints).
+const defaultEnv = (): { NEAR_RPC_URL?: string; NEAR_NETWORK?: string } => (typeof process !== "undefined" && process.env ? (process.env as Record<string, string | undefined>) : {});
+
+export function rpcUrls(network: Network, env: { NEAR_RPC_URL?: string; NEAR_NETWORK?: string } = defaultEnv()): string[] {
   const forThis = (env.NEAR_NETWORK ?? "testnet") === network;
   const own = forThis ? (env.NEAR_RPC_URL ?? "").split(",").map(norm).filter(Boolean) : [];
   return [...new Set([...own, ...PUBLIC[network]])];
