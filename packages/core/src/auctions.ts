@@ -12,7 +12,7 @@
  *
  * Constants MUST match contracts/bazaar.
  */
-import { createHash } from "node:crypto";
+import { sha256Hex } from "./hash.js";
 import type { Rng } from "./rng.js";
 
 export const SHIP_GAP_MS = 8 * 60_000;
@@ -25,7 +25,7 @@ export const PIER_REACH = 60;
 
 /** sha256("bazaar-bid|auction|bidder|amount|salt"). Byte-identical to the contract. */
 export function bidCommitment(auctionId: string, bidder: string, amount: number, salt: string): string {
-  return createHash("sha256").update(`bazaar-bid|${auctionId}|${bidder}|${amount}|${salt}`).digest("hex");
+  return sha256Hex(`bazaar-bid|${auctionId}|${bidder}|${amount}|${salt}`);
 }
 
 /**

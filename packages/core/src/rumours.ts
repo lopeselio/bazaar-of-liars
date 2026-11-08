@@ -12,7 +12,7 @@
  *
  * Constants MUST match contracts/bazaar.
  */
-import { createHash } from "node:crypto";
+import { sha256Hex } from "./hash.js";
 import type { Rng } from "./rng.js";
 
 export const TIP_MIN_WAIT_MS = 60_000;
@@ -53,9 +53,7 @@ export interface TipClaim {
 
 /** sha256("bazaar-tip|tip|informant|agent|good|le-or-ge|n|check_ms|salt"). Byte-identical to the contract. */
 export function tipCommitment(tipId: string, informant: string, c: TipClaim, checkMs: number, salt: string): string {
-  return createHash("sha256")
-    .update(`bazaar-tip|${tipId}|${informant}|${c.agent_id}|${c.good_id}|${c.at_most ? "le" : "ge"}|${c.n}|${checkMs}|${salt}`)
-    .digest("hex");
+  return sha256Hex(`bazaar-tip|${tipId}|${informant}|${c.agent_id}|${c.good_id}|${c.at_most ? "le" : "ge"}|${c.n}|${checkMs}|${salt}`);
 }
 
 /** Is the claim true for this stock? (What the contract checks.) */

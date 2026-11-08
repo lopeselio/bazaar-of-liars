@@ -16,3 +16,4 @@ export * from "./routes.js";
 export * from "./events.js";
 export * from "./hints.js";
 export * from "./watchdog.js";
+export * from "./hash.js";
