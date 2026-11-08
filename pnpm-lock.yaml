@@ -57,6 +57,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@bazaar/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@bazaar/merchant':
+        specifier: workspace:*
+        version: link:../../packages/merchant
       three:
         specifier: 0.186.1
         version: 0.186.1

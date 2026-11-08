@@ -1,5 +1,6 @@
 import "./style.css";
 import { Bazaar, type StallLook } from "./scene";
+import { checkBundleHere } from "./selfcheck";
 import { api, type Check, type Day, type Ending, type MerchantInfo, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "./api";
 
 // ---------- looks (original designs, one per merchant) ----------
@@ -494,12 +495,27 @@ function openVerify() {
     </section>
     <section>
       <h3>Don't trust us. Check it yourself.</h3>
-      <p class="sub">Download the proof and verify it with the open-source verifier. No API key needed.</p>
-      ${e ? `<button class="btn" id="v-download" type="button">Download proof</button>` : ""}
+      <p class="sub">The checks above were run by our server. Run them again here, in your browser, with the open-source verifier: it reads NEAR directly and never asks our server. Or download the proof and check it from a terminal, or on <a href="/verify.html" target="_blank" rel="noopener">the proof checker page</a>.</p>
+      ${e ? `<div class="row"><button class="btn" id="v-selfcheck" type="button">Check it in your browser</button> <button class="btn ghost" id="v-download" type="button">Download proof</button></div><div id="v-selfout"></div>` : ""}
       <pre class="cmd">git clone https://github.com/lopeselio/bazaar-of-liars
 pnpm install && pnpm verify:haggle bazaar-proof.json</pre>
     </section>`;
   $("v-download")?.addEventListener("click", downloadProof);
+  $("v-selfcheck")?.addEventListener("click", async () => {
+    const btn = $<HTMLButtonElement>("v-selfcheck");
+    const out = $("v-selfout");
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    try {
+      const r = await checkBundleHere(current!.ending!.bundle);
+      out.innerHTML = `<p class="sub"><strong>${r.failed ? `✗ ${r.failed} of ${r.checks.length} checks failed` : `✓ All ${r.checks.length} checks passed`}</strong> in this browser, in ${(r.ms / 1000).toFixed(1)} s.</p>${checkList(r.checks as Check[])}`;
+      btn.textContent = "Checked here";
+    } catch (err) {
+      out.innerHTML = `<p class="sub">Couldn't run the check here: ${esc((err as Error).message)}</p>`;
+      btn.disabled = false;
+      btn.textContent = "Check it in your browser";
+    }
+  });
   $("verify").hidden = false;
   $<HTMLButtonElement>("v-close").focus();
 }

@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@bazaar/core": "workspace:*",
+    "@bazaar/merchant": "workspace:*",
     "three": "0.186.1"
   },
   "devDependencies": {
