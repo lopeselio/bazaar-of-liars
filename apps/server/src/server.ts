@@ -1191,7 +1191,9 @@ createServer(async (req, res) => {
       return send(res, 200, await listOrders(new URL(url, "http://x").searchParams.get("player") ?? ""));
     if (req.method === "GET" && url.startsWith("/api/stalls")) {
       const q = new URL(url, "http://x").searchParams;
-      return send(res, 200, await stallsView(q.get("player") ?? "", q.get("visit") === "1"));
+      // Only the player themselves (or a guest) may mark the "while you were away" summary as seen.
+      const who = q.get("player") ?? "";
+      return send(res, 200, await stallsView(who, q.get("visit") === "1" && (!isAccountPlayer(who) || authed === who)));
     }
     if (req.method === "POST" && url === "/api/dockwork") return send(res, 200, await dockWork(body));
     if (req.method === "GET" && url.startsWith("/api/event")) return send(res, 200, await eventView(new URL(url, "http://x").searchParams.get("player") ?? ""));
