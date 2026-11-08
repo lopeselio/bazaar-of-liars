@@ -164,9 +164,11 @@ export function issueSession(account: string, cfg: Pick<AuthConfig, "sessionSecr
 
 /** The account a session token is for, or null if it's forged or expired. */
 export function sessionAccount(token: string | undefined, cfg: Pick<AuthConfig, "sessionSecret">, now = Date.now()): string | null {
-  const [enc, exp, sig] = (token ?? "").split(".");
-  const account = enc ? Buffer.from(enc, "base64url").toString("utf8") : "";
-  if (!account || !exp || !sig || !isAccountPlayer(account) || Number(exp) < now) return null;
+  const parts = (token ?? "").split(".");
+  if (parts.length !== 3) return null;
+  const [enc, exp, sig] = parts as [string, string, string];
+  const account = Buffer.from(enc, "base64url").toString("utf8");
+  if (!/^\d{1,16}$/.test(exp) || !isAccountPlayer(account) || Number(exp) < now) return null;
   const want = createHmac("sha256", cfg.sessionSecret).update(`${account}.${exp}`).digest();
   const got = Buffer.from(sig, "base64url");
   return got.length === want.length && timingSafeEqual(got, want) ? account : null;
