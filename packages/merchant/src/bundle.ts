@@ -28,7 +28,7 @@ import {
   type ModelVerification,
 } from "@bazaar/verify";
 import type { SignedCall } from "./nearai.js";
-import { nearReader, type ChainReader, type ChainRecord } from "./chain.js";
+import { nearReader, type ChainReader, type ChainRecord } from "./reader.js";
 import { decisionLine, haggleLine, needLine, parseMove, present, quickMove, toPlayerMove, type Move } from "./prompts.js";
 
 export interface TurnRecord {
