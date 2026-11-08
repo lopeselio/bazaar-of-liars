@@ -208,14 +208,26 @@ export function agentSigner(cfg: { network: Network; contractId: string; account
   };
 }
 
+/**
+ * Agents moved to a fresh account by `rekey_agent` (their old key ran out of gas allowance):
+ * AGENT_ACCOUNTS is a JSON map of agent id → account. Others use `<id>.<contract>`.
+ */
+export function agentAccounts(env = process.env): Record<string, string> {
+  if (!env.AGENT_ACCOUNTS) return {};
+  const m = JSON.parse(env.AGENT_ACCOUNTS) as Record<string, string>;
+  for (const [id, acct] of Object.entries(m)) if (!acct.endsWith(`.${env.BAZAAR_CONTRACT_ID}`)) throw new Error(`AGENT_ACCOUNTS: ${id} → ${acct} is not a sub-account of the contract`);
+  return m;
+}
+
 /** Signers for every agent account, keys from AGENT_KEYS or the local keychain. */
 export function agentSignersFromEnv(agentIds: string[], env = process.env): Record<string, AgentSigner> | null {
   if (!env.BAZAAR_CONTRACT_ID?.startsWith("v3.")) return null;
   const keys: Record<string, string> = env.AGENT_KEYS ? JSON.parse(env.AGENT_KEYS) : {};
+  const accounts = agentAccounts(env);
   const network = (env.NEAR_NETWORK as Network) ?? "testnet";
   return Object.fromEntries(
     agentIds.map((id) => {
-      const account = `${id}.${env.BAZAAR_CONTRACT_ID}`;
+      const account = accounts[id] ?? `${id}.${env.BAZAAR_CONTRACT_ID}`;
       return [id, agentSigner({ network, contractId: env.BAZAAR_CONTRACT_ID!, account, privateKey: keys[account] })];
     }),
   );
