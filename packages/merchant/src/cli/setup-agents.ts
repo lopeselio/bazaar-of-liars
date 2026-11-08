@@ -12,7 +12,8 @@
  * 4. Register the agent with the contract: kind, daily spending cap, opening purse and stock.
  *
  * Signs as the contract account (the parent and owner) from the local legacy keychain.
- * Idempotent: agents whose account already exists are skipped at steps 1–3.
+ * Idempotent: agents whose account already exists are skipped at steps 1–3, and agents already
+ * registered (including ones moved by `rekey:agents`) keep the account the contract has for them.
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -20,6 +21,7 @@ import { join } from "node:path";
 import { Near, generateKey } from "near-kit";
 import { FileKeyStore } from "near-kit/keys/file";
 import { AGENTS, CUSTOMERS, DAILY_CAP, GOODS, type AgentDef } from "@bazaar/core";
+import { readAgentAccounts } from "../chain.js";
 
 const network = (process.env.NEAR_NETWORK ?? "testnet") as "testnet";
 const contract = process.env.BAZAAR_CONTRACT_ID;
@@ -72,9 +74,11 @@ async function createAgentAccount(a: AgentDef) {
   return account;
 }
 
+// Agents moved by rekey:agents keep their new account; re-registering only updates name and cap.
+const current = await readAgentAccounts(network, contract).catch(() => ({}) as Record<string, string>);
 for (const a of AGENTS) {
   console.log(`${a.name} (${a.kind})`);
-  const account = await createAgentAccount(a);
+  const account = current[a.id] ?? (await createAgentAccount(a));
   const open = OPENING[a.id] ?? { coins: 0, stock: [] };
   await near
     .transaction(contract)
