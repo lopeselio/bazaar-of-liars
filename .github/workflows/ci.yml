@@ -20,6 +20,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # No .env in CI: tests use fakes and fixtures, never the network or real keys.
+      - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
 
