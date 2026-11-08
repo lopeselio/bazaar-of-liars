@@ -112,7 +112,9 @@ const onchainAccounts = ledger
     })
   : {};
 const signers = ledger ? agentSignersFromEnv(AGENTS.map((a) => a.id), process.env, onchainAccounts) : null;
-const market = ledger && signers ? new Market(ledger, signers, store) : null;
+// Agents barter through our testnet NEAR Intents Verifier (INTENTS_VERIFIER="" turns it off).
+const INTENTS_VERIFIER = process.env.INTENTS_VERIFIER ?? "bazaar-intents.testnet";
+const market = ledger && signers ? new Market(ledger, signers, store, INTENTS_VERIFIER || null) : null;
 console.log(market ? `agent economy: on (v3)${Number(process.env.MARKET_TICK_MS ?? 0) > 0 ? ", agents acting" : ", agents idle here (set MARKET_TICK_MS to run them)"}` : "agent economy: off");
 // Only one deployment should run the agents against a contract: the hosted demo sets
 // MARKET_TICK_MS=40000. Locally the agents stay still unless you set it (reads still work).

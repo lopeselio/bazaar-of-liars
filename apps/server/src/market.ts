@@ -31,6 +31,8 @@ import {
   bidCommitment,
   depositFor,
   CUSTOMERS,
+  barterQuote,
+  pickBarter,
   customerShopping,
   customerWouldBuy,
   WALK_IN_CHANCE,
@@ -57,6 +59,7 @@ import {
   BUYS_PER_WINDOW,
   BUY_WINDOW_MS,
 } from "@bazaar/core";
+import { barterSide, readSalt, simulateIntents, withdrawBack } from "@bazaar/merchant";
 import { explorerTx, readAgents, readDeedAsks, type DeedAsk, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
@@ -119,6 +122,8 @@ export class Market {
     private ledger: Ledger,
     private signers: Record<string, AgentSigner>,
     private store: Store,
+    /** The NEAR Intents Verifier agents barter through (unset: no barter). */
+    private intentsVerifier: string | null = null,
   ) {}
 
   private accountUrl(account: string) {
@@ -367,6 +372,58 @@ export class Market {
       tx: r.closeUrl,
       agents: [traderId, seller.id],
     });
+  }
+
+  /**
+   * NEAR Intents barter: a merchant that ran out of the good it uses trades some of its own stock
+   * with Auntie Wu. Both goods go into the Intents Verifier for each agent's own identity, each
+   * agent signs its side (token_diff + mt_withdraw) with its own key, and the server relays one
+   * execute_intents that settles both or neither.
+   */
+  private async barter() {
+    const verifier = this.intentsVerifier;
+    if (!verifier || !this.ledger.intentsDeposit || !this.ledger.executeIntents) return;
+    const agents = await this.agents(0);
+    const wu = agents.find((a) => a.id === WHOLESALER.id);
+    if (!wu) return;
+    const candidates = MERCHANTS.flatMap((m) => {
+      const me = agents.find((a) => a.id === m.id);
+      const q = me && barterQuote({ sells: m.goodId, uses: m.buysGoodId }, { sells: me.stock[m.goodId] ?? 0, uses: me.stock[m.buysGoodId] ?? 0 }, wu.stock[m.buysGoodId] ?? 0, GOOD_VALUES);
+      return q && this.signers[m.id] && this.signers[WHOLESALER.id] ? [{ m, q }] : [];
+    });
+    const pick = pickBarter(candidates, this.rng);
+    if (!pick) return;
+    const { m, q } = pick;
+    const mine = this.signers[m.id]!, wus = this.signers[WHOLESALER.id]!;
+    const game = this.ledger.contractId, net = this.ledger.network;
+    await this.ledger.intentsDeposit({ agentId: m.id, goodId: q.give.good, qty: q.give.qty });
+    await this.ledger.intentsDeposit({ agentId: WHOLESALER.id, goodId: q.get.good, qty: q.get.qty });
+    try {
+      const saltHex = await readSalt(net, verifier);
+      const signed = [
+        await mine.signIntents({ verifier, saltHex, intents: barterSide(game, q.give, q.get, mine.account, "bazaar barter") }),
+        await wus.signIntents({ verifier, saltHex, intents: barterSide(game, q.get, q.give, wus.account, "bazaar barter") }),
+      ];
+      await simulateIntents(net, verifier, signed);
+      const tx = await this.ledger.executeIntents(verifier, signed);
+      this.invalidate();
+      await this.say({
+        kind: "barter",
+        text: `${short(m.id)} bartered ${q.give.qty} ${GOODS[q.give.good].name} for ${q.get.qty} ${GOODS[q.get.good].name} with Auntie Wu, settled through NEAR Intents`,
+        tx: explorerTx(net, tx),
+        agents: [m.id, WHOLESALER.id],
+      });
+    } catch (e) {
+      // Didn't settle: each agent signs to take its own deposit back out of the Verifier.
+      console.warn(`barter ${m.id}:`, (e as Error).message);
+      const saltHex = await readSalt(net, verifier);
+      const back = [
+        await mine.signIntents({ verifier, saltHex, intents: withdrawBack(game, q.give.good, q.give.qty, mine.account) }),
+        await wus.signIntents({ verifier, saltHex, intents: withdrawBack(game, q.get.good, q.get.qty, wus.account) }),
+      ];
+      await this.ledger.executeIntents(verifier, back);
+      this.invalidate();
+    }
   }
 
   /** Merchants and customers use up some of what they bought, so they keep wanting it. */
@@ -718,6 +775,7 @@ export class Market {
     for (const m of MERCHANTS) await step(`restock ${m.id}`, () => this.restock(m));
     await step("consume", () => this.consume());
     await step("customers", () => this.customers());
+    await step("barter", () => this.barter());
     if (this.rng() < WALK_IN_CHANCE) {
       const c = CUSTOMERS[Math.floor(this.rng() * CUSTOMERS.length)];
       const m = MERCHANTS[Math.floor(this.rng() * MERCHANTS.length)];
