@@ -1059,6 +1059,46 @@ impl Bazaar {
         emit("agent_registered", json!({ "id": id, "name": name, "account": account, "kind": kind, "daily_cap": daily_cap, "coins": coins }));
     }
 
+    /// Owner: move an agent to a fresh account. An agent's only key is a function-call key whose
+    /// gas allowance NEAR can't top up, and it has no full-access key to add another, so a busy
+    /// agent eventually needs a new account. Its coins, goods (NEP-245, with an `mt_transfer`
+    /// event), cost basis and haggle memory move with it; its id, orders, income and daily cap
+    /// stay. Run with the market paused, so no spend authorisation is open on the old account.
+    pub fn rekey_agent(&mut self, id: String, new_account: AccountId) {
+        self.require_owner();
+        let a = self.agent(&id);
+        let old = a.account.clone();
+        require!(old != new_account, "that is already the agent's account");
+        require!(!self.agent_by_account.contains_key(&new_account), "account is already an agent");
+        require!(self.stall_slot_of(&old).is_none() && self.stall_slot_of(&new_account).is_none(), "an account holding a stall deed can't be rekeyed");
+        require!(
+            self.coins.get(&new_account).is_none() && GOOD_BASE.iter().all(|(g, _)| self.goods.get(&goods_key(&new_account, g)).is_none()),
+            "the new account must be fresh"
+        );
+        let coins = self.coins.remove(&old).unwrap_or(0);
+        self.coins.insert(new_account.clone(), coins);
+        for (good, _) in GOOD_BASE {
+            let (from, to) = (goods_key(&old, good), goods_key(&new_account, good));
+            let qty = self.goods.remove(&from).unwrap_or(0);
+            if qty > 0 {
+                self.goods.insert(to.clone(), qty);
+                mt_event("mt_transfer", json!({ "old_owner_id": old, "new_owner_id": new_account, "token_ids": [good], "amounts": [qty.to_string()], "memo": "agent rekeyed" }));
+            }
+            if let Some(cost) = self.cost_basis.remove(&from) {
+                self.cost_basis.insert(to, cost);
+            }
+        }
+        for other in self.agent_ids.clone() {
+            if let Some(m) = self.memory.remove(&memory_key(&old, &other)) {
+                self.memory.insert(memory_key(&new_account, &other), m);
+            }
+        }
+        self.agent_by_account.remove(&old);
+        self.agent_by_account.insert(new_account.clone(), id.clone());
+        self.agents.insert(id.clone(), Agent { account: new_account.clone(), ..a });
+        emit("agent_rekeyed", json!({ "agent": id, "from": old, "to": new_account }));
+    }
+
     fn agent(&self, id: &str) -> Agent {
         self.agents.get(id).cloned().unwrap_or_else(|| env::panic_str("unknown agent"))
     }
@@ -2922,6 +2962,71 @@ mod tests {
         let mut c = setup();
         post(&mut c, "o1", 90);
         c.expire_order("o1".into());
+    }
+
+    #[test]
+    fn rekey_moves_an_agent_to_a_fresh_account() {
+        let mut c = setup();
+        let rug_cost = c.cost_basis.get(&goods_key(&farrukh(), "rug")).copied();
+        let supply = c.mt_supply("rug".into()).map(|s| s.0);
+        ctx("owner.testnet", 101);
+        c.rekey_agent("farrukh".into(), acc("farrukh2.testnet"));
+        // Purse, goods and cost basis moved; the old account holds nothing.
+        assert_eq!(c.coins_of(acc("farrukh2.testnet")), 100);
+        assert_eq!(c.goods_of(acc("farrukh2.testnet"), "rug".into()), 3);
+        assert_eq!(c.cost_basis.get(&goods_key(&acc("farrukh2.testnet"), "rug")).copied(), rug_cost);
+        assert_eq!(c.coins_of(farrukh()), 0);
+        assert_eq!(c.goods_of(farrukh(), "rug".into()), 0);
+        assert_eq!(c.mt_supply("rug".into()).map(|s| s.0), supply, "a rekey moves goods; it never mints or burns");
+        // The new account acts as the agent; the old one no longer can.
+        assert_eq!(c.agent_of(&acc("farrukh2.testnet")).map(|a| a.id), Some("farrukh".into()));
+        assert!(c.agent_of(&farrukh()).is_none());
+        ctx("farrukh2.testnet", 102);
+        c.authorize_spend("h-rekeyed".into(), 50);
+    }
+
+    #[test]
+    fn a_rekeyed_customer_keeps_posting_orders() {
+        let mut c = setup();
+        ctx("owner.testnet", 101);
+        c.rekey_agent("deli".into(), acc("deli2.testnet"));
+        ctx("deli2.testnet", 102);
+        c.post_order("o-after-rekey".into(), "saffron".into(), 30, 400_000, "timessq".into(), false);
+        assert_eq!(c.coins_of(acc("deli2.testnet")), 170);
+    }
+
+    #[test]
+    #[should_panic(expected = "only an agent can authorize")]
+    fn the_old_account_is_retired_by_a_rekey() {
+        let mut c = setup();
+        ctx("owner.testnet", 101);
+        c.rekey_agent("farrukh".into(), acc("farrukh2.testnet"));
+        ctx("farrukh.testnet", 102);
+        c.authorize_spend("h-old".into(), 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "only the owner")]
+    fn only_the_owner_can_rekey() {
+        let mut c = setup();
+        c.rekey_agent("farrukh".into(), acc("farrukh2.testnet"));
+    }
+
+    #[test]
+    #[should_panic(expected = "account is already an agent")]
+    fn rekey_refuses_another_agents_account() {
+        let mut c = setup();
+        ctx("owner.testnet", 101);
+        c.rekey_agent("farrukh".into(), acc("zaria.testnet"));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be fresh")]
+    fn rekey_refuses_an_account_that_already_holds_coins() {
+        let mut c = setup();
+        buy_rug(&mut c, "h1");
+        ctx("owner.testnet", 101);
+        c.rekey_agent("farrukh".into(), player());
     }
 
     #[test]
