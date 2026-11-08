@@ -148,6 +148,9 @@ The same game, set on Canal Street in a walkable New York, where every trader is
     - **With Google or email (NEAR Auth)**, where your key is held by NEAR's MPC network: no seed phrase and no wallet to install. NEAR Auth's shared testnet client only returns to `http://localhost:3000` for now. So run `pnpm build`, then `PORT=3000 pnpm start`, and open http://localhost:3000/city/. You come back as an implicit account (`🔑 aca7a9…da71`). On the hosted demo this option is greyed out with that explanation.
 
     Either way, your coins, goods (NEP-245 tokens) and street cred now live under your account onchain. If you'd been playing as a guest, you're offered to bring that progress along.
+18. **Watch agents barter through NEAR Intents.** When a merchant runs out of the good it uses, it trades some of its own stock with Auntie Wu instead of finding coins. In the **Canal St wire** (the "agents trading onchain" feed at the bottom left), look for lines like **🤝 Zaria bartered 2 Saffron for 1 Silk Rug with Auntie Wu, settled through NEAR Intents**. Each one links to the settlement transaction on our testnet deployment of the open-source NEAR Intents Verifier (`bazaar-intents.testnet`, built from [near/intents](https://github.com/near/intents)), where `execute_intents` checked both agents' signed `token_diff` intents.
+    - **How it works:** both goods go into the Verifier for each agent's own identity (the implicit account of its key). Each agent signs its side with that key (NEP-413), and the Verifier settles both or neither, then sends the goods back into the game as NEP-245 tokens.
+    - **Try one yourself (needs the server key):** `pnpm --filter @bazaar/merchant intents:barter tobin:lamp:2 wu:saffron:1`.
 
 The rules the agents follow, and what they can and can't do with their keys, are in [DESIGN.md](./DESIGN.md#agent-economy-on-canal-street-v3).
 
@@ -207,9 +210,9 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 Listed per the hackathon's rule Q-005.
 
-- **NEAR:** [near-sdk](https://github.com/near/near-sdk-rs) 5.29 (the contract), [near-kit](https://www.npmjs.com/package/near-kit) (server transactions and reads), NEAR AI Cloud (the TEE-hosted `Qwen/Qwen3.6-35B-A3B-FP8` model and its attestation), Chain Signatures (`v1.signer-prod.testnet`), NEAR Auth (`login.testnet.fast-auth.com`, via `@auth0/auth0-spa-js`), and NEAR's published agent skills in `.claude/skills/`.
+- **NEAR:** [near-sdk](https://github.com/near/near-sdk-rs) 5.29 (the contract), [near-kit](https://www.npmjs.com/package/near-kit) (server transactions and reads), NEAR AI Cloud (the TEE-hosted `Qwen/Qwen3.6-35B-A3B-FP8` model and its attestation), Chain Signatures (`v1.signer-prod.testnet`), NEAR Intents (our testnet deployment of the [near/intents](https://github.com/near/intents) Verifier, MIT, at `bazaar-intents.testnet`), NEAR wallets via [@near-wallet-selector](https://github.com/near/wallet-selector) 10.1.4 (MyNearWallet, Meteor), NEAR Auth (`login.testnet.fast-auth.com`, via `@auth0/auth0-spa-js`), and NEAR's published agent skills in `.claude/skills/`.
 - **Verification:** [`@phala/dcap-qvl-node`](https://www.npmjs.com/package/@phala/dcap-qvl-node) (Intel TDX quotes), [jose](https://github.com/panva/jose) (NVIDIA attestation JWTs), [ethers](https://github.com/ethers-io/ethers.js) (Ethereum signature checks).
-- **Game:** [three.js](https://threejs.org) and Vite; the city is [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob (MIT, vendored, see Canal Street above).
+- **Game:** [three.js](https://threejs.org), React 19 and Vite; the city is [Slop New York](https://github.com/mrdoob/slop-newyork) by mrdoob (MIT, vendored, see Canal Street above).
 - **Server and tests:** Node 22, [redis](https://github.com/redis/node-redis), tsx, TypeScript, vitest.
 - **Hosting:** Azure Container Apps, Azure Container Registry, Azure Managed Redis. **RPC:** FastNEAR, dRPC and Intea (public, from docs.near.org).
 

@@ -225,6 +225,17 @@ A deed lives on NEAR, but its owner can prove it on any EVM chain, with no bridg
 - **Checking it.** `ecrecover(hash, v, r, s)` on any EVM chain returns the bazaar's address, so a Solidity contract can accept "this wallet owns a Canal Street stall" with one `require`. In the game, the server checks it with ethers before showing ✓. `pnpm verify:deed` checks it with nothing but chain reads. A certificate is dated (the NEAR block), so a verifier should also check `nft_token` for the current owner, as `verify:deed` does.
 - **No migration.** Certificates live under raw `x:cert:` keys.
 
+## Barter through NEAR Intents (v3.14)
+
+A merchant that has used up the good it needs (Farrukh uses lamps, Zaria rugs, Tobin saffron) can restock it without coins. It trades some of its own stock with Auntie Wu, and the trade settles through the **NEAR Intents Verifier**. The Verifier is the open-source [near/intents](https://github.com/near/intents) contract, built from source and deployed to testnet at `bazaar-intents.testnet`, since NEAR has no testnet deployment of `intents.near`.
+
+- **Identities.** Each agent's identity in the Verifier is the implicit account of its own ed25519 key, so only that key can sign its intents. The owner registers them once (`set_intents`).
+- **Deposit.** The server calls `intents_deposit(agent, good, qty)`. The contract moves the agent's NEP-245 goods to the Verifier with `mt_on_transfer`, crediting that agent's registered identity and no one else's. Whatever the Verifier doesn't take is refunded by `mt_resolve_transfer`.
+- **Sign.** Each agent signs one NEP-413 message to the Verifier with its own key. The message holds `token_diff` (e.g. −2 `nep245:v3.bazaar-liars.testnet:saffron`, +1 `…:rug`) and `mt_withdraw` (what it receives, back to its game account). The nonce is versioned and salted: `5628f6c6 ‖ 0 ‖ current_salt ‖ deadline ns ‖ random`.
+- **Settle.** The server simulates the batch (`simulate_intents`), then relays one `execute_intents`. The Verifier checks both signatures and that each token's diffs sum to zero, then settles both sides or neither. If anything fails after the deposits, each agent signs an `mt_withdraw` of its own deposit back.
+- **Price.** `barterQuote` (packages/core/src/barter.ts) works like a market maker's quote. Wu credits 85% of the street value of what she receives, the merchant gives the fewest units that buy one of what it needs, and it keeps at least one on its shelf. Wu keeps a reserve of 20.
+- **Pace.** A merchant barters on about 1.2% of ticks, only when eligible. One barter costs the server about 0.004 NEAR of gas.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
