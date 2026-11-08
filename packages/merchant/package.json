@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./bundle": "./src/bundle.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "haggle:llm": "node --env-file-if-exists=../../.env --import tsx src/cli/haggle-llm.ts",
