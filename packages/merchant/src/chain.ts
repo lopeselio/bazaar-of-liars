@@ -43,6 +43,10 @@ export interface Ledger {
   close(a: { haggleId: string; secret: MerchantSecret; salt: string; dealPrice: number | null; lowballed: boolean }): Promise<string>;
   /** v3: a player puts coins into an agent. */
   invest?(a: { player: string; agentId: string; amount: number }): Promise<string>;
+  /** v3.14: move an agent's goods into the NEAR Intents Verifier, credited to its own identity. */
+  intentsDeposit?(a: { agentId: string; goodId: string; qty: number }): Promise<string>;
+  /** v3.14: settle signed intents through the Verifier (the server relays and pays gas). */
+  executeIntents?(verifier: string, signed: unknown[]): Promise<string>;
   /** v3: a merchant uses up a good it bought. */
   consume?(a: { agentId: string; goodId: string; qty: number }): Promise<string>;
   /** v3.1: a customer's business brings in coins (capped per day by the contract). */
@@ -100,10 +104,10 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
   });
   // open: optimistic (the haggle starts sooner; its block time is what the verifier checks).
   // close: FINAL, so anyone reading the reveal right after sees it.
-  const call = async (method: string, args: object, waitUntil: "EXECUTED_OPTIMISTIC" | "FINAL" = "EXECUTED_OPTIMISTIC", opts: { gas?: `${number} Tgas`; attachedDeposit?: `${bigint} yocto` } = {}) => {
+  const call = async (method: string, args: object, waitUntil: "EXECUTED_OPTIMISTIC" | "FINAL" = "EXECUTED_OPTIMISTIC", opts: { gas?: `${number} Tgas`; attachedDeposit?: `${bigint} yocto`; receiver?: string } = {}) => {
     const r = await near
       .transaction(cfg.serverId)
-      .functionCall(cfg.contractId, method, args, { gas: "30 Tgas", ...opts })
+      .functionCall(opts.receiver ?? cfg.contractId, method, args, { gas: opts.gas ?? "30 Tgas", ...(opts.attachedDeposit ? { attachedDeposit: opts.attachedDeposit } : {}) })
       .send({ waitUntil });
     return r.transaction.hash as string;
   };
@@ -156,6 +160,8 @@ export function nearLedger(cfg: { network: Network; contractId: string; serverId
     buyDeed: (a) => call("buy_deed", { buyer: a.buyer, slot: a.slot, price: a.price }, "FINAL"),
     // The MPC network answers a few blocks later; FINAL waits for its callback too.
     certifyDeed: (slot) => call("certify_deed", { slot }, "FINAL", { gas: "100 Tgas", attachedDeposit: "1 yocto" }),
+    intentsDeposit: (a) => call("intents_deposit", { agent_id: a.agentId, good_id: a.goodId, qty: a.qty }, "FINAL", { gas: "100 Tgas" }),
+    executeIntents: (verifier, signed) => call("execute_intents", { signed }, "FINAL", { gas: "300 Tgas", receiver: verifier }),
   };
 }
 
