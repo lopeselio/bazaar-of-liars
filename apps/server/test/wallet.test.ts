@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { generateKey, verifyNep413Signature } from "near-kit";
-import { SIGN_IN_MESSAGE, SIGN_IN_RECIPIENT, nep413Hash, verifyEd25519, verifyWalletSignIn, type KeyReader } from "../src/wallet.js";
+import { SIGN_IN_MESSAGE, SIGN_IN_RECIPIENT, nep413Hash, rpcKeyReader, verifyEd25519, verifyWalletSignIn, type KeyReader } from "../src/wallet.js";
+import { vi } from "vitest";
 
 const nonce = Buffer.alloc(32, 7);
 const nonceB64 = nonce.toString("base64");
@@ -60,5 +61,18 @@ describe("wallet sign-in (NEP-413)", () => {
   it("only takes NEAR account ids", async () => {
     const { signed } = walletSign("x");
     await expect(verifyWalletSignIn({ accountId: "../etc", publicKey: signed.publicKey, signature: signed.signature, nonce: nonceB64 }, once(), fullKey)).rejects.toThrow(/account id/);
+  });
+});
+
+describe("reading a key's permission from the chain", () => {
+  const reply = (result: unknown) => vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result })));
+  it("tells full-access, function-call and missing keys apart (a missing key is an error inside result)", async () => {
+    const read = rpcKeyReader("https://rpc.example");
+    reply({ nonce: 1, permission: "FullAccess", block_height: 1 });
+    expect(await read("a.testnet", "ed25519:x")).toBe("full");
+    reply({ nonce: 1, permission: { FunctionCall: { allowance: null, receiver_id: "c", method_names: [] } } });
+    expect(await read("a.testnet", "ed25519:x")).toBe("function-call");
+    reply({ error: "access key ed25519:x does not exist while viewing", logs: [], block_height: 1 });
+    expect(await read("a.testnet", "ed25519:x")).toBe("none");
   });
 });

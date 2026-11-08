@@ -59,9 +59,11 @@ export function rpcKeyReader(rpcUrl: string): KeyReader {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "view_access_key", finality: "final", account_id: accountId, public_key: publicKey } }),
     });
-    const j = (await res.json()) as { result?: { permission: "FullAccess" | object }; error?: unknown };
-    if (!j.result) return "none";
-    return j.result.permission === "FullAccess" ? "full" : "function-call";
+    // A missing key comes back as { result: { error: "access key … does not exist" } }, not as an RPC error.
+    const j = (await res.json()) as { result?: { permission?: "FullAccess" | object; error?: string }; error?: unknown };
+    const perm = j.result?.permission;
+    if (!perm) return "none";
+    return perm === "FullAccess" ? "full" : "function-call";
   };
 }
 
