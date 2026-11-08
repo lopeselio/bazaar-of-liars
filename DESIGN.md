@@ -141,6 +141,16 @@ Players start as guests and can sign in to get a real NEAR account, with no seed
   - The game server still signs every game transaction: signing in establishes who you are. It doesn't (yet) have you sign game moves with your NEAR Auth key.
   - Your account can use `mt_transfer` once it holds a little NEAR for gas.
 
+## Signing in with a NEAR wallet (Better Auth + better-near-auth)
+
+NEAR Auth only returns to sites NEAR has allowed, so the hosted demo signs players in with their own NEAR wallet instead.
+
+- [Better Auth](https://better-auth.com) runs at `/api/ba` with the [better-near-auth](https://github.com/elliotBraem/better-near-auth) plugin (Sign in with NEAR, NEP-413). NEAR Connect shows the wallet picker.
+- The plugin issues a nonce bound to the account. The wallet signs "Sign in to <our host>". The plugin checks the signature, that the nonce is unused (stored, 15-minute life), and that the key is a full-access key of the account onchain (`requireFullAccessKey`).
+- The plugin doesn't check which site a signature was made for, and Better Auth's origin check skips requests without cookies. So a `before` hook (apps/server/src/betterAuth.ts) refuses any sign-in whose recipient or message isn't ours, or that comes from another origin.
+- The session is an HttpOnly, SameSite=Lax cookie, valid for 24 hours. The game server maps it to the session's primary `nearAccount`; that is the player, guarded like any account player.
+- Storage: Postgres (Azure Database for PostgreSQL) when hosted, shared by every replica; Better Auth's in-memory adapter locally. NEAR Auth (Google/email) sessions still use our HMAC bearer token.
+
 ## Cargo ship auctions at Pier 34 (v3.7)
 
 Every eight minutes or so a cargo ship docks at Pier 34 and its lot is auctioned with sealed bids. It gives the city a timed event to run to, a way to buy in bulk that isn't haggling, and a new source of goods: until now, every good came from opening stock.
