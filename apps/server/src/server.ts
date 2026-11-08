@@ -254,7 +254,7 @@ async function playerView(player: string) {
 
 async function invest(body: Record<string, unknown>) {
   if (!market || !ledger?.invest) throw new HttpError(404, "investing needs the agent economy");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   const agentId = String(body.agentId ?? "");
   const amount = Math.floor(Number(body.amount));
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
@@ -300,7 +300,7 @@ async function listOrders(player: string) {
 
 async function takeOrder(id: string, body: Record<string, unknown>) {
   if (!market) throw new HttpError(404, "deliveries need the agent economy");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const x = num(body.x);
   const z = num(body.z);
@@ -322,7 +322,7 @@ async function takeOrder(id: string, body: Record<string, unknown>) {
  */
 async function deliverOrder(id: string, body: Record<string, unknown>) {
   if (!market || !ledger?.fulfilOrder) throw new HttpError(404, "deliveries need the agent economy");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const job = await store.getJSON<Job>(`job:${player}`);
   if (!job || job.orderId !== id) throw new HttpError(409, "Take the job first.");
@@ -358,7 +358,7 @@ async function deliverOrder(id: string, body: Record<string, unknown>) {
 
 async function dockWork(body: Record<string, unknown>) {
   if (!market || !ledger?.payWages || !signers?.wu) throw new HttpError(404, "dock work needs the agent economy");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   if (Math.hypot(num(body.x) - DOCK.x, num(body.z) - DOCK.z) > DOCK_REACH) throw new HttpError(409, "Walk to the docks at the west end of Canal Street first.");
   const p = await purse(player);
@@ -421,7 +421,7 @@ async function auctionsView(player: string) {
 
 async function auctionAction(id: string, action: string, body: Record<string, unknown>) {
   if (!market || !ledger?.commitBid) throw new HttpError(404, "auctions need the agent economy");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   let tx: string;
   if (action === "bid") {
@@ -525,7 +525,7 @@ async function buyTip(informantId: string, body: Record<string, unknown>) {
   if (!market || !ledger?.sellTip) throw new HttpError(404, "rumours need the agent economy");
   const inf = informantById(informantId);
   if (!inf) throw new HttpError(404, "no such informant");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   if (Math.hypot(num(body.x) - inf.x, num(body.z) - inf.z) > INFORMANT_REACH) throw new HttpError(409, `Find ${inf.name} at ${inf.where} first.`);
   const p = await purse(player);
@@ -597,7 +597,7 @@ async function boardTrade(id: string, body: Record<string, unknown>) {
   if (!market || !ledger?.buyFromBoard || !signers) throw new HttpError(404, "boards need the agent economy");
   const board = boardById(id);
   if (!board) throw new HttpError(404, "no such board");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   const goodId = String(body.goodId ?? "");
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   if (!board.goods.includes(goodId)) throw new HttpError(400, `${board.name} doesn't trade that.`);
@@ -753,7 +753,7 @@ const deedUrl = (slot: string) => (ledger ? `https://${ledger.network === "testn
 
 async function stallAction(action: string, body: Record<string, unknown>) {
   if (!market || !ledger?.buyLicence) throw new HttpError(404, "stalls need the agent economy");
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const goodId = String(body.goodId ?? "");
   const qty = Math.floor(Number(body.qty ?? 0));
@@ -845,7 +845,13 @@ async function stallAction(action: string, body: Record<string, unknown>) {
 const auth = authFromEnv();
 
 /** A NEAR-account player can only be acted for with that account's session. */
+/** The request's player id: only ever a string (an array like ["alice"] would stringify past the guard). */
+function playerOf(body: Record<string, unknown>): string {
+  return typeof body.player === "string" ? body.player : "";
+}
+
 function guardPlayer(player: unknown, authed: string | null) {
+  if (player !== undefined && player !== null && typeof player !== "string") throw new HttpError(400, "player must be a string");
   if (typeof player === "string" && isAccountPlayer(player) && authed !== player) throw new HttpError(401, "Sign in again to play as this account.");
 }
 
@@ -884,7 +890,7 @@ async function linkGuest(body: Record<string, unknown>, authed: string | null) {
 }
 
 async function nextDay(body: Record<string, unknown>) {
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
   const p = await purse(player);
   const d = await dayOf(player, worth(p));
@@ -988,7 +994,7 @@ setInterval(async () => {
 
 async function openHaggle(body: Record<string, unknown>, ip: string) {
   const merchant = MERCHANTS.find((m) => m.id === body.merchantId);
-  const player = String(body.player ?? "");
+  const player = playerOf(body);
   const side: Side = body.side === "buy" ? "buy" : "sell";
   if (!merchant) throw new HttpError(400, "unknown merchant");
   if (!PLAYER_RE.test(player)) throw new HttpError(400, "unknown player id");
