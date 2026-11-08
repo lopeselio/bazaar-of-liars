@@ -1132,7 +1132,7 @@ body.vpage {
 .vwrap .btn {
   justify-self: start;
 }
-.vwrap #out {
+.vwrap .vout {
   display: grid;
   gap: 10px;
   padding: 18px;
@@ -1148,4 +1148,12 @@ body.vpage {
 }
 .vwrap .badge.bad {
   color: var(--crimson);
+}
+.badge .when {
+  color: var(--muted);
+  font-weight: 400;
+}
+.selfcheck {
+  display: grid;
+  gap: 10px;
 }
