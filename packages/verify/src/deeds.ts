@@ -64,11 +64,11 @@ async function view<T>(network: string, account: string, method: string, args: o
   const r = await f.fetch(rpcUrls(net)[0]!, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") } }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(args)))) } }),
   });
   const j = (await r.json()) as { result?: { result: number[] }; error?: unknown };
   if (!j.result) throw new Error(`${account}.${method}: ${JSON.stringify(j.error ?? j).slice(0, 200)}`);
-  return JSON.parse(Buffer.from(j.result.result).toString()) as T;
+  return JSON.parse(new TextDecoder().decode(Uint8Array.from(j.result.result))) as T;
 }
 
 /** The bazaar's Ethereum address: from the MPC signer's key derived for the contract. */

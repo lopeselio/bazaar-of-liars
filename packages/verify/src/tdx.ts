@@ -5,8 +5,8 @@
  * Online:  verify the quote's signature chain back to Intel with Phala's dcap-qvl (WASM),
  *          fetching collateral from Intel's PCS — the same approach as nearai/nearai-cloud-verifier.
  */
-import { createHash } from "node:crypto";
-import dcap from "@phala/dcap-qvl-node";
+import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
+import { sha256Hex } from "./hash.js";
 import type { Check } from "./types.js";
 
 const HEADER_LEN = 48;
@@ -25,16 +25,17 @@ export interface ParsedQuote {
 }
 
 export function parseTdxQuote(hex: string): ParsedQuote {
-  const q = Buffer.from(hex, "hex");
+  const q = hexToBytes(hex);
   if (q.length < HEADER_LEN + BODY_LEN) throw new Error(`quote too short (${q.length} bytes)`);
   const body = q.subarray(HEADER_LEN, HEADER_LEN + BODY_LEN);
+  const view = new DataView(q.buffer, q.byteOffset, q.byteLength);
   return {
-    version: q.readUInt16LE(0),
-    teeType: q.readUInt32LE(4),
+    version: view.getUint16(0, true),
+    teeType: view.getUint32(4, true),
     // TD_ATTRIBUTES bit 0 = DEBUG. A debuggable TD exposes its memory to the host.
     debug: (body[OFF.tdAttributes] & 1) === 1,
-    mrConfigId: body.subarray(OFF.mrConfigId, OFF.mrConfigId + 48).toString("hex"),
-    reportData: body.subarray(OFF.reportData, OFF.reportData + 64).toString("hex"),
+    mrConfigId: bytesToHex(body.subarray(OFF.mrConfigId, OFF.mrConfigId + 48)),
+    reportData: bytesToHex(body.subarray(OFF.reportData, OFF.reportData + 64)),
   };
 }
 
@@ -44,19 +45,19 @@ export function parseTdxQuote(hex: string): ParsedQuote {
  * (Observed on live reports; matches the gateway's own `report_data` field.)
  */
 export function checkReportDataBinding(reportDataHex: string, signingAddress: string, nonce: string): Check[] {
-  const rd = Buffer.from(reportDataHex, "hex");
+  const rd = hexToBytes(reportDataHex);
   const addr = signingAddress.toLowerCase().replace(/^0x/, "");
   return [
     {
       id: "tdx.binding.signer",
       label: "Signing key was generated inside the TEE (bound in TDX report data)",
-      ok: rd.subarray(0, 20).toString("hex") === addr && rd.subarray(20, 32).every((b) => b === 0),
+      ok: bytesToHex(rd.subarray(0, 20)) === addr && rd.subarray(20, 32).every((b) => b === 0),
       required: true,
     },
     {
       id: "tdx.binding.nonce",
       label: "TDX report is fresh (contains our nonce)",
-      ok: rd.subarray(32, 64).toString("hex") === nonce.toLowerCase(),
+      ok: bytesToHex(rd.subarray(32, 64)) === nonce.toLowerCase(),
       required: true,
     },
   ];
@@ -66,7 +67,7 @@ export function checkReportDataBinding(reportDataHex: string, signingAddress: st
 export function checkComposeBinding(mrConfigIdHex: string, appCompose: string | undefined): Check {
   if (!appCompose)
     return { id: "tdx.compose", label: "Container manifest matches TDX measurement", ok: false, required: true, detail: "no app_compose in report" };
-  const composeHash = createHash("sha256").update(appCompose).digest("hex");
+  const composeHash = sha256Hex(appCompose);
   return {
     id: "tdx.compose",
     label: "Container manifest matches TDX measurement (mr_config_id)",
@@ -82,7 +83,9 @@ const TDX_STATUS_OK = new Set(["UpToDate", "OutOfDate"]);
 export async function verifyTdxQuoteOnline(quoteHex: string, now = new Date()): Promise<Check> {
   const label = "Intel TDX quote signature chains to Intel (dcap-qvl)";
   try {
-    const raw = Buffer.from(quoteHex, "hex");
+    // Loaded only for the online check, which runs under Node (the browser verifier stays offline).
+    const { default: dcap } = await import("@phala/dcap-qvl-node");
+    const raw = hexToBytes(quoteHex);
     const collateral = await dcap.js_get_collateral(INTEL_PCS_URL, raw);
     const result = dcap.js_verify(raw, collateral, BigInt(Math.floor(now.getTime() / 1000)));
     const status: string | undefined = result?.status;

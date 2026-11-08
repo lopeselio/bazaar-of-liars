@@ -1,11 +1,11 @@
-import { randomBytes } from "node:crypto";
+import { randomHex } from "./hash.js";
 import { checkComposeBinding, checkReportDataBinding, parseTdxQuote, verifyTdxQuoteOnline } from "./tdx.js";
 import { verifyGpuOnline } from "./nvidia.js";
 import type { AttestationReport, CandidateResult, Check, ModelAttestation, ModelVerification } from "./types.js";
 
 export const NEARAI_API = "https://cloud-api.near.ai";
 
-export const newNonce = () => randomBytes(32).toString("hex");
+export const newNonce = () => randomHex(32);
 
 /** Fetch a model attestation report. Free / non-billable, but needs an API key. */
 export async function fetchModelAttestation(model: string, nonce: string, apiKey: string): Promise<AttestationReport> {
