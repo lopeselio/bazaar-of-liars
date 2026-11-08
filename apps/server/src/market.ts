@@ -59,7 +59,7 @@ import {
   BUYS_PER_WINDOW,
   BUY_WINDOW_MS,
 } from "@bazaar/core";
-import { barterSide, readSalt, simulateIntents, withdrawBack } from "@bazaar/merchant";
+import { barterSide, intentsHoldings, readIntentsIdentity, readIntentsVerifier, readSalt, simulateIntents, withdrawBack } from "@bazaar/merchant";
 import { explorerTx, readAgents, readDeedAsks, type DeedAsk, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
 import type { NewsItem, Store } from "./store.js";
 
@@ -378,34 +378,48 @@ export class Market {
    * NEAR Intents barter: a merchant that ran out of the good it uses trades some of its own stock
    * with Auntie Wu. Both goods go into the Intents Verifier for each agent's own identity, each
    * agent signs its side (token_diff + mt_withdraw) with its own key, and the server relays one
-   * execute_intents that settles both or neither.
+   * execute_intents that settles both or neither. Anything left in the Verifier after a failure is
+   * swept back to the agents (each withdraws its own balance in its own transaction).
    */
   private async barter() {
-    const verifier = this.intentsVerifier;
-    if (!verifier || !this.ledger.intentsDeposit || !this.ledger.executeIntents) return;
+    const verifier = await this.verifierReady();
+    if (!verifier) return;
+    // A previous barter didn't finish, or a periodic check: return anything left in the Verifier.
+    if ((await this.store.getJSON("intents-pending")) || this.rng() < 0.02) {
+      await this.sweepIntents(verifier);
+      return;
+    }
     const agents = await this.agents(0);
     const wu = agents.find((a) => a.id === WHOLESALER.id);
-    if (!wu) return;
-    const candidates = MERCHANTS.flatMap((m) => {
+    if (!wu || !(await this.canBarter(WHOLESALER.id))) return;
+    const candidates = [];
+    for (const m of MERCHANTS) {
       const me = agents.find((a) => a.id === m.id);
       const q = me && barterQuote({ sells: m.goodId, uses: m.buysGoodId }, { sells: me.stock[m.goodId] ?? 0, uses: me.stock[m.buysGoodId] ?? 0 }, wu.stock[m.buysGoodId] ?? 0, GOOD_VALUES);
-      return q && this.signers[m.id] && this.signers[WHOLESALER.id] ? [{ m, q }] : [];
-    });
+      if (q && (await this.canBarter(m.id))) candidates.push({ m, q });
+    }
     const pick = pickBarter(candidates, this.rng);
     if (!pick) return;
     const { m, q } = pick;
     const mine = this.signers[m.id]!, wus = this.signers[WHOLESALER.id]!;
     const game = this.ledger.contractId, net = this.ledger.network;
-    await this.ledger.intentsDeposit({ agentId: m.id, goodId: q.give.good, qty: q.give.qty });
-    await this.ledger.intentsDeposit({ agentId: WHOLESALER.id, goodId: q.get.good, qty: q.get.qty });
+    await this.store.putJSON("intents-pending", { agents: [m.id, WHOLESALER.id] }, 24 * 3_600_000);
     try {
+      await this.ledger.intentsDeposit!({ agentId: m.id, goodId: q.give.good, qty: q.give.qty });
+      await this.ledger.intentsDeposit!({ agentId: WHOLESALER.id, goodId: q.get.good, qty: q.get.qty });
+      // A deposit the Verifier refused still "succeeds" (it's refunded): check both actually landed.
+      const [hm, hw] = await Promise.all([
+        intentsHoldings(net, verifier, game, mine.intentsIdentity()!, [q.give.good]),
+        intentsHoldings(net, verifier, game, wus.intentsIdentity()!, [q.get.good]),
+      ]);
+      if ((hm[q.give.good] ?? 0) < q.give.qty || (hw[q.get.good] ?? 0) < q.get.qty) throw new Error("a deposit didn't reach the Verifier");
       const saltHex = await readSalt(net, verifier);
       const signed = [
         await mine.signIntents({ verifier, saltHex, intents: barterSide(game, q.give, q.get, mine.account, "bazaar barter") }),
         await wus.signIntents({ verifier, saltHex, intents: barterSide(game, q.get, q.give, wus.account, "bazaar barter") }),
       ];
       await simulateIntents(net, verifier, signed);
-      const tx = await this.ledger.executeIntents(verifier, signed);
+      const tx = await this.ledger.executeIntents!(verifier, signed);
       this.invalidate();
       await this.say({
         kind: "barter",
@@ -414,16 +428,60 @@ export class Market {
         agents: [m.id, WHOLESALER.id],
       });
     } catch (e) {
-      // Didn't settle: each agent signs to take its own deposit back out of the Verifier.
       console.warn(`barter ${m.id}:`, (e as Error).message);
-      const saltHex = await readSalt(net, verifier);
-      const back = [
-        await mine.signIntents({ verifier, saltHex, intents: withdrawBack(game, q.give.good, q.give.qty, mine.account) }),
-        await wus.signIntents({ verifier, saltHex, intents: withdrawBack(game, q.get.good, q.get.qty, wus.account) }),
-      ];
-      await this.ledger.executeIntents(verifier, back);
-      this.invalidate();
+      return; // "intents-pending" stays set: the next barter step sweeps
     }
+    // Settled, but a withdraw inside it can fail on its own: sweep anything left before clearing.
+    await this.sweepIntents(verifier);
+  }
+
+  /** The Verifier the contract has registered, once it matches what this server was told to use. */
+  private verifierCache: { at: number; v: string | null } | null = null;
+  private async verifierReady(): Promise<string | null> {
+    if (!this.intentsVerifier || !this.ledger.intentsDeposit || !this.ledger.executeIntents) return null;
+    if (!this.verifierCache || Date.now() - this.verifierCache.at > 10 * 60_000) {
+      const onchain = await readIntentsVerifier(this.ledger.network, this.ledger.contractId).catch(() => null);
+      this.verifierCache = { at: Date.now(), v: onchain === this.intentsVerifier ? onchain : null };
+      if (onchain !== this.intentsVerifier) console.warn(`intents: contract has verifier ${onchain}, server expects ${this.intentsVerifier}; barter off`);
+    }
+    return this.verifierCache.v;
+  }
+
+  /** An agent can barter only if its key is here and is the identity the contract registered for it. */
+  private identityOk = new Map<string, boolean>();
+  private async canBarter(agentId: string): Promise<boolean> {
+    if (this.identityOk.has(agentId)) return this.identityOk.get(agentId)!;
+    const mine = this.signers[agentId]?.intentsIdentity() ?? null;
+    const registered = mine ? await readIntentsIdentity(this.ledger.network, this.ledger.contractId, agentId).catch(() => undefined) : null;
+    if (registered === undefined) return false; // couldn't ask; try again next tick
+    const ok = !!mine && registered === mine;
+    if (!ok) console.warn(`intents: ${agentId} key identity ${mine} ≠ registered ${registered}; it won't barter`);
+    this.identityOk.set(agentId, ok);
+    return ok;
+  }
+
+  /** Withdraw every barter agent's goods left in the Verifier back to its game account, one agent per transaction. */
+  private async sweepIntents(verifier: string) {
+    const game = this.ledger.contractId, net = this.ledger.network;
+    let clean = true;
+    for (const id of [WHOLESALER.id, ...MERCHANTS.map((m) => m.id)]) {
+      const signer = this.signers[id];
+      const ident = signer?.intentsIdentity();
+      if (!signer || !ident) continue;
+      try {
+        const held = Object.entries(await intentsHoldings(net, verifier, game, ident, GOOD_IDS)).filter(([, n]) => n > 0);
+        if (!held.length) continue;
+        const saltHex = await readSalt(net, verifier);
+        const signed = await signer.signIntents({ verifier, saltHex, intents: held.flatMap(([g, n]) => withdrawBack(game, g, n, signer.account)) });
+        await this.ledger.executeIntents!(verifier, [signed]);
+        console.log(`intents sweep: returned ${held.map(([g, n]) => `${n} ${g}`).join(", ")} to ${id}`);
+        this.invalidate();
+      } catch (e) {
+        clean = false;
+        console.warn(`intents sweep ${id}:`, (e as Error).message);
+      }
+    }
+    if (clean) await this.store.putJSON("intents-pending", null, 1000);
   }
 
   /** Merchants and customers use up some of what they bought, so they keep wanting it. */
