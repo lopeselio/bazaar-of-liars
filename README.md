@@ -166,7 +166,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ## Try the pieces
 
-1. Run `pnpm install`, then `pnpm test`. You should see 144 tests pass across four packages (core 66, merchant 41, verify 26, server 11), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
+1. Run `pnpm install`, then `pnpm test`. You should see 173 tests pass across four packages (core 83, merchant 41, verify 26, server 23), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer below its price (about half the opening ask is a good start), claim a competitor's price (`20 saw 25`), call a claimed minimum (`liar`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor (lower is better). `sharp` (calls bluffs unless the merchant looks firm) should beat both `caller` (calls every claim) and `splitter` (never calls) against every merchant. Below it, a **trade loop** table buys each good at Auntie Wu's board and sells it to the merchant who wants it: taking the merchant's opening bid makes only a few percent, while haggling it up (`sellReader`) makes about +16–26%.
 4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
@@ -188,7 +188,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; a transaction regular nodes have pruned is read from an archival node. Add `--no-chain` to skip them. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 132 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 137 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;
