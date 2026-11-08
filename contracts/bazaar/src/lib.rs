@@ -552,6 +552,26 @@ fn raw_get<T: near_sdk::borsh::BorshDeserialize>(key: &str) -> Option<T> {
 fn raw_put<T: near_sdk::borsh::BorshSerialize>(key: &str, v: &T) {
     env::storage_write(key.as_bytes(), &near_sdk::borsh::to_vec(v).unwrap());
 }
+fn busy_of(account: &AccountId) -> u32 {
+    raw_get::<u32>(&busy_key(account)).unwrap_or(0)
+}
+fn work_started(account: &AccountId) {
+    raw_put(&busy_key(account), &(busy_of(account) + 1));
+}
+/// Saturates at zero: authorisations opened before v3.13 were never counted.
+fn work_done(account: &AccountId) {
+    let n = busy_of(account);
+    if n <= 1 {
+        env::storage_remove(busy_key(account).as_bytes());
+    } else {
+        raw_put(&busy_key(account), &(n - 1));
+    }
+}
+/// Open work an agent account has in flight: spend authorisations not yet used or released, and
+/// sealed auction bids not yet settled. `rekey_agent` refuses while this is above zero.
+fn busy_key(account: &AccountId) -> String {
+    format!("x:busy:{account}")
+}
 fn auction_key(id: &str) -> String {
     format!("x:auc:{id}")
 }
@@ -1063,16 +1083,23 @@ impl Bazaar {
     /// gas allowance NEAR can't top up, and it has no full-access key to add another, so a busy
     /// agent eventually needs a new account. Its coins, goods (NEP-245, with an `mt_transfer`
     /// event), cost basis and haggle memory move with it; its id, orders, income and daily cap
-    /// stay. Run with the market paused, so no spend authorisation is open on the old account.
+    /// stay. Refused while the agent has an open spend authorisation or auction bid, which would
+    /// otherwise settle against the old account.
     pub fn rekey_agent(&mut self, id: String, new_account: AccountId) {
         self.require_owner();
         let a = self.agent(&id);
         let old = a.account.clone();
         require!(old != new_account, "that is already the agent's account");
+        require!(busy_of(&old) == 0, "the agent has open spend authorisations or bids; wait until they settle");
         require!(!self.agent_by_account.contains_key(&new_account), "account is already an agent");
+        let here = env::current_account_id();
+        require!(new_account.is_sub_account_of(&here) && new_account != self.owner && new_account != self.server, "the new account must be a fresh sub-account of the contract");
         require!(self.stall_slot_of(&old).is_none() && self.stall_slot_of(&new_account).is_none(), "an account holding a stall deed can't be rekeyed");
         require!(
-            self.coins.get(&new_account).is_none() && GOOD_BASE.iter().all(|(g, _)| self.goods.get(&goods_key(&new_account, g)).is_none()),
+            self.coins.get(&new_account).is_none()
+                && GOOD_BASE.iter().all(|(g, _)| self.goods.get(&goods_key(&new_account, g)).is_none())
+                && self.cred.get(&new_account).is_none()
+                && !self.leaders.iter().any(|e| e.player == new_account),
             "the new account must be fresh"
         );
         let coins = self.coins.remove(&old).unwrap_or(0);
@@ -1092,6 +1119,10 @@ impl Bazaar {
             if let Some(m) = self.memory.remove(&memory_key(&old, &other)) {
                 self.memory.insert(memory_key(&new_account, &other), m);
             }
+        }
+        // A trader's leaderboard entry follows it, rather than splitting into an anonymous old one.
+        if let Some(e) = self.leaders.iter_mut().find(|e| e.player == old) {
+            e.player = new_account.clone();
         }
         self.agent_by_account.remove(&old);
         self.agent_by_account.insert(new_account.clone(), id.clone());
@@ -1280,6 +1311,7 @@ impl Bazaar {
         require!(max > 0 && max <= self.coins_of(who.clone()), "can't authorize more than the agent holds");
         self.charge_cap(&a.id, max as i64);
         self.auths.insert(haggle_id.clone(), Auth { agent: who.clone(), max });
+        work_started(&who);
         emit("spend_authorized", json!({ "haggle_id": haggle_id, "agent": a.id, "max": max }));
     }
 
@@ -1454,6 +1486,7 @@ impl Bazaar {
     pub fn pay_wages(&mut self, wage_id: String, player: AccountId) {
         self.require_server();
         let auth = self.auths.remove(&wage_id).unwrap_or_else(|| env::panic_str("the wholesaler hasn't authorized this wage"));
+        work_done(&auth.agent);
         let boss = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("only an agent pays wages"));
         require!(boss.kind == AgentKind::Wholesaler, "only the wholesaler hires dock workers");
         require!(auth.max >= DOCK_WAGE, "the authorization doesn't cover a wage");
@@ -1545,6 +1578,7 @@ impl Bazaar {
     pub fn stall_sale(&mut self, sale_id: String, slot: String, good_id: String) {
         self.require_server();
         let auth = self.auths.remove(&sale_id).unwrap_or_else(|| env::panic_str("the agent hasn't authorized this spend"));
+        work_done(&auth.agent);
         let agent = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("only agents buy from stalls"));
         let mut st = self.stalls.get(&slot).cloned().unwrap_or_else(|| env::panic_str("no stall in that slot"));
         let l = st.listings.iter_mut().find(|l| l.good_id == good_id && l.qty > 0).unwrap_or_else(|| env::panic_str("the stall is out of that"));
@@ -1916,6 +1950,9 @@ impl Bazaar {
             };
             self.add_coins(&b.bidder, refund as i64);
             self.burned += burn;
+            if b.agent {
+                work_done(&b.bidder); // the bid's authorisation, carried since commit_bid
+            }
             if let Some(ag) = self.agent_of(&b.bidder) {
                 // Release the part of its daily cap the agent didn't end up spending.
                 self.charge_cap(&ag.id, spent as i64 - b.deposit as i64);
@@ -2087,6 +2124,7 @@ impl Bazaar {
         self.require_server();
         require!(!self.haggles.contains_key(&auth_id), "that authorization belongs to a haggle");
         let auth = self.auths.remove(&auth_id).unwrap_or_else(|| env::panic_str("no such authorization"));
+        work_done(&auth.agent);
         let a = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("unknown agent"));
         self.charge_cap(&a.id, -(auth.max as i64));
         emit("auth_released", json!({ "auth_id": auth_id, "agent": a.id, "max": auth.max }));
@@ -2097,6 +2135,7 @@ impl Bazaar {
     pub fn sell_to_board(&mut self, sale_id: String, player: AccountId, good_id: String) {
         self.require_server();
         let auth = self.auths.remove(&sale_id).unwrap_or_else(|| env::panic_str("the agent hasn't authorized this purchase"));
+        work_done(&auth.agent);
         let a = self.agent_of(&auth.agent).unwrap_or_else(|| env::panic_str("only agents buy at boards"));
         require!(matches!(a.kind, AgentKind::Customer | AgentKind::Merchant), "only customers and merchants post buy prices");
         require!(self.agent_of(&player).is_none(), "agents don't trade at boards");
@@ -2280,6 +2319,9 @@ impl Bazaar {
         let merchant = self.agent(&h.merchant_id);
         let buyer_agent = self.agent_of(&player);
         let auth = self.auths.remove(&haggle_id);
+        if let Some(au) = &auth {
+            work_done(&au.agent);
+        }
         match (h.side, deal_price) {
             (Side::Sell, Some(price)) => {
                 require!(price >= secret.floor, "deal price is below the merchant's committed floor");
@@ -2369,7 +2411,11 @@ impl Bazaar {
                 self.add_coins(&merchant.account, h.escrow as i64);
             }
         }
-        if let Some((a, auth)) = self.auths.remove(&haggle_id).and_then(|auth| self.agent_of(&auth.agent).map(|a| (a, auth))) {
+        let auth = self.auths.remove(&haggle_id);
+        if let Some(au) = &auth {
+            work_done(&au.agent);
+        }
+        if let Some((a, auth)) = auth.and_then(|auth| self.agent_of(&auth.agent).map(|a| (a, auth))) {
             self.charge_cap(&a.id, -(auth.max as i64));
         }
         h.status = Status::Expired;
@@ -2970,18 +3016,18 @@ mod tests {
         let rug_cost = c.cost_basis.get(&goods_key(&farrukh(), "rug")).copied();
         let supply = c.mt_supply("rug".into()).map(|s| s.0);
         ctx("owner.testnet", 101);
-        c.rekey_agent("farrukh".into(), acc("farrukh2.testnet"));
+        c.rekey_agent("farrukh".into(), acc("farrukh-2.alice.near"));
         // Purse, goods and cost basis moved; the old account holds nothing.
-        assert_eq!(c.coins_of(acc("farrukh2.testnet")), 100);
-        assert_eq!(c.goods_of(acc("farrukh2.testnet"), "rug".into()), 3);
-        assert_eq!(c.cost_basis.get(&goods_key(&acc("farrukh2.testnet"), "rug")).copied(), rug_cost);
+        assert_eq!(c.coins_of(acc("farrukh-2.alice.near")), 100);
+        assert_eq!(c.goods_of(acc("farrukh-2.alice.near"), "rug".into()), 3);
+        assert_eq!(c.cost_basis.get(&goods_key(&acc("farrukh-2.alice.near"), "rug")).copied(), rug_cost);
         assert_eq!(c.coins_of(farrukh()), 0);
         assert_eq!(c.goods_of(farrukh(), "rug".into()), 0);
         assert_eq!(c.mt_supply("rug".into()).map(|s| s.0), supply, "a rekey moves goods; it never mints or burns");
         // The new account acts as the agent; the old one no longer can.
-        assert_eq!(c.agent_of(&acc("farrukh2.testnet")).map(|a| a.id), Some("farrukh".into()));
+        assert_eq!(c.agent_of(&acc("farrukh-2.alice.near")).map(|a| a.id), Some("farrukh".into()));
         assert!(c.agent_of(&farrukh()).is_none());
-        ctx("farrukh2.testnet", 102);
+        ctx("farrukh-2.alice.near", 102);
         c.authorize_spend("h-rekeyed".into(), 50);
     }
 
@@ -2989,10 +3035,10 @@ mod tests {
     fn a_rekeyed_customer_keeps_posting_orders() {
         let mut c = setup();
         ctx("owner.testnet", 101);
-        c.rekey_agent("deli".into(), acc("deli2.testnet"));
-        ctx("deli2.testnet", 102);
+        c.rekey_agent("deli".into(), acc("deli-2.alice.near"));
+        ctx("deli-2.alice.near", 102);
         c.post_order("o-after-rekey".into(), "saffron".into(), 30, 400_000, "timessq".into(), false);
-        assert_eq!(c.coins_of(acc("deli2.testnet")), 170);
+        assert_eq!(c.coins_of(acc("deli-2.alice.near")), 170);
     }
 
     #[test]
@@ -3000,7 +3046,7 @@ mod tests {
     fn the_old_account_is_retired_by_a_rekey() {
         let mut c = setup();
         ctx("owner.testnet", 101);
-        c.rekey_agent("farrukh".into(), acc("farrukh2.testnet"));
+        c.rekey_agent("farrukh".into(), acc("farrukh-2.alice.near"));
         ctx("farrukh.testnet", 102);
         c.authorize_spend("h-old".into(), 10);
     }
@@ -3009,7 +3055,7 @@ mod tests {
     #[should_panic(expected = "only the owner")]
     fn only_the_owner_can_rekey() {
         let mut c = setup();
-        c.rekey_agent("farrukh".into(), acc("farrukh2.testnet"));
+        c.rekey_agent("farrukh".into(), acc("farrukh-2.alice.near"));
     }
 
     #[test]
@@ -3024,9 +3070,49 @@ mod tests {
     #[should_panic(expected = "must be fresh")]
     fn rekey_refuses_an_account_that_already_holds_coins() {
         let mut c = setup();
-        buy_rug(&mut c, "h1");
+        c.coins.insert(acc("used.alice.near"), 5);
+        ctx("owner.testnet", 101);
+        c.rekey_agent("farrukh".into(), acc("used.alice.near"));
+    }
+
+    #[test]
+    #[should_panic(expected = "fresh sub-account of the contract")]
+    fn rekey_refuses_an_outside_account() {
+        let mut c = setup();
         ctx("owner.testnet", 101);
         c.rekey_agent("farrukh".into(), player());
+    }
+
+    #[test]
+    #[should_panic(expected = "open spend authorisations")]
+    fn rekey_waits_for_open_authorisations() {
+        let mut c = setup();
+        ctx("farrukh.testnet", 101);
+        c.authorize_spend("h-pending".into(), 20);
+        ctx("owner.testnet", 102);
+        c.rekey_agent("farrukh".into(), acc("farrukh-2.alice.near"));
+    }
+
+    #[test]
+    fn rekey_goes_ahead_once_authorisations_are_released() {
+        let mut c = setup();
+        ctx("farrukh.testnet", 101);
+        c.authorize_spend("h-pending".into(), 20);
+        ctx("server.testnet", 102);
+        c.release_auth("h-pending".into());
+        ctx("owner.testnet", 103);
+        c.rekey_agent("farrukh".into(), acc("farrukh-2.alice.near"));
+        assert_eq!(c.coins_of(acc("farrukh-2.alice.near")), 100);
+    }
+
+    #[test]
+    fn a_rekeyed_traders_leaderboard_entry_follows_it() {
+        let mut c = setup();
+        assert!(c.leaders.iter().any(|e| e.player == acc("ivy.testnet")));
+        ctx("owner.testnet", 101);
+        c.rekey_agent("ivy".into(), acc("ivy-2.alice.near"));
+        assert!(c.leaders.iter().any(|e| e.player == acc("ivy-2.alice.near")));
+        assert!(!c.leaders.iter().any(|e| e.player == acc("ivy.testnet")));
     }
 
     #[test]
