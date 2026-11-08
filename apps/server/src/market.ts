@@ -31,7 +31,9 @@ import {
   bidCommitment,
   depositFor,
   CUSTOMERS,
+  customerShopping,
   customerWouldBuy,
+  WALK_IN_CHANCE,
   traderWouldBuy,
   orderTerms,
   siteById,
@@ -367,8 +369,17 @@ export class Market {
     });
   }
 
-  /** Merchants use up some of what they bought, so they keep wanting it. */
+  /** Merchants and customers use up some of what they bought, so they keep wanting it. */
   private async consume() {
+    for (const c of CUSTOMERS) {
+      const me = (await this.agents(0)).find((a) => a.id === c.id);
+      const held = me && Object.entries(me.stock).find(([, n]) => n > 0);
+      if (held && this.rng() < 0.4) {
+        const tx = await this.ledger.consume!({ agentId: c.id, goodId: held[0], qty: 1 });
+        this.invalidate();
+        await this.say({ kind: "consume", text: `${c.name} put a ${GOODS[held[0]].name} to use`, tx: explorerTx(this.ledger.network, tx), agents: [c.id] });
+      }
+    }
     for (const m of MERCHANTS) {
       const me = (await this.agents(0)).find((a) => a.id === m.id)!;
       if ((me.stock[m.buysGoodId] ?? 0) > 0 && this.rng() < 0.35) {
@@ -377,6 +388,33 @@ export class Market {
         await this.say({ kind: "consume", text: `${short(m.id)} put a ${GOODS[m.buysGoodId].name} to use`, tx: explorerTx(this.ledger.network, tx), agents: [m.id] });
       }
     }
+  }
+
+  /**
+   * A customer buys one unit from the merchant who sells that good, in a signed agent haggle
+   * like any trader's. This is how customer income reaches the street without players.
+   */
+  private async customerBuys(customerId: string, goodId: string, why: string): Promise<boolean> {
+    const agents = await this.agents(0);
+    const me = agents.find((a) => a.id === customerId);
+    const seller = MERCHANTS.find((m) => m.goodId === goodId);
+    const s = seller && agents.find((a) => a.id === seller.id);
+    const c = CUSTOMERS.find((x) => x.id === customerId);
+    if (!me || !seller || !s || !c || !this.signers[customerId]) return false;
+    const held = Object.values(me.stock).reduce((a, b) => a + b, 0);
+    const good = GOODS[goodId];
+    const plan = customerShopping({ coins: me.coins, held, capLeft: me.dailyCap - me.spentToday }, good, s.stock[goodId] ?? 0, this.rng);
+    if (!plan) return false;
+    const priced = rollSellSecret(this.rng, seller, good, { coins: s.coins, stock: s.stock[goodId], costBasis: s.costBasis[goodId] }, await this.store.count(`sales:${seller.id}`), await this.memoryOf(customerId, seller.id));
+    const r = await this.agentHaggle({ agentId: customerId, seller, secret: priced.secret, bot: "splitter", authorize: plan.budget, budget: plan.budget });
+    if (r.price !== null) await this.store.bump(`sales:${seller.id}`, DEMAND_MS);
+    await this.say({
+      kind: "trade",
+      text: r.price === null ? `${c.name} haggled with ${short(seller.id)} over a ${good.name} and walked` : `${c.name} ${why} and bought a ${good.name} from ${short(seller.id)} for ${r.price}`,
+      tx: r.closeUrl,
+      agents: [customerId, seller.id],
+    });
+    return r.price !== null;
   }
 
   /**
@@ -400,6 +438,12 @@ export class Market {
         } catch (e) {
           console.warn("customer stall purchase:", (e as Error).message);
         }
+      }
+      // No player's stall has it either: walk to the bazaar and haggle with the merchant.
+      try {
+        if (await this.customerBuys(o.customer, o.good_id, "gave up on a courier")) continue;
+      } catch (e) {
+        console.warn("customer bazaar purchase:", (e as Error).message);
       }
       await this.say({ kind: "closed", text: `${o.customerName} gave up waiting for ${o.goodName}`, tx: explorerTx(this.ledger.network, tx), agents: [o.customer] });
     }
@@ -674,6 +718,11 @@ export class Market {
     for (const m of MERCHANTS) await step(`restock ${m.id}`, () => this.restock(m));
     await step("consume", () => this.consume());
     await step("customers", () => this.customers());
+    if (this.rng() < WALK_IN_CHANCE) {
+      const c = CUSTOMERS[Math.floor(this.rng() * CUSTOMERS.length)];
+      const m = MERCHANTS[Math.floor(this.rng() * MERCHANTS.length)];
+      await step(`walk-in ${c.id}`, () => this.customerBuys(c.id, m.goodId, "walked into the bazaar"));
+    }
     const traders = AGENTS.filter((a) => a.kind === "trader");
     const ev = await this.event();
     if (tradersLieLow(ev)) {
