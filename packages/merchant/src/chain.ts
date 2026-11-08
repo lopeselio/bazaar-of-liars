@@ -219,11 +219,19 @@ export function agentAccounts(env = process.env): Record<string, string> {
   return m;
 }
 
+/** Each agent's current account as the contract records it (it changes when an agent is rekeyed). */
+export async function readAgentAccounts(network: Network, contractId: string): Promise<Record<string, string>> {
+  const agents = await readAgents(network, contractId, []);
+  return Object.fromEntries(agents.map((a) => [a.id, a.account]));
+}
+
 /** Signers for every agent account, keys from AGENT_KEYS or the local keychain. */
-export function agentSignersFromEnv(agentIds: string[], env = process.env): Record<string, AgentSigner> | null {
+export function agentSignersFromEnv(agentIds: string[], env = process.env, onchain: Record<string, string> = {}): Record<string, AgentSigner> | null {
   if (!env.BAZAAR_CONTRACT_ID?.startsWith("v3.")) return null;
   const keys: Record<string, string> = env.AGENT_KEYS ? JSON.parse(env.AGENT_KEYS) : {};
-  const accounts = agentAccounts(env);
+  // The contract is the source of truth for each agent's account; AGENT_ACCOUNTS is the fallback
+  // for when it can't be read at startup.
+  const accounts = { ...agentAccounts(env), ...onchain };
   const network = (env.NEAR_NETWORK as Network) ?? "testnet";
   return Object.fromEntries(
     agentIds.map((id) => {
