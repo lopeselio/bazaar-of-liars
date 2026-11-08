@@ -4,11 +4,11 @@
  * The recovered signer must be one of the attested `trustedSigners` — that closes the chain:
  *   GPU (NRAS) → CPU TEE (TDX) → signing key bound in report_data → this reply.
  */
-import { createHash } from "node:crypto";
+import { sha256Hex as hashHex } from "./hash.js";
 import { verifyMessage } from "ethers";
 import type { Check } from "./types.js";
 
-export const sha256Hex = (s: string | Uint8Array) => createHash("sha256").update(s).digest("hex");
+export const sha256Hex = (s: string | Uint8Array) => hashHex(s);
 
 export interface ChatSignature {
   text: string;
