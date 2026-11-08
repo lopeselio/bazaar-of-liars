@@ -1128,6 +1128,11 @@ impl Bazaar {
         if let Some(e) = self.leaders.iter_mut().find(|e| e.player == old) {
             e.player = new_account.clone();
         }
+        // Its intents identity was its old key's: clear it, so a leaked old key can't act for it
+        // there. The owner registers the new key's identity with set_intents.
+        if env::storage_remove(intents_identity_key(&id).as_bytes()) {
+            emit("intents_identity_cleared", json!({ "agent": id }));
+        }
         self.agent_by_account.remove(&old);
         self.agent_by_account.insert(new_account.clone(), id.clone());
         self.agents.insert(id.clone(), Agent { account: new_account.clone(), ..a });
@@ -1196,6 +1201,11 @@ impl Bazaar {
 
     pub fn intents_of(&self, agent_id: String) -> Option<AccountId> {
         raw_get(&intents_identity_key(&agent_id))
+    }
+
+    /// The Verifier the game settles barter through, as set by the owner.
+    pub fn intents_verifier(&self) -> Option<AccountId> {
+        raw_get(INTENTS_KEY)
     }
 
     /// Server: move an agent's goods into the Verifier, credited to that agent's own intents
@@ -3096,6 +3106,16 @@ mod tests {
         with_intents(&mut c);
         ctx("farrukh.testnet", 103);
         let _ = c.intents_deposit("farrukh".into(), "rug".into(), 1);
+    }
+
+    #[test]
+    fn the_verifier_is_readable_and_a_rekey_clears_the_old_identity() {
+        let mut c = setup();
+        with_intents(&mut c);
+        assert_eq!(c.intents_verifier(), Some(acc("intents.testnet")));
+        ctx("owner.testnet", 103);
+        c.rekey_agent("farrukh".into(), acc("farrukh-2.alice.near"));
+        assert_eq!(c.intents_of("farrukh".into()), None);
     }
 
     #[test]
