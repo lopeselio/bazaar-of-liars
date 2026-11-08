@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BOTS,
+  CUSTOMER_HOLD_MAX,
+  customerShopping,
   DAILY_CAP,
   GOODS,
   LOT_SIZE,
@@ -150,5 +152,21 @@ describe("trade loop balance", () => {
       for (let i = 0; i < 500; i++) if (rollBuySecret(rng, buyer, good, { coins: 300, stock: 1, costBasis: 0 })!.secret.listPrice > wuDearest) above++;
       expect(above / 500).toBeLessThan(0.2);
     }
+  });
+});
+
+describe("customers shop at the bazaar", () => {
+  const rug = GOODS.rug;
+  const rich = { coins: 300, held: 0, capLeft: 500 };
+  it("walks in with a budget a little above the street value", () => {
+    const p = customerShopping(rich, rug, 3, () => 0.5)!;
+    expect(p.budget).toBeGreaterThan(rug.baseValue);
+    expect(p.budget).toBeLessThanOrEqual(Math.round(rug.baseValue * 1.3));
+  });
+  it("stays home when stocked up, broke, capped, or the stall is empty", () => {
+    expect(customerShopping({ ...rich, held: CUSTOMER_HOLD_MAX }, rug, 3, () => 0.5)).toBeNull();
+    expect(customerShopping({ ...rich, coins: 10 }, rug, 3, () => 0.5)).toBeNull();
+    expect(customerShopping({ ...rich, capLeft: 10 }, rug, 3, () => 0.5)).toBeNull();
+    expect(customerShopping(rich, rug, 0, () => 0.5)).toBeNull();
   });
 });
