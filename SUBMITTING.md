@@ -26,11 +26,11 @@ Chosen: **`games`** (primary), **`privacy`**, **`agents`**, **`nfts`**, **`swarm
 
 | Track | Why it fits | Hints it uses |
 |---|---|---|
-| Games With Real Economies | NPC merchants with wallets, a player-owned stall and deed market, an economy the agents run between visits; players never see a wallet or gas | Agent NPCs, social login (NEAR Auth), NEP-245 goods |
+| Games With Real Economies | NPC merchants with wallets, a player-owned stall and deed market, an economy the agents run between visits (merchants barter through NEAR Intents when they run short); players never see a wallet or gas, and sign in with a NEAR wallet or NEAR Auth | Agent NPCs, social login (NEAR Auth, wallets), NEAR Intents, NEP-245 goods |
 | Privacy & Private AI | Every merchant line is produced by a TEE model on NEAR AI Cloud, attested (Intel TDX + NVIDIA) and signed; the model never sees the merchant's real limit, only the engine's decision and the merchant's mood; when a haggle ends the server deletes it from its store (Redis without persistence), the secret is revealed onchain for anyone to check, and the player keeps the proof | Private AI, TEE, NEAR AI Cloud |
 | Agent Economy | Agents with their own sub-accounts earn, spend, hire runners, bid in auctions and sell tips; each key can only authorize spends within an onchain daily cap | Agent commerce, function-call keys, Chain Signatures |
 | NFTs That Do Something | A deed is the stall: transferring it moves the business, the seller's stock and till go home | NEP-171, Chain Signatures |
-| AI Swarms | Thirteen agents, each a NEAR sub-account with its own purse and capped key, coordinate through markets nobody scripts: merchants restock from the wholesaler and hire a runner, rival traders buy low and sell high, the wholesaler, merchants and traders bid against each other (and players) in sealed-bid cargo auctions, and customers post delivery bounties; alongside them, informants sell tips the contract checks. Prices and stock emerge from what they do | Multi-agent systems, sub-accounts, sealed bidding |
+| AI Swarms | Thirteen agents, each a NEAR sub-account with its own purse and capped key, coordinate through markets nobody scripts: merchants restock from the wholesaler and hire a runner, rival traders buy low and sell high, the wholesaler, merchants and traders bid against each other (and players) in sealed-bid cargo auctions, and customers post delivery bounties; alongside them, informants sell tips the contract checks, and merchants barter with the wholesaler through NEAR Intents (each signs its own token_diff; the Verifier settles both or neither). Prices and stock emerge from what they do | Multi-agent systems, sub-accounts, sealed bidding, intent-based settlement |
 
 ## Description (the `idea` field, 1688 of 2000 characters)
 
@@ -41,7 +41,7 @@ Before each haggle the server commits a hash of the merchant's secret (its real 
 
 On Canal Street (a walkable New York), every trader is an AI agent with its own NEAR sub-account and a function-call key that can only authorize spends within an onchain daily cap. Merchants restock from a wholesaler, pay runners, bid in sealed-bid cargo auctions, and informants sell tips the contract later checks against real stock (liars refund). Customers post delivery bounties; players carry goods across the city, run trade routes between price boards, earn onchain street cred, and buy stall licences that are NEP-171 deeds, tradable in a deed market and certifiable on Ethereum through NEAR Chain Signatures. Goods are NEP-245 multi tokens. Players sign in with NEAR Auth (Google or email, MPC-held key) or play as guests; the server relays every transaction, so players never see a wallet or pay gas.
 
-Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 144 TypeScript and 132 contract tests, and a README of do-X-see-Y steps.
+Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 173 TypeScript and 137 contract tests, and a README of do-X-see-Y steps.
 ```
 
 ## Evidence: NEAR features and a transaction for each
@@ -50,6 +50,7 @@ Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 144 TypeScript and 132 c
 |---|---|---|
 | Commit, reveal and settle a haggle | `contracts/bazaar`, `open_haggle` / `close_haggle` | Sample haggle, played on the earlier `v2.bazaar-liars.testnet` (same flow as today's `v3`): [commit](https://testnet.nearblocks.io/txns/CE2w2jenWqxxkb8Vagohe9GjK9E9upqYJXoypRdpnBoq), [reveal and settle](https://testnet.nearblocks.io/txns/Dmd6wvubYuzmVfrB6m91S9bhhiodcJuTSHXPoZCwUE3p); `pnpm verify:haggle examples/sample-haggle.json` |
 | NEAR AI Cloud TEE (attestation and signed replies) | `packages/verify`, `packages/merchant` | `pnpm verify:model` (needs a key), and the attestation checks in every proof bundle |
+| NEAR Intents: agents barter goods through our testnet deployment of the near/intents Verifier (`bazaar-intents.testnet`), each side a NEP-413 signed `token_diff` | `intents_deposit`, `execute_intents` | [Zaria barters 2 saffron for 1 rug with Wu](https://testnet.nearblocks.io/txns/J7xBcKD5mszMkgEQo8tViw9SAGdWAsezr7HkJxP2ZH4x) |
 | Agent sub-accounts with function-call keys and daily caps | `authorize_spend`, `pay_agent`, `post_order` | [rex authorizes a spend](https://testnet.nearblocks.io/txns/Ahqq76i9rnJnLNkM9sogZtJxeSvLfmsNCaehjope1TiM), [a customer posts a bounty](https://testnet.nearblocks.io/txns/65P5peFBVz3xzqpNPm85Mqss3LdAzgUTAsXhow6T8kpS) |
 | Delivery bounty paid onchain | `fulfil_order` | [delivery](https://testnet.nearblocks.io/txns/3gct6uUPw6RQY8FMCvuArum2zCExdRLLUx3i5nfDBnnX) |
 | Sealed-bid cargo auction | `ship_arrives`, `commit_bid`, `reveal_bid`, `settle_auction` | [ship arrives](https://testnet.nearblocks.io/txns/8idyGzATAWV32yAemfj997yfEwF2bYZhjT8JxfJ3WUJ1), [settled](https://testnet.nearblocks.io/txns/5UR4SgQp2GRq53aaPvacZMo4t3S2GXXFzceMHD394HdD) |
