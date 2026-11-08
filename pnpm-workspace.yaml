@@ -4,3 +4,4 @@ packages:
 allowBuilds:
   browser-tabs-lock: false
   esbuild: true
+  secp256k1: false
