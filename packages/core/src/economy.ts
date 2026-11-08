@@ -56,8 +56,13 @@ export const CUSTOMER_INCOME_PER_DAY = 400;
 
 // ---------- customers shopping at the bazaar ----------
 
-/** Chance per market tick that one customer walks into the bazaar to buy something. */
-export const WALK_IN_CHANCE = 0.3;
+/**
+ * Chance per market tick (40 s hosted) that one customer walks into the bazaar to buy something:
+ * about 20 tries a day across all five. Each try costs the customer a signed `authorize_spend`
+ * from its key's fixed gas allowance (~0.003 NEAR), on top of ~0.035 NEAR a day of order posting,
+ * so this is sized for a 1 NEAR allowance to last the judging window.
+ */
+export const WALK_IN_CHANCE = 0.01;
 /** A customer won't walk in while it still holds this many unused goods. */
 export const CUSTOMER_HOLD_MAX = 2;
 
