@@ -34,9 +34,11 @@ describe("economy watchdog", () => {
   });
 
   it("asks for a rekey when a key's allowance runs low", () => {
-    const r = assessEconomy(base({ agents: [agent({ allowance: 0.05 })] }));
+    const r = assessEconomy(base({ agents: [agent({ allowance: 0.02 })] }));
     expect(r.checks[0].text).toContain("rekey:agents farrukh");
-    expect(assessEconomy(base({ agents: [agent({ allowance: 0.01 })] })).level).toBe("alert");
+    expect(assessEconomy(base({ agents: [agent({ allowance: 0.005 })] })).level).toBe("alert");
+    // A merchant still near its original 0.1 NEAR allowance is fine.
+    expect(assessEconomy(base({ agents: [agent({ allowance: 0.0987 })] })).level).toBe("ok");
     expect(assessEconomy(base({ agents: [agent({ allowance: null })] })).level).toBe("ok");
   });
 

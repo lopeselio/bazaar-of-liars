@@ -50,8 +50,11 @@ export interface WatchdogReport {
 /** Top an agent account up when it falls below this, back to TOP_UP_TO. */
 export const LOW_BALANCE = 0.15;
 export const TOP_UP_TO = 0.5;
-/** Below this much allowance an agent has days left; it needs `rekey:agents` (needs the owner key). */
-export const LOW_ALLOWANCE = 0.1;
+/** Below this much allowance (about 10 calls) an agent needs `rekey:agents`, which needs the owner
+ * key, so the watchdog can only warn. Merchants began at 0.1 and burn ~0.001 a day, so it's well
+ * below their starting allowance. */
+export const LOW_ALLOWANCE = 0.03;
+export const CRITICAL_ALLOWANCE = 0.01;
 export const SERVER_LOW = 1;
 /** A merchant or trader below this many coins counts as broke. */
 export const BROKE_COINS = 30;
@@ -79,7 +82,7 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
       }
     }
     if (a.allowance !== null && a.allowance < LOW_ALLOWANCE) {
-      checks.push({ level: a.allowance < 0.02 ? "alert" : "warn", subject: a.id, text: `key allowance down to ${a.allowance.toFixed(3)} NEAR: run rekey:agents ${a.id}` });
+      checks.push({ level: a.allowance < CRITICAL_ALLOWANCE ? "alert" : "warn", subject: a.id, text: `key allowance down to ${a.allowance.toFixed(3)} NEAR: run rekey:agents ${a.id}` });
     }
     if (TRADING.has(a.kind) && a.coins < BROKE_COINS) {
       const since = i.brokeSince[a.id] ?? i.now;
