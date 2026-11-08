@@ -29,8 +29,7 @@
  *   GET  /api/auth/config               the NEAR Auth (Auth0) tenant the browser signs in with
  *   POST /api/auth/session {idToken}    verify a NEAR Auth login; returns the player's NEAR account + session
  *   POST /api/auth/link {guest}         (signed in) bring a guest's progress to the account
- *   POST /api/auth/wallet/challenge     a one-time nonce for NEAR wallet sign-in (NEP-413)
- *   POST /api/auth/wallet/session {accountId, publicKey, signature, nonce}  verify it; session for that account
+ *   /api/ba/*                           Better Auth (better-near-auth): sign in with a NEAR wallet (NEP-413), cookie session
  *
  * Players are guests ("guest-<hex>", anyone holding the id) or NEAR accounts (64-hex implicit
  * accounts from NEAR Auth). Anything done as a NEAR account needs that account's session token.
@@ -44,9 +43,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
-import { primaryRpc } from "@bazaar/verify";
 import { lastReport, runWatchdog } from "./watchdog.js";
-import { SIGN_IN_MESSAGE, WalletAuthError, WalletRpcError, newNonce, rpcKeyReader, verifyWalletSignIn, type Challenge } from "./wallet.js";
+import { BETTER_AUTH_PATH, betterAuthFromEnv, betterAuthHandler, migrateBetterAuth, sessionNearAccount } from "./betterAuth.js";
 import { haggleHint, AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
@@ -879,48 +877,13 @@ async function startSession(body: Record<string, unknown>) {
   return { account, publicKey, token: s.token, exp: s.exp, player: await playerView(account) };
 }
 
-// ---------- sign in with a NEAR wallet (NEP-413), for hosts NEAR Auth hasn't allowed ----------
+// ---------- sign in with a NEAR wallet: Better Auth + better-near-auth (SIWN, NEP-413) ----------
 
-const NONCE_TTL_MS = 5 * 60_000;
-/** Wallet sessions are short: the key is only checked at sign-in, so a removed key stops working within a day. */
-const WALLET_SESSION_MS = 24 * 3_600_000;
-
-/** The host this request was made to (the hosting proxy forwards it). */
-const hostOf = (req: IncomingMessage) => String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "").split(",")[0]!.trim().toLowerCase();
-const walletKeys = rpcKeyReader(primaryRpc((process.env.NEAR_NETWORK as "testnet" | "mainnet") ?? "testnet"));
-
-async function walletChallenge(ip: string, host: string) {
-  if (!(await store.hit(`wallet-challenge:${ip}`, 60_000, 20))) throw new HttpError(429, "Too many sign-in attempts. Wait a minute.");
-  if (!host) throw new HttpError(400, "no host");
-  const nonce = newNonce().toString("base64");
-  // The wallet signs for this host and must return the signature to a page on it.
-  await store.putJSON(`walletnonce:${nonce}`, { recipient: host } satisfies Challenge, NONCE_TTL_MS);
-  return { nonce, message: SIGN_IN_MESSAGE, recipient: host, network: process.env.NEAR_NETWORK ?? "testnet" };
-}
-
-/** A nonce counts once: the first use takes a lock that outlives it. */
-async function consumeWalletNonce(nonce: string) {
-  return (await store.lock(`walletnonce-used:${nonce}`, 2 * NONCE_TTL_MS)) !== null;
-}
-
-async function startWalletSession(body: Record<string, unknown>, ip: string) {
-  if (!(await store.hit(`wallet-session:${ip}`, 60_000, 20))) throw new HttpError(429, "Too many sign-in attempts. Wait a minute.");
-  let account: string;
-  try {
-    account = await verifyWalletSignIn(
-      { accountId: String(body.accountId ?? ""), publicKey: String(body.publicKey ?? ""), signature: String(body.signature ?? ""), nonce: String(body.nonce ?? ""), callbackUrl: typeof body.callbackUrl === "string" ? body.callbackUrl : null },
-      (n) => store.getJSON<Challenge>(`walletnonce:${n}`),
-      consumeWalletNonce,
-      walletKeys,
-    );
-  } catch (e) {
-    if (e instanceof WalletAuthError) throw new HttpError(401, `Sign-in failed: ${e.message}.`);
-    if (e instanceof WalletRpcError) throw new HttpError(503, "Couldn't reach NEAR to check your key. Try again in a moment.");
-    throw e;
-  }
-  const s = issueSession(account, { ...auth, sessionTtlMs: WALLET_SESSION_MS });
-  return { account, token: s.token, exp: s.exp, player: await playerView(account) };
-}
+const ba = betterAuthFromEnv();
+if (ba.usesDatabase) await migrateBetterAuth(ba.auth);
+console.log(`wallet sign-in: better-near-auth, recipient ${ba.host}, ${ba.usesDatabase ? "Postgres" : "in-memory (local)"}`);
+const baHandler = betterAuthHandler(ba.auth);
+const walletAccountOf = sessionNearAccount(ba.auth);
 
 async function linkGuest(body: Record<string, unknown>, authed: string | null) {
   if (!authed) throw new HttpError(401, "Sign in first.");
@@ -1205,7 +1168,10 @@ function serveStatic(url: string, res: ServerResponse): boolean {
 
 createServer(async (req, res) => {
   const url = req.url ?? "/";
-  const authed = sessionAccount(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""), auth);
+  // Better Auth handles its own routes (and reads its own body).
+  if (url.startsWith(`${BETTER_AUTH_PATH}/`)) return void baHandler(req, res);
+  // Signed in: a NEAR Auth bearer token, or a Better Auth wallet session cookie.
+  const authed = sessionAccount(String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""), auth) ?? (await walletAccountOf(req.headers).catch(() => null));
   // Behind a hosting proxy the real client is the last X-Forwarded-For hop (the first is client-supplied).
   const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",").pop()?.trim() || req.socket.remoteAddress || "?";
   try {
@@ -1213,8 +1179,6 @@ createServer(async (req, res) => {
     guardPlayer(body.player, authed);
     if (req.method === "GET" && url === "/api/auth/config") return send(res, 200, { domain: auth.domain, clientId: auth.clientId, origins: auth.origins });
     if (req.method === "POST" && url === "/api/auth/session") return send(res, 200, await startSession(body));
-    if (req.method === "POST" && url === "/api/auth/wallet/challenge") return send(res, 200, await walletChallenge(ip, hostOf(req)));
-    if (req.method === "POST" && url === "/api/auth/wallet/session") return send(res, 200, await startWalletSession(body, ip));
     if (req.method === "POST" && url === "/api/auth/link") return send(res, 200, await linkGuest(body, authed));
     if (req.method === "GET" && url === "/api/merchants")
       return send(res, 200, {
