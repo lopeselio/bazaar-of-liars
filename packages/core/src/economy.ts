@@ -54,6 +54,25 @@ export const DAILY_CAP: Record<string, number> = { merchant: 400, trader: 600, w
 /** Most coins a customer's business brings in per day: the money that funds its bounties. */
 export const CUSTOMER_INCOME_PER_DAY = 400;
 
+// ---------- customers shopping at the bazaar ----------
+
+/** Chance per market tick that one customer walks into the bazaar to buy something. */
+export const WALK_IN_CHANCE = 0.3;
+/** A customer won't walk in while it still holds this many unused goods. */
+export const CUSTOMER_HOLD_MAX = 2;
+
+/**
+ * Should a customer shop at a merchant's stall, and up to what? This is how a customer's income
+ * reaches the street when no player is around: without it coins only flow to Wu and the docks.
+ * Null when the customer is stocked up or can't afford the good.
+ */
+export function customerShopping(c: { coins: number; held: number; capLeft: number }, good: Good, merchantStock: number, rng: Rng): { budget: number } | null {
+  if (c.held >= CUSTOMER_HOLD_MAX || merchantStock <= 0) return null;
+  const budget = Math.round(good.baseValue * (1.05 + 0.25 * rng()));
+  if (Math.min(c.coins, c.capLeft) < budget) return null;
+  return { budget };
+}
+
 const memoryLevels = (m: PlayerMemory = { lowballs: 0, deals: 0 }) => ({
   grudge: Math.min(5, Math.max(0, m.lowballs)),
   loyalty: Math.min(5, Math.max(0, m.deals)),
