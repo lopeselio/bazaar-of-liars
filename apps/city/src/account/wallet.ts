@@ -1,60 +1,54 @@
-// Sign in with a NEAR wallet (NEP-413 signed message). Works on any site, unlike NEAR Auth, whose
-// shared testnet client only returns to the origins NEAR has allowed.
+// Sign in with a NEAR wallet through Better Auth's better-near-auth plugin (SIWN, NEP-413).
+// NEAR Connect shows the wallet picker (HOT, Meteor, Intear, MyNearWallet, …); the wallet signs
+// "Sign in to <this host>"; the server checks it and sets an HttpOnly session cookie.
+import { createAuthClient } from "better-auth/client";
+import { siwnClient } from "better-near-auth/client";
 import { api, saveSession, type PlayerView } from "../../../web/src/api";
 
-export type WalletId = "my-near-wallet" | "meteor-wallet";
+let client: ReturnType<typeof makeClient> | null = null;
+function makeClient() {
+  const host = location.host;
+  return createAuthClient({
+    baseURL: location.origin,
+    basePath: "/api/ba",
+    plugins: [siwnClient({ recipients: { testnet: host, mainnet: host }, networkId: "testnet" })],
+  });
+}
+export const authClient = () => (client ??= makeClient());
 
-export const WALLETS: { id: WalletId; name: string; note: string }[] = [
-  { id: "my-near-wallet", name: "MyNearWallet", note: "Web wallet, opens in a popup" },
-  { id: "meteor-wallet", name: "Meteor Wallet", note: "Extension or web wallet" },
-];
-
-/** The wallet selector (and the Buffer it expects) load only when someone signs in. */
-async function selector() {
-  // The wallet libraries were written for bundlers that polyfill Node globals; give them the two
-  // they touch before they load.
-  const { Buffer } = await import("buffer");
-  const g = globalThis as { Buffer?: unknown; process?: { env: Record<string, string> } };
-  g.Buffer ??= Buffer;
-  g.process ??= { env: { NODE_ENV: "production" } };
-  const [{ setupWalletSelector }, { setupMyNearWallet }, { setupMeteorWallet }] = await Promise.all([
-    import("@near-wallet-selector/core"),
-    import("@near-wallet-selector/my-near-wallet"),
-    import("@near-wallet-selector/meteor-wallet"),
-  ]);
-  const selector = await setupWalletSelector({ network: "testnet", modules: [setupMyNearWallet(), setupMeteorWallet()] });
-  return { selector, Buffer };
+/** The NEAR account of the current wallet session, or null. */
+async function sessionAccount(): Promise<string | null> {
+  const r = (await authClient().getSession()) as { data?: { user?: { nearAccount?: { accountId?: string }; name?: string } } | null };
+  return r.data?.user?.nearAccount?.accountId ?? null;
 }
 
-/** Everything a sign-in click needs, loaded when the sheet opens: browsers only allow the wallet's
- * popup if it opens straight from the click, with nothing awaited first. */
-export interface Prepared {
-  wallets: Partial<Record<WalletId, Awaited<ReturnType<Awaited<ReturnType<typeof selector>>["selector"]["wallet"]>>>>;
-  challenge: { nonce: string; message: string; recipient: string };
-  nonce: Uint8Array;
-  at: number;
+/** Open the wallet picker, sign, and start playing as that account. */
+export async function signInWithWallet(): Promise<{ account: string; player: PlayerView }> {
+  await new Promise<void>((resolve, reject) => {
+    void authClient()
+      .signIn.near({ onSuccess: () => resolve(), onError: (e: { error?: { message?: string } } | Error) => reject(new Error(e instanceof Error ? e.message : (e.error?.message ?? "the wallet didn't sign"))) })
+      .catch(reject);
+  });
+  const account = await sessionAccount();
+  if (!account) throw new Error("Signed in, but no NEAR account came back. Try again.");
+  // The cookie carries the session; remember who we are (no token) so the game plays as this account.
+  saveSession({ account, publicKey: "", token: "", exp: Date.now() + 24 * 3_600_000 });
+  return { account, player: await api.player(account) };
 }
 
-const CHALLENGE_TTL_MS = 4 * 60_000; // the server's nonce lives 5 minutes
-
-export async function prepareWalletSignIn(): Promise<Prepared> {
-  const [{ selector: ws, Buffer }, challenge] = await Promise.all([selector(), api.walletChallenge()]);
-  const wallets: Prepared["wallets"] = {};
-  for (const w of WALLETS) wallets[w.id] = await ws.wallet(w.id);
-  // The selector checks the nonce is a Buffer of 32 bytes.
-  return { wallets, challenge, nonce: Buffer.from(challenge.nonce, "base64"), at: Date.now() };
+/** A remembered wallet session that the server no longer has (expired, signed out elsewhere). */
+export async function walletSessionGone(account: string): Promise<boolean> {
+  try {
+    return (await sessionAccount()) !== account;
+  } catch {
+    return false; // can't tell: keep playing
+  }
 }
 
-export const isFresh = (p: Prepared | null) => !!p && Date.now() - p.at < CHALLENGE_TTL_MS;
-
-/** Called straight from the click: the wallet's popup opens before anything is awaited. */
-export async function signInWithWallet(p: Prepared, id: WalletId): Promise<{ account: string; player: PlayerView }> {
-  const wallet = p.wallets[id];
-  if (!wallet) throw new Error("That wallet didn't load. Try again.");
-  const callbackUrl = location.origin + location.pathname;
-  const signed = await wallet.signMessage({ message: p.challenge.message, recipient: p.challenge.recipient, nonce: p.nonce as never, callbackUrl });
-  if (!signed?.signature) throw new Error("The wallet didn't return a signature.");
-  const s = await api.walletSession({ accountId: signed.accountId, publicKey: signed.publicKey, signature: signed.signature, nonce: p.challenge.nonce, callbackUrl });
-  saveSession({ account: s.account, publicKey: signed.publicKey, token: s.token, exp: s.exp });
-  return { account: s.account, player: s.player };
+export async function signOutOfWallet() {
+  try {
+    await authClient().signOut();
+  } catch {
+    /* the local marker is cleared either way */
+  }
 }
