@@ -60,6 +60,7 @@ export function Guide({ cfg }: { cfg: GuideConfig }) {
         type="button"
         className={`ob-open ${cfg.button.className}`}
         title="How to play (?)"
+        aria-label="How to play"
         aria-haspopup="dialog"
         aria-expanded={mode === "help"}
         onClick={() => setMode((m) => (m === "help" ? "none" : "help"))}
