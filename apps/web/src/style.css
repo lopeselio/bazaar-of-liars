@@ -1165,3 +1165,7 @@ body.vpage {
   display: grid;
   gap: 10px;
 }
+a.chip {
+  color: inherit;
+  text-decoration: none;
+}
