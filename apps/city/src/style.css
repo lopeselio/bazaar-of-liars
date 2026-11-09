@@ -713,15 +713,24 @@ button:disabled {
   font-size: 12px;
 }
 #bz-wire-latest {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  color: var(--bz-dim);
+  font-size: 11px;
+}
+#bz-wire-latest span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--bz-dim);
-  font-size: 11px;
 }
-#bz-wire-latest i {
+#bz-wire-latest i,
+#bz-wire-latest time {
+  flex: none;
   font-style: normal;
 }
 #bz-wire-latest time {
