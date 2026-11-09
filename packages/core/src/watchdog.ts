@@ -30,7 +30,14 @@ export interface WatchdogInput {
   brokeSince: Record<string, number>;
   /** Times of street activity that isn't a scheduled event (trades, restocks, orders…). */
   activity: number[];
+  /** Each agent key's allowance when first measured (kept between runs), to project when it runs out. */
+  allowanceSeen?: Record<string, AllowanceMark>;
+  /** The keys must last until this time (epoch ms): the end of judging. */
+  keepUntil?: number;
 }
+
+/** An agent key's allowance at a moment, for its burn rate. Reset when the agent moves account. */
+export interface AllowanceMark { account: string; at: number; allowance: number }
 
 export interface Check {
   level: Level;
@@ -45,7 +52,17 @@ export interface WatchdogReport {
   /** Agent accounts to top up, and to how much NEAR. */
   topUps: { account: string; amount: number }[];
   brokeSince: Record<string, number>;
+  allowanceSeen: Record<string, AllowanceMark>;
+  /** Projected day each agent key runs out of allowance (ISO date), where the burn rate is known. */
+  runsOut: Record<string, string>;
 }
+
+/** The demo must keep running through judging (2026-11-25). */
+export const KEEP_UNTIL = Date.UTC(2026, 10, 26);
+/** Burn rates need this much history to be worth projecting. */
+export const MIN_RATE_WINDOW_MS = 6 * 3_600_000;
+/** Warn when a key is projected to run out before KEEP_UNTIL; alert inside this much notice. */
+export const RUNOUT_ALERT_MS = 2 * 86_400_000;
 
 /** Top an agent account up when it falls below this, back to TOP_UP_TO. Most agents were funded
  * with 0.12 NEAR and burn ~0.001 a day; the busy customers burn ~0.04, so this is a few days' notice
@@ -70,6 +87,9 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
   const checks: Check[] = [];
   const topUps: { account: string; amount: number }[] = [];
   const brokeSince: Record<string, number> = {};
+  const allowanceSeen: Record<string, AllowanceMark> = {};
+  const runsOut: Record<string, string> = {};
+  const keepUntil = i.keepUntil ?? KEEP_UNTIL;
   let funds = i.funderBalance ?? 0;
 
   for (const a of i.agents) {
@@ -85,6 +105,21 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
     }
     if (a.allowance !== null && a.allowance < LOW_ALLOWANCE) {
       checks.push({ level: a.allowance < CRITICAL_ALLOWANCE ? "alert" : "warn", subject: a.id, text: `key allowance down to ${a.allowance.toFixed(3)} NEAR: run rekey:agents ${a.id}` });
+    } else if (a.allowance !== null) {
+      // Project from the burn rate since the key was first measured: a busy agent can be far from the
+      // fixed floor yet still run dry before judging ends.
+      const seen = i.allowanceSeen?.[a.id];
+      const mark = seen && seen.account === a.account && seen.allowance >= a.allowance ? seen : { account: a.account, at: i.now, allowance: a.allowance };
+      allowanceSeen[a.id] = mark;
+      const elapsed = i.now - mark.at;
+      const burnt = mark.allowance - a.allowance;
+      if (elapsed >= MIN_RATE_WINDOW_MS && burnt > 0) {
+        const at = i.now + (a.allowance / burnt) * elapsed;
+        runsOut[a.id] = new Date(at).toISOString().slice(0, 10);
+        if (at < keepUntil) {
+          checks.push({ level: at - i.now < RUNOUT_ALERT_MS ? "alert" : "warn", subject: a.id, text: `key allowance (${a.allowance.toFixed(3)} NEAR, ~${((burnt / elapsed) * 86_400_000).toFixed(3)}/day) runs out around ${runsOut[a.id]}, before judging ends: run rekey:agents ${a.id}` });
+        }
+      }
     }
     if (TRADING.has(a.kind) && a.coins < BROKE_COINS) {
       const since = i.brokeSince[a.id] ?? i.now;
@@ -104,5 +139,5 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
   }
 
   const level: Level = checks.some((c) => c.level === "alert") ? "alert" : checks.length ? "warn" : "ok";
-  return { at: i.now, level, checks, topUps, brokeSince };
+  return { at: i.now, level, checks, topUps, brokeSince, allowanceSeen, runsOut };
 }

@@ -63,4 +63,37 @@ describe("economy watchdog", () => {
     expect(assessEconomy(base({ activity: [now - QUIET_TOO_LONG_MS - 1] })).checks[0].subject).toBe("street");
     expect(assessEconomy(base({ serverBalance: 0.5 })).level).toBe("alert");
   });
+
+  describe("projected allowance run-out", () => {
+    const H = 3_600_000, D = 24 * H;
+    const keepUntil = now + 16 * D;
+    it("records a baseline on first sight and projects once there's enough history", () => {
+      const first = assessEconomy(base({ keepUntil, agents: [agent({ id: "vesey", allowance: 1 })] }));
+      expect(first.allowanceSeen.vesey).toEqual({ account: "farrukh.v3.x.testnet", at: now, allowance: 1 });
+      expect(first.checks).toEqual([]);
+      // 15 h later 0.18 is gone: ~0.29/day, so 0.82 lasts ~2.8 days, well before judging ends.
+      const later = assessEconomy(base({ now: now + 15 * H, activity: [now + 15 * H - 60_000], keepUntil, allowanceSeen: first.allowanceSeen, agents: [agent({ id: "vesey", allowance: 0.82 })] }));
+      const c = later.checks.find((x) => x.subject === "vesey")!;
+      expect(c.level).toBe("warn");
+      expect(c.text).toMatch(/runs out around .* before judging ends: run rekey:agents vesey/);
+      expect(later.runsOut.vesey).toBeDefined();
+    });
+    it("alerts when the run-out is under two days away", () => {
+      const seen = { vesey: { account: "farrukh.v3.x.testnet", at: now - 10 * H, allowance: 0.5 } };
+      const r = assessEconomy(base({ keepUntil, allowanceSeen: seen, agents: [agent({ id: "vesey", allowance: 0.3 })] }));
+      expect(r.checks.find((x) => x.subject === "vesey")!.level).toBe("alert");
+    });
+    it("is quiet for a slow burner that lasts past judging", () => {
+      const seen = { farrukh: { account: "farrukh.v3.x.testnet", at: now - 2 * D, allowance: 0.5 } };
+      const r = assessEconomy(base({ keepUntil, allowanceSeen: seen, agents: [agent({ allowance: 0.498 })] }));
+      expect(r.checks).toEqual([]);
+      expect(r.runsOut.farrukh > new Date(keepUntil).toISOString().slice(0, 10)).toBe(true);
+    });
+    it("starts over after a rekey (new account, or the allowance went up)", () => {
+      const seen = { vesey: { account: "vesey-2.v3.x.testnet", at: now - 2 * D, allowance: 1 } };
+      const r = assessEconomy(base({ keepUntil, allowanceSeen: seen, agents: [agent({ id: "vesey", account: "vesey-3.v3.x.testnet", allowance: 5 })] }));
+      expect(r.allowanceSeen.vesey).toEqual({ account: "vesey-3.v3.x.testnet", at: now, allowance: 5 });
+      expect(r.checks).toEqual([]);
+    });
+  });
 });
