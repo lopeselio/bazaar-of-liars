@@ -10,17 +10,26 @@
   --bz-font: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
 }
 
+/* The HUD column under the Slop New York brand: one player card, a row of buttons, chips that come
+   and go, and the wire. It stops short of the street signs and the minimap at the bottom left. */
 #bz-hud {
+  --bz-hud-top: 82px;
+  --bz-hud-reserve: 262px; /* street signs + minimap + the edge, measured bottom up */
   position: fixed;
-  top: 64px;
-  left: 16px;
+  top: var(--bz-hud-top);
+  left: 20px;
   z-index: 40;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  width: min(280px, calc(100vw - 24px));
+  max-height: calc(100vh - var(--bz-hud-top) - var(--bz-hud-reserve));
   font: 14px/1.2 var(--bz-font);
   color: var(--bz-ink);
   pointer-events: none;
+}
+#bz-hud > * {
+  flex-shrink: 0;
 }
 .bz-card {
   background: var(--bz-bg);
@@ -30,23 +39,63 @@
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(6px);
 }
+
+/* The player card: who and where, purse and day, street cred */
+.bz-player {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.bz-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
 .bz-title b {
-  display: block;
-  font-size: 16px;
+  font-size: 14px;
   letter-spacing: 0.02em;
   color: var(--bz-gold);
+  white-space: nowrap;
 }
 .bz-title span {
-  font-size: 12px;
+  font-size: 10px;
   color: var(--bz-dim);
   text-transform: uppercase;
   letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+.bz-go {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--bz-edge);
+  border-radius: 999px;
+  background: none;
+  pointer-events: auto;
+  cursor: pointer;
+  color: var(--bz-gold);
+  font: 600 11px var(--bz-font);
+  white-space: nowrap;
+}
+.bz-go:hover,
+.bz-go:focus-visible {
+  border-color: var(--bz-gold);
+}
+.bz-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 196, 92, 0.15);
 }
 .bz-purse {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
   font-size: 18px;
+  font-weight: 700;
 }
 .bz-purse .bz-coin {
   color: var(--bz-gold);
@@ -54,8 +103,9 @@
 }
 .bz-purse i {
   font-style: normal;
-  font-size: 14px;
-  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  margin-left: 2px;
 }
 .bz-purse.bump {
   animation: bz-bump 0.6s ease;
@@ -63,25 +113,17 @@
 @keyframes bz-bump {
   30% {
     transform: scale(1.18);
-    border-color: var(--bz-gold);
+    color: var(--bz-gold);
   }
 }
 .bz-day {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--bz-dim);
+  text-align: right;
+  white-space: nowrap;
 }
 .bz-day b {
   color: var(--bz-ink);
-}
-.bz-go {
-  pointer-events: auto;
-  cursor: pointer;
-  color: var(--bz-gold);
-  font: 600 13px var(--bz-font);
-  text-align: left;
-}
-.bz-go:hover {
-  border-color: var(--bz-gold);
 }
 
 /* Floating stall tags */
@@ -976,11 +1018,31 @@ button:disabled {
   font: 13px var(--bz-font);
   text-align: left;
 }
+/* Inside the player card the cred row is part of the card, not a card of its own. */
+.bz-player #bz-cred {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.bz-player #bz-cred:focus-visible {
+  outline: 2px solid var(--bz-gold);
+  outline-offset: 3px;
+}
+.bz-player .bz-cred-main {
+  flex: 1;
+  min-width: 0;
+}
 .bz-lvl {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  flex: none;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #fff2b8, var(--bz-gold) 60%, #b07d22);
   color: #2a1a0e;
