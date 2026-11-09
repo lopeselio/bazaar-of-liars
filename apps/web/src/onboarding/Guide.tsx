@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "./onboarding.css";
 import { HelpSheet, type Help } from "./HelpSheet";
+import { noMouseFocus } from "./focus";
 import { obStore, typingIn } from "./storage";
 import { Tour, type TourStep } from "./Tour";
 import { Welcome, type Slide } from "./Welcome";
@@ -63,6 +64,7 @@ export function Guide({ cfg }: { cfg: GuideConfig }) {
         aria-label="How to play"
         aria-haspopup="dialog"
         aria-expanded={mode === "help"}
+        onMouseDown={noMouseFocus}
         onClick={() => setMode((m) => (m === "help" ? "none" : "help"))}
       >
         {cfg.button.content}
