@@ -1637,10 +1637,16 @@ button:disabled {
   color: var(--bz-gold);
 }
 #bz-tips-chip {
+  padding: 6px 10px;
+  border-radius: 10px;
   color: var(--bz-ink);
-  font: 600 13px var(--bz-font);
+  font: 600 12px var(--bz-font);
   cursor: pointer;
   text-align: left;
+  pointer-events: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- price boards and trade routes ---------- */
@@ -1678,13 +1684,46 @@ button:disabled {
   cursor: default;
 }
 #bz-route-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 10px;
   color: var(--bz-ink);
-  font: 600 13px var(--bz-font);
+  font: 600 12px var(--bz-font);
   cursor: pointer;
   text-align: left;
+  pointer-events: auto;
+}
+#bz-route-chip span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#bz-route-chip i,
+#bz-route-chip em {
+  flex: none;
+  font-style: normal;
 }
 #bz-route-chip b {
+  flex: none;
   color: #7fe0a5;
+}
+#bz-route-chip em {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #7fe0a5;
+  color: #0d2a1a;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+#bz-route-chip.guiding,
+#bz-route-chip:hover {
+  border-color: #7fe0a5;
 }
 #bz-guide {
   position: fixed;

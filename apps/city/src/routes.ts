@@ -107,7 +107,8 @@ export function initRoutes(d: RouteDeps) {
     chip.hidden = !r;
     if (!r || !view) return;
     const at = (id: string) => view!.boards.find((b) => b.id === id)?.district ?? id;
-    chip.innerHTML = `📈 ${d.goodIcon[r.goodId] ?? ""} ${esc(at(r.buyAt))} ${r.buy} → ${esc(at(r.sellAt))} ${r.sell} <b>+${r.profit}</b>${guiding ? " · guiding" : ""}`;
+    chip.innerHTML = `<i aria-hidden="true">📈</i><span>${d.goodIcon[r.goodId] ?? ""} ${esc(at(r.buyAt))} ${r.buy} → ${esc(at(r.sellAt))} ${r.sell}</span><b>+${r.profit}</b>${guiding ? `<em>guiding</em>` : ""}`;
+    chip.classList.toggle("guiding", guiding);
     chip.title = guiding ? "Click to stop guiding" : "Best trade route right now. Click to be guided there.";
   }
 
