@@ -56,7 +56,7 @@ export function initJobs(d: JobsDeps) {
      <div id="bz-site-tags"></div>
      <div id="bz-receipt" hidden></div>`,
   );
-  document.querySelector("#bz-hud")?.appendChild($("bz-jobs-btn"));
+  (document.querySelector("#bz-actions") ?? document.querySelector("#bz-hud"))?.appendChild($("bz-jobs-btn"));
 
   let orders: Order[] = [];
   let job: Job | null = null;

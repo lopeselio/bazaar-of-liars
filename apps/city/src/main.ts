@@ -92,6 +92,7 @@ document.body.insertAdjacentHTML(
          <div class="bz-day" id="bz-day"></div>
        </div>
      </section>
+     <div class="bz-actions" id="bz-actions"></div>
    </div>
    <section id="bz-wire" class="bz-card" hidden>
      <header><b>Canal St wire</b><span>agents trading onchain</span></header>
@@ -238,8 +239,8 @@ async function refreshPurse(bump = false) {
   }
 }
 $("bz-hud").hidden = false;
-initLogin({ hud: $("bz-hud"), guestId: GUEST, toast });
-initGuide($("bz-hud"));
+initLogin({ hud: $("bz-actions"), guestId: GUEST, toast });
+initGuide($("bz-actions"));
 void refreshPurse();
 
 // ---------- the agent economy: purses, shelves and the street wire ----------

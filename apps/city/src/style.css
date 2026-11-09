@@ -126,6 +126,67 @@
   color: var(--bz-ink);
 }
 
+/* One row of small buttons under the card: sign in (or your account), help, jobs */
+.bz-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+.bz-actions > .bz-card,
+.bz-actions .bz-guide-host > .bz-card,
+.bz-actions .bz-account > .bz-card {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font: 600 12px var(--bz-font);
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.bz-actions .bz-card:hover,
+.bz-actions .bz-card:focus-visible {
+  border-color: var(--bz-gold);
+}
+/* The account takes what's left of the row; a long account name is cut short. */
+.bz-actions #bz-signin,
+.bz-actions #bz-acct {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: default;
+}
+.bz-actions #bz-signin {
+  cursor: pointer;
+}
+.bz-actions #bz-acct a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bz-actions #bz-acct button {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--bz-edge);
+  border-radius: 6px;
+  background: none;
+  color: var(--bz-dim);
+  font: 11px var(--bz-font);
+  cursor: pointer;
+}
+.bz-actions #bz-signin,
+.bz-actions #bz-acct,
+.bz-actions #bz-jobs-btn {
+  font: 600 12px var(--bz-font);
+}
+.bz-actions #bz-jobs-btn b {
+  margin-left: 0;
+}
+
 /* Floating stall tags */
 #bz-tags {
   position: fixed;

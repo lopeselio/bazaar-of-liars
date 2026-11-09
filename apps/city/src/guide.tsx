@@ -224,13 +224,14 @@ const cfg: GuideConfig = {
     className: "bz-card bz-help",
     content: (
       <>
-        <b aria-hidden="true">?</b> How to play
+        <b aria-hidden="true">?</b>
+        <span className="bz-lbl">Help</span>
       </>
     ),
   },
 };
 
-/** Add the "How to play" card to the HUD and show the welcome on a first visit. */
+/** Add the "How to play" button to the HUD's button row and show the welcome on a first visit. */
 export function initGuide(hud: HTMLElement) {
   const host = document.createElement("div");
   host.className = "bz-guide-host";
