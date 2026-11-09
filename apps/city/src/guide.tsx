@@ -182,6 +182,7 @@ const cfg: GuideConfig = {
   steps,
   help: {
     title: "Canal Street",
+    elsewhere: { href: "/?classic", label: "🏜️ The desert bazaar", note: "is the original, simpler version: three stalls, no walking, and it runs in any browser." },
     controls: [
       [["W", "A", "S", "D"], "walk, drive or fly (arrows too)"],
       [["Space"], "jump, brake or climb"],
@@ -235,10 +236,4 @@ export function initGuide(hud: HTMLElement) {
   host.className = "bz-guide-host";
   hud.appendChild(host);
   mountGuide(host, cfg);
-  // The original desert bazaar is still there (the root only sends WebGPU browsers here).
-  const classic = document.createElement("a");
-  classic.className = "bz-card bz-classic";
-  classic.href = "/?classic";
-  classic.textContent = "🏜️ Desert bazaar";
-  hud.appendChild(classic);
 }
