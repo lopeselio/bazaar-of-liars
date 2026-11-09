@@ -85,10 +85,13 @@ const PLAYER = currentPlayer(GUEST);
 document.body.insertAdjacentHTML(
   "beforeend",
   `<div id="bz-hud" hidden>
-     <div class="bz-card bz-title"><b>Bazaar of Liars</b><span>Canal Street</span></div>
-     <div class="bz-card bz-purse"><span class="bz-coin">●</span><b id="bz-coins">–</b><span id="bz-goods"></span></div>
-     <div class="bz-card bz-day" id="bz-day"></div>
-     <button class="bz-card bz-go" id="bz-go" type="button">⇢ Canal St</button>
+     <section class="bz-card bz-player" id="bz-player" aria-label="You">
+       <div class="bz-title"><b>Bazaar of Liars</b><span>Canal Street</span><button class="bz-go" id="bz-go" type="button" title="Back to the stalls on Canal Street">⇢ Canal St</button></div>
+       <div class="bz-stats">
+         <div class="bz-purse"><span class="bz-coin">●</span><b id="bz-coins">–</b><span id="bz-goods"></span></div>
+         <div class="bz-day" id="bz-day"></div>
+       </div>
+     </section>
    </div>
    <section id="bz-wire" class="bz-card" hidden>
      <header><b>Canal St wire</b><span>agents trading onchain</span></header>
@@ -212,7 +215,7 @@ if (!store.get("bazaar.city.arrived")) {
 
 // ---------- HUD ----------
 
-const renderCred = initCred($("bz-hud"));
+const renderCred = initCred($("bz-player"));
 
 async function refreshPurse(bump = false) {
   try {
@@ -225,7 +228,7 @@ async function refreshPurse(bump = false) {
     .filter(([, n]) => n > 0)
     .map(([g, n]) => `<i>${GOOD_ICON[g] ?? "•"}${n}</i>`)
     .join("");
-  $("bz-day").innerHTML = `Day <b>${me.day.n}</b> · ${me.day.left}/${me.day.perDay} haggles left`;
+  $("bz-day").innerHTML = `Day <b>${me.day.n}</b> · <b>${me.day.left}</b>/${me.day.perDay} haggles left`;
   renderCred(me.cred);
   if (bump) {
     const p = document.querySelector(".bz-purse")!;
