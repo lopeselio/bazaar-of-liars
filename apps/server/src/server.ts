@@ -1199,6 +1199,12 @@ createServer(async (req, res) => {
       if (!market) return send(res, 200, { agents: [], news: [], onchain: false });
       return send(res, 200, { agents: await market.agents(), news: await market.news(25), onchain: true, contractId: ledger!.contractId });
     }
+    // Liveness for the deploy script and probes: the process answers and its state store responds.
+    if (req.method === "GET" && url === "/api/health") {
+      const t0 = Date.now();
+      const storeOk = await store.getJSON("health:ping").then(() => true, () => false);
+      return send(res, storeOk ? 200 : 503, { ok: storeOk, version: process.env.APP_VERSION ?? "dev", store: store.kind, storeMs: Date.now() - t0, onchain: !!ledger, agents: !!market });
+    }
     if (req.method === "GET" && url === "/api/health/economy") {
       const r = await lastReport(store);
       return send(res, 200, r ?? { level: "unknown", checks: [], note: watchdogDeps ? "first check runs 30 s after start" : "the watchdog runs only where the agents act" });
