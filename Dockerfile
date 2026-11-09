@@ -25,4 +25,7 @@ ENV NODE_ENV=production \
 EXPOSE 8080
 USER node
 WORKDIR /app/apps/server
+# The commit this image was built from (deploy-azure.sh waits for /api/health to report it).
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 CMD ["node", "--import", "tsx", "src/server.ts"]
