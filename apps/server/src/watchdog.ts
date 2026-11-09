@@ -12,6 +12,8 @@ export interface WatchdogDeps {
   store: Store;
   network: Network;
   serverId: string;
+  /** The game contract (it pays for its own storage). */
+  contractId?: string;
   funder: { account: string; privateKey?: string } | null;
   agents: () => Promise<{ id: string; kind: string; account: string; coins: number }[]>;
   news: () => Promise<{ t: number; kind: string }[]>;
@@ -21,6 +23,7 @@ export interface WatchdogDeps {
 const REPORT_KEY = "watchdog:report";
 /** Allowance baselines outlive the report (burn rates need days of history). */
 const SEEN_KEY = "watchdog:allowance";
+const CONTRACT_SEEN_KEY = "watchdog:contract";
 
 export async function lastReport(store: Store): Promise<(WatchdogReport & { toppedUp?: { account: string; amount: number; tx: string }[] }) | null> {
   return store.getJSON(REPORT_KEY);
@@ -33,6 +36,7 @@ export async function runWatchdog(d: WatchdogDeps): Promise<WatchdogReport> {
   const gas = await Promise.all(agents.map(async (a) => ({ ...a, ...(await readAccountGas(d.network, a.account)) })));
   const server = await readAccountGas(d.network, d.serverId);
   const funder = d.funder ? await readAccountGas(d.network, d.funder.account) : null;
+  const contract = d.contractId ? { account: d.contractId, ...(await readAccountGas(d.network, d.contractId)) } : null;
   const activity = (await d.news()).filter((n) => n.kind !== "event").map((n) => n.t);
   const report = assessEconomy({
     now: Date.now(),
@@ -42,8 +46,11 @@ export async function runWatchdog(d: WatchdogDeps): Promise<WatchdogReport> {
     brokeSince: prev?.brokeSince ?? {},
     activity,
     allowanceSeen: (await d.store.getJSON(SEEN_KEY)) ?? {},
+    contract,
+    contractSeen: await d.store.getJSON(CONTRACT_SEEN_KEY),
   });
   await d.store.putJSON(SEEN_KEY, report.allowanceSeen, 30 * 86_400_000);
+  if (report.contractSeen) await d.store.putJSON(CONTRACT_SEEN_KEY, report.contractSeen, 30 * 86_400_000);
   const toppedUp: { account: string; amount: number; tx: string }[] = [];
   for (const t of report.topUps) {
     try {
