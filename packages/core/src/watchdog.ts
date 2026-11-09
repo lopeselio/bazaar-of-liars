@@ -34,7 +34,17 @@ export interface WatchdogInput {
   allowanceSeen?: Record<string, AllowanceMark>;
   /** The keys must last until this time (epoch ms): the end of judging. */
   keepUntil?: number;
+  /** The contract account: it pays for its own storage, so its free balance must outlast the growth. */
+  contract?: { account: string; balance: number; storageBytes: number } | null;
+  /** The contract's storage when first measured (kept between runs), for its growth rate. */
+  contractSeen?: { at: number; storageBytes: number } | null;
 }
+
+/** NEAR per byte of contract storage (10^19 yocto). */
+export const STORAGE_NEAR_PER_BYTE = 1e-5;
+/** Warn below this much free contract balance; alert below CONTRACT_FREE_ALERT. */
+export const CONTRACT_FREE_WARN = 2;
+export const CONTRACT_FREE_ALERT = 0.5;
 
 /** An agent key's allowance at a moment, for its burn rate. Reset when the agent moves account. */
 export interface AllowanceMark { account: string; at: number; allowance: number }
@@ -55,6 +65,10 @@ export interface WatchdogReport {
   allowanceSeen: Record<string, AllowanceMark>;
   /** Projected day each agent key runs out of allowance (ISO date), where the burn rate is known. */
   runsOut: Record<string, string>;
+  /** The contract's free balance over its storage stake, and the projected day it runs out. */
+  contractFree?: number;
+  contractRunsOut?: string;
+  contractSeen?: { at: number; storageBytes: number } | null;
 }
 
 /** The demo must keep running through judging (2026-11-25). */
@@ -135,6 +149,28 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
     }
   }
 
+  // The contract pays for every haggle's storage; when its free balance is gone, every write fails.
+  let contractFree: number | undefined, contractRunsOut: string | undefined;
+  let contractSeen = i.contractSeen ?? null;
+  if (i.contract) {
+    const c = i.contract;
+    contractFree = c.balance - c.storageBytes * STORAGE_NEAR_PER_BYTE;
+    if (!contractSeen || contractSeen.storageBytes > c.storageBytes || i.now - contractSeen.at > RATE_WINDOW_MAX_MS) contractSeen = { at: i.now, storageBytes: c.storageBytes };
+    const elapsed = i.now - contractSeen.at, grown = c.storageBytes - contractSeen.storageBytes;
+    if (elapsed >= MIN_RATE_WINDOW_MS && grown > 0) {
+      const at = i.now + (contractFree / STORAGE_NEAR_PER_BYTE / grown) * elapsed;
+      if (Number.isFinite(at) && at < 8.64e15) {
+        contractRunsOut = new Date(at).toISOString().slice(0, 10);
+        if (at < keepUntil && contractFree >= CONTRACT_FREE_WARN) {
+          checks.push({ level: at - i.now < RUNOUT_ALERT_MS ? "alert" : "warn", subject: "contract", text: `contract storage (~${Math.round(((grown / elapsed) * 86_400_000) / 1000)} KB/day) uses up its ${contractFree.toFixed(2)} free NEAR around ${contractRunsOut}, before judging ends: send NEAR to ${c.account}` });
+        }
+      }
+    }
+    if (contractFree < CONTRACT_FREE_WARN) {
+      checks.push({ level: contractFree < CONTRACT_FREE_ALERT ? "alert" : "warn", subject: "contract", text: `contract has only ${contractFree.toFixed(3)} NEAR free over its storage stake (~${Math.max(0, Math.round(contractFree / STORAGE_NEAR_PER_BYTE / 1000))} KB): send NEAR to ${c.account}` });
+    }
+  }
+
   if (i.serverBalance < SERVER_LOW) checks.push({ level: "alert", subject: "server", text: `server account down to ${i.serverBalance.toFixed(2)} NEAR` });
   if (i.funderBalance !== null && i.funderBalance < 1) checks.push({ level: "warn", subject: "funder", text: `funder down to ${i.funderBalance.toFixed(2)} NEAR` });
 
@@ -144,5 +180,5 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
   }
 
   const level: Level = checks.some((c) => c.level === "alert") ? "alert" : checks.length ? "warn" : "ok";
-  return { at: i.now, level, checks, topUps, brokeSince, allowanceSeen, runsOut };
+  return { at: i.now, level, checks, topUps, brokeSince, allowanceSeen, runsOut, contractFree, contractRunsOut, contractSeen };
 }

@@ -112,4 +112,31 @@ describe("economy watchdog", () => {
       expect(r.allowanceSeen.farrukh).toEqual({ account: "farrukh.v3.x.testnet", at: now, allowance: 0.49 });
     });
   });
+
+  describe("contract storage", () => {
+    const H = 3_600_000, D = 24 * H;
+    const keepUntil = now + 16 * D;
+    const contract = (balance: number, storageBytes: number) => ({ account: "v3.x.testnet", balance, storageBytes });
+    it("alerts on the state found in the audit (0.27 NEAR, ~27 KB free)", () => {
+      const r = assessEconomy(base({ keepUntil, contract: contract(7.9817, 771_555) }));
+      const c = r.checks.find((x) => x.subject === "contract")!;
+      expect(c.level).toBe("alert");
+      expect(c.text).toMatch(/only 0\.266 NEAR free .*~27 KB.*send NEAR to v3\.x\.testnet/);
+    });
+    it("projects the run-out from storage growth and warns before judging ends", () => {
+      // 8.26 NEAR free, growing ~100 KB/day: about 8 days, before keepUntil (16 days).
+      const seen = { at: now - 12 * H, storageBytes: 771_555 - 50_000 };
+      const r = assessEconomy(base({ keepUntil, contract: contract(15.98, 771_555), contractSeen: seen }));
+      expect(r.contractFree).toBeCloseTo(8.27, 1);
+      const c = r.checks.find((x) => x.subject === "contract")!;
+      expect(c.level).toBe("warn");
+      expect(c.text).toMatch(/~100 KB\/day.*before judging ends/);
+      expect(r.contractSeen).toEqual(seen);
+    });
+    it("is quiet when the balance outlasts the growth", () => {
+      const r = assessEconomy(base({ keepUntil, contract: contract(40, 771_555), contractSeen: { at: now - 12 * H, storageBytes: 771_555 - 50_000 } }));
+      expect(r.checks.filter((x) => x.subject === "contract")).toEqual([]);
+    });
+  });
 });
+
