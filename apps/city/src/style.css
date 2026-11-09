@@ -1717,3 +1717,22 @@ button.bz-link { background: none; border: 0; padding: 0; color: inherit; text-d
 .bz-close {
   margin-top: 4px;
 }
+
+/* "How to play" card in the HUD (./guide.tsx); the welcome, walkthrough and help sheet are on <body>. */
+.bz-guide-host {
+  display: contents;
+}
+.bz-help {
+  pointer-events: auto;
+  cursor: pointer;
+  color: var(--bz-ink);
+  font: 600 13px var(--bz-font);
+  text-align: left;
+}
+.bz-help b {
+  color: var(--bz-gold);
+  margin-right: 2px;
+}
+.bz-help:hover {
+  border-color: var(--bz-gold);
+}
