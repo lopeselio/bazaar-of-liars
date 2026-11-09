@@ -267,7 +267,7 @@ $("bz-wire-toggle").addEventListener("click", () => {
 });
 function renderNews(news: NewsItem[]) {
   const top = news[0];
-  $("bz-wire-latest").innerHTML = top ? `<i>${KIND_ICON[top.kind] ?? "•"}</i> ${esc(top.text)} <time>${ago(top.t)}</time>` : "Quiet on the street";
+  $("bz-wire-latest").innerHTML = top ? `<i>${KIND_ICON[top.kind] ?? "•"}</i><span>${esc(top.text)}</span><time>${ago(top.t)}</time>` : "<span>Quiet on the street</span>";
   $("bz-news").innerHTML = news
     .slice(0, 6)
     .map((n) => `<li class="k-${n.kind}"><i>${KIND_ICON[n.kind] ?? "•"}</i><span>${esc(n.text)}</span>${n.tx ? `<a href="${n.tx}" target="_blank" rel="noopener" title="Settled onchain">tx</a>` : ""}<time>${ago(n.t)}</time></li>`)
