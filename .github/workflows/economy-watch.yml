@@ -22,9 +22,14 @@ jobs:
       - name: Read the watchdog
         id: read
         run: |
-          curl -fsS --retry 3 --max-time 30 "$URL/api/health/economy" > report.json
-          # Alerts always count; warnings only when they're about gas or money (not, say, a broke trader).
-          jq -r '[.checks[] | select(.level == "alert" or (.text | test("allowance|NEAR|funder|server"; "i")))] | .[] | "- **\(.level)** \(.subject): \(.text)"' report.json > findings.md
+          if ! curl -fsS --retry 3 --max-time 30 "$URL/api/health/economy" > report.json; then
+            echo "- **alert** demo: $URL didn't answer /api/health/economy" > findings.md
+          else
+            # A missing or stale report means the watchdog itself has stopped: that's an alert too.
+            jq -r 'if .level == "unknown" or ((now * 1000 - (.at // 0)) > 3600000) then "- **alert** watchdog: no fresh report (last: \(.at // "never"))" else empty end' report.json > findings.md
+            # Alerts always count; warnings only when they're about gas or money (not, say, a broke trader).
+            jq -r '[.checks[]? | select(.level == "alert" or (.text | test("allowance|NEAR|funder|server"; "i")))] | .[] | "- **\(.level)** \(.subject): \(.text)"' report.json >> findings.md
+          fi
           cat report.json; echo; cat findings.md
           echo "found=$( [ -s findings.md ] && echo 1 || echo 0 )" >> "$GITHUB_OUTPUT"
       - name: Open or update the issue
