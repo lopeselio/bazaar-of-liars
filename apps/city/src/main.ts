@@ -93,11 +93,13 @@ document.body.insertAdjacentHTML(
        </div>
      </section>
      <div class="bz-actions" id="bz-actions"></div>
+     <section id="bz-wire" class="bz-card" hidden>
+       <button id="bz-wire-toggle" type="button" aria-expanded="false" aria-controls="bz-news" title="What the agents are trading onchain">
+         <b>Canal St wire</b><span id="bz-wire-latest">agents trading onchain</span><i aria-hidden="true">▾</i>
+       </button>
+       <ol id="bz-news"></ol>
+     </section>
    </div>
-   <section id="bz-wire" class="bz-card" hidden>
-     <header><b>Canal St wire</b><span>agents trading onchain</span></header>
-     <ol id="bz-news"></ol>
-   </section>
    <div id="bz-tags"></div>
    <div id="bz-prompt" hidden><kbd>F</kbd><span id="bz-prompt-text"></span></div>
    <aside id="bz-panel" hidden>
@@ -252,7 +254,20 @@ const ago = (t: number) => {
   const s = Math.max(1, Math.round((Date.now() - t) / 1000));
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
 };
+/** The wire is a one-line ticker of the latest item until you open it; the choice is remembered. */
+function showWire(open: boolean) {
+  $("bz-wire").classList.toggle("open", open);
+  $("bz-wire-toggle").setAttribute("aria-expanded", String(open));
+}
+showWire(store.get("bazaar.city.wire") === "open");
+$("bz-wire-toggle").addEventListener("click", () => {
+  const open = !$("bz-wire").classList.contains("open");
+  showWire(open);
+  store.set("bazaar.city.wire", open ? "open" : "closed");
+});
 function renderNews(news: NewsItem[]) {
+  const top = news[0];
+  $("bz-wire-latest").innerHTML = top ? `<i>${KIND_ICON[top.kind] ?? "•"}</i> ${esc(top.text)} <time>${ago(top.t)}</time>` : "Quiet on the street";
   $("bz-news").innerHTML = news
     .slice(0, 6)
     .map((n) => `<li class="k-${n.kind}"><i>${KIND_ICON[n.kind] ?? "•"}</i><span>${esc(n.text)}</span>${n.tx ? `<a href="${n.tx}" target="_blank" rel="noopener" title="Settled onchain">tx</a>` : ""}<time>${ago(n.t)}</time></li>`)
