@@ -235,4 +235,10 @@ export function initGuide(hud: HTMLElement) {
   host.className = "bz-guide-host";
   hud.appendChild(host);
   mountGuide(host, cfg);
+  // The original desert bazaar is still there (the root only sends WebGPU browsers here).
+  const classic = document.createElement("a");
+  classic.className = "bz-card bz-classic";
+  classic.href = "/?classic";
+  classic.textContent = "🏜️ Desert bazaar";
+  hud.appendChild(classic);
 }

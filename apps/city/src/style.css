@@ -1736,3 +1736,16 @@ button.bz-link { background: none; border: 0; padding: 0; color: inherit; text-d
 .bz-help:hover {
   border-color: var(--bz-gold);
 }
+/* Link back to the original desert bazaar. */
+.bz-classic {
+  pointer-events: auto;
+  display: block;
+  color: var(--bz-ink);
+  font: 500 12px var(--bz-font);
+  text-decoration: none;
+  opacity: 0.8;
+}
+.bz-classic:hover {
+  opacity: 1;
+  border-color: var(--bz-gold);
+}
