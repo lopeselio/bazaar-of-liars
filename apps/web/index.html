@@ -6,6 +6,11 @@
     <title>Bazaar of Liars</title>
     <meta name="description" content="Haggle with AI merchants who bluff. Every bluff is provably fair: secrets sealed on NEAR, every word signed in a TEE." />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='28' fill='%23e8a33d'/><text x='32' y='42' font-size='30' text-anchor='middle' font-family='Georgia' fill='%231a120d'>B</text></svg>" />
+    <script>
+      // Canal Street (/city/) is the main game. Send the bare root there when the browser can run it
+      // (WebGPU); deep links (?…), /?classic and browsers without WebGPU keep the desert bazaar.
+      if ('%MODE%' === 'production' && location.pathname === '/' && !location.search && 'gpu' in navigator) location.replace('/city/' + location.hash);
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -20,6 +25,7 @@
         <p>Every bluff is provably fair</p>
       </div>
       <div class="hud-right">
+        <a class="chip" href="/city/" title="The same game in a walkable New York (needs WebGPU)">Canal Street →</a>
         <button class="chip" id="how" type="button">How it's fair</button>
         <button class="chip" id="traders" type="button">Top traders</button>
         <div class="chip day" id="day" title="Each market day has a few haggles before sundown"></div>
