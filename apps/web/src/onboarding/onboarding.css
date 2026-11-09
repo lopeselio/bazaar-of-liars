@@ -1,0 +1,385 @@
+/* Onboarding: first-run welcome, coach-mark walkthrough and the help sheet. Shared by the bazaar
+   (apps/web) and Canal Street (apps/city); each theme maps onto that app's own palette. */
+.ob-web {
+  --ob-bg: rgba(22, 15, 11, 0.94);
+  --ob-ink: #f4e6cc;
+  --ob-dim: #c9b693;
+  --ob-accent: #e8a33d;
+  --ob-accent-hover: #f2b453;
+  --ob-on-accent: #1a120d;
+  --ob-line: rgba(244, 230, 204, 0.14);
+  --ob-display: "Fraunces", Georgia, serif;
+  --ob-font: "Inter", system-ui, sans-serif;
+  --ob-radius: 20px;
+}
+.ob-city {
+  --ob-bg: rgba(24, 14, 10, 0.94);
+  --ob-ink: #fff6e6;
+  --ob-dim: #d9c7a8;
+  --ob-accent: #ffc45c;
+  --ob-accent-hover: #ffd27f;
+  --ob-on-accent: #1a120d;
+  --ob-line: rgba(255, 196, 92, 0.35);
+  --ob-display: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  --ob-font: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  --ob-radius: 18px;
+}
+.ob,
+.ob * {
+  box-sizing: border-box;
+}
+.ob {
+  color: var(--ob-ink);
+  font: 15px/1.5 var(--ob-font);
+}
+.ob kbd {
+  display: inline-block;
+  min-width: 1.7em;
+  padding: 1px 6px;
+  border: 1px solid var(--ob-line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  font: 600 12px/1.5 var(--ob-font);
+  text-align: center;
+  color: var(--ob-ink);
+}
+.ob-eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ob-accent);
+}
+.ob h2,
+.ob h3 {
+  font-family: var(--ob-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 4px 0 10px;
+  color: var(--ob-ink);
+}
+.ob-body p {
+  margin: 0 0 8px;
+}
+.ob-body ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+.ob-body li::marker {
+  color: var(--ob-accent);
+}
+.ob-body b,
+.ob-rules b {
+  color: var(--ob-accent);
+  font-weight: 600;
+}
+
+/* Buttons */
+.ob-btn {
+  font: 600 14px var(--ob-font);
+  color: var(--ob-ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--ob-line);
+  border-radius: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.ob-btn:hover {
+  border-color: var(--ob-accent);
+}
+.ob-btn:active {
+  transform: translateY(1px);
+}
+.ob-btn.primary {
+  background: var(--ob-accent);
+  border-color: var(--ob-accent);
+  color: var(--ob-on-accent);
+}
+.ob-btn.primary:hover {
+  background: var(--ob-accent-hover);
+}
+.ob-link,
+.ob-skip,
+.ob-x {
+  font: 500 13px var(--ob-font);
+  color: var(--ob-dim);
+  background: none;
+  border: 0;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+.ob-link:hover,
+.ob-skip:hover,
+.ob-x:hover {
+  color: var(--ob-ink);
+}
+.ob :focus-visible {
+  outline: 2px solid var(--ob-accent);
+  outline-offset: 2px;
+}
+.ob-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ob-pair {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Modal shell (welcome and help) */
+.ob-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: radial-gradient(ellipse at center, rgba(20, 13, 10, 0.5), rgba(20, 13, 10, 0.85));
+  animation: ob-fade 0.3s ease;
+}
+.ob-dialog {
+  position: relative;
+  width: min(480px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 28px;
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-line);
+  border-radius: var(--ob-radius);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+/* Welcome */
+.ob-skip {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+}
+.ob-slide {
+  min-height: 250px;
+  animation: ob-in 0.35s ease;
+}
+.ob-art {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 14px;
+}
+.ob-welcome h2 {
+  font-size: 30px;
+  line-height: 1.1;
+}
+.ob-welcome .ob-body {
+  color: var(--ob-dim);
+}
+.ob-welcome .ob-body strong {
+  color: var(--ob-ink);
+}
+.ob-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 18px 0 16px;
+}
+.ob-dots button {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 999px;
+  border: 0;
+  background: var(--ob-line);
+  cursor: pointer;
+  transition: width 0.2s, background 0.2s;
+}
+.ob-dots button.on {
+  width: 22px;
+  background: var(--ob-accent);
+}
+.ob-keys {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ob-dim);
+}
+
+/* Walkthrough */
+.ob-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  pointer-events: none;
+}
+.ob-spot {
+  position: fixed;
+  border-radius: 12px;
+  border: 2px solid var(--ob-accent);
+  box-shadow: 0 0 0 9999px rgba(10, 6, 4, 0.45), 0 0 24px rgba(232, 163, 61, 0.55);
+  transition: left 0.18s ease, top 0.18s ease, width 0.18s ease, height 0.18s ease;
+  animation: ob-pulse 1.8s ease-in-out infinite;
+}
+.ob-coach {
+  position: fixed;
+  width: min(340px, calc(100vw - 24px));
+  padding: 16px 18px 14px;
+  background: var(--ob-bg);
+  border: 1px solid var(--ob-accent);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  animation: ob-in 0.25s ease;
+}
+.ob-coach h3 {
+  font-size: 19px;
+  margin: 4px 0 6px;
+}
+.ob-coach .ob-body {
+  font-size: 14px;
+  color: var(--ob-dim);
+}
+.ob-try {
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(255, 196, 92, 0.1);
+  font-size: 13px;
+  color: var(--ob-ink);
+}
+.ob-try::before {
+  content: "Try it · ";
+  color: var(--ob-accent);
+  font-weight: 600;
+}
+.ob-coach .ob-actions {
+  margin-top: 12px;
+}
+.ob-coach .ob-btn {
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+/* Help sheet */
+.ob-help {
+  width: min(720px, 100%);
+}
+.ob-help-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.ob-help-head h2 {
+  font-size: 26px;
+}
+.ob-x {
+  font-size: 18px;
+  padding: 4px 8px;
+}
+.ob-help-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+  margin: 8px 0 20px;
+}
+.ob-help h4 {
+  margin: 0 0 10px;
+  font: 600 12px var(--ob-font);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ob-dim);
+}
+.ob-controls {
+  margin: 0;
+  display: grid;
+  gap: 7px;
+}
+.ob-controls div {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+.ob-controls dt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.ob-controls dd {
+  margin: 0;
+  font-size: 14px;
+}
+.ob-rules {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+.ob-rules li::marker {
+  color: var(--ob-accent);
+}
+
+/* The always-visible "How to play" button (each app adds its own chip/card class) */
+.ob-open {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+@keyframes ob-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes ob-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes ob-pulse {
+  50% {
+    border-color: var(--ob-accent-hover);
+    box-shadow: 0 0 0 9999px rgba(10, 6, 4, 0.45), 0 0 34px rgba(232, 163, 61, 0.8);
+  }
+}
+
+@media (max-width: 640px) {
+  .ob-dialog {
+    padding: 22px 18px;
+  }
+  .ob-welcome h2 {
+    font-size: 25px;
+  }
+  .ob-slide {
+    min-height: 0;
+  }
+  .ob-help-grid {
+    grid-template-columns: 1fr;
+  }
+  .ob-controls div {
+    grid-template-columns: 96px 1fr;
+  }
+  .ob-actions .ob-btn {
+    flex: 1;
+  }
+  .ob-pair {
+    flex: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-backdrop,
+  .ob-slide,
+  .ob-coach,
+  .ob-spot {
+    animation: none;
+    transition: none;
+  }
+}
