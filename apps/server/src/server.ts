@@ -1202,7 +1202,8 @@ createServer(async (req, res) => {
     // Liveness for the deploy script and probes: the process answers and its state store responds.
     if (req.method === "GET" && url === "/api/health") {
       const t0 = Date.now();
-      const storeOk = await store.getJSON("health:ping").then(() => true, () => false);
+      // Redis queues commands while disconnected: bound the wait so an outage answers 503, not a hang.
+      const storeOk = await Promise.race([store.getJSON("health:ping").then(() => true, () => false), new Promise<boolean>((r) => setTimeout(() => r(false), 2000))]);
       return send(res, storeOk ? 200 : 503, { ok: storeOk, version: process.env.APP_VERSION ?? "dev", store: store.kind, storeMs: Date.now() - t0, onchain: !!ledger, agents: !!market });
     }
     if (req.method === "GET" && url === "/api/health/economy") {
