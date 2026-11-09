@@ -19,6 +19,8 @@ export interface WatchdogDeps {
 }
 
 const REPORT_KEY = "watchdog:report";
+/** Allowance baselines outlive the report (burn rates need days of history). */
+const SEEN_KEY = "watchdog:allowance";
 
 export async function lastReport(store: Store): Promise<(WatchdogReport & { toppedUp?: { account: string; amount: number; tx: string }[] }) | null> {
   return store.getJSON(REPORT_KEY);
@@ -39,7 +41,9 @@ export async function runWatchdog(d: WatchdogDeps): Promise<WatchdogReport> {
     funderBalance: funder ? funder.balance : null,
     brokeSince: prev?.brokeSince ?? {},
     activity,
+    allowanceSeen: (await d.store.getJSON(SEEN_KEY)) ?? {},
   });
+  await d.store.putJSON(SEEN_KEY, report.allowanceSeen, 30 * 86_400_000);
   const toppedUp: { account: string; amount: number; tx: string }[] = [];
   for (const t of report.topUps) {
     try {
