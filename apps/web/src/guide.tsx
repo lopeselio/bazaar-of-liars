@@ -39,8 +39,8 @@ const steps = (): TourStep[] => [
     title: "Their price, and their secret",
     body: (
       <p>
-        This is what they're asking. Their real limit was <b>sealed on NEAR</b> before they spoke, so it can't change. Watch their hands in the scene: fidgeting means they're
-        close to it, a firm stance means they mean it.
+        This is what they're asking. Their real limit was <b>sealed on NEAR</b> before they spoke, so it can't change. Watch their hands in the scene: a firm stance means you're
+        close to their limit, fidgeting means they need the sale, losing patience means they may walk.
       </p>
     ),
     when: haggling,
@@ -48,7 +48,7 @@ const steps = (): TourStep[] => [
   {
     target: "#p-input",
     title: "Make an offer",
-    body: <p>Type a price, or talk them down in plain words: point out a flaw, mention a cheaper stall.</p>,
+    body: <p>Name a price, in numbers or plain words. A flaw or a cheaper stall's price backs it up, but talk with no number never moves them.</p>,
     tryIt: "Type “I'll give you 20” and press Say.",
     when: haggling,
     done: saidSomething(),
@@ -58,7 +58,7 @@ const steps = (): TourStep[] => [
     title: "Call the bluff, or close the deal",
     body: (
       <p>
-        When they swear “not below 30”, <b>Call the bluff</b> appears. Catch a liar and the price collapses; accuse an honest merchant and the price goes up and becomes final.{" "}
+        When they swear “not below 30”, <b>Call the bluff</b> appears. Catch a liar and the price collapses; accuse an honest merchant and the price goes up and becomes final, or they walk away.{" "}
         <b>Take it</b> accepts their price; <b>Walk away</b> ends the haggle.
       </p>
     ),
@@ -116,13 +116,13 @@ const cfg: GuideConfig = {
       body: (
         <ul>
           <li>
-            <strong>Offer</strong> a price, or talk them down in plain words.
+            <strong>Name a price.</strong> A flaw or a cheaper stall backs it up; talk with no number never moves them.
           </li>
           <li>
-            <strong>Read the tells.</strong> Each merchant fidgets in their own way when you're close to their limit.
+            <strong>Read the tells.</strong> A merchant who looks firm is close to their limit; one who fidgets needs the sale.
           </li>
           <li>
-            <strong>Call the bluff</strong> when they swear “I can't go lower”. Right, and the price collapses. Wrong, and it goes up.
+            <strong>Call the bluff</strong> when they swear “I can't go lower”. Right, and the price collapses. Wrong, and it goes up, or they walk.
           </li>
           <li>
             <strong>Take the deal</strong>, then see their real limit and every lie they told.
@@ -167,7 +167,7 @@ const cfg: GuideConfig = {
     title: "The bazaar",
     controls: [
       [["Click"], "a merchant's tag to walk up to the stall"],
-      [["Type", "Enter"], "make an offer or say anything"],
+      [["Type", "Enter"], "name a price (talk alone never moves it)"],
       [["Take it"], "accept the price on the table"],
       [["Call"], "call the bluff when they claim a limit"],
       [["Walk"], "walk away (Esc closes panels)"],
@@ -184,7 +184,7 @@ const cfg: GuideConfig = {
         <b>Catch a bluff</b> and the price drops toward their real limit. <b>Accuse an honest merchant</b> and they raise the price and make it final, or walk.
       </>,
       <>
-        Tells leak how close they are to their limit. A merchant telling the truth looks firm.
+        Tells leak how close they are to their limit: firm means close, fidgeting means they need the sale, losing patience means they may walk.
       </>,
       <>
         Six haggles per market day; your coins, goods and each merchant's memory of you live in the contract.

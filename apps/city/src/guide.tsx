@@ -36,7 +36,7 @@ const steps = (): TourStep[] => [
     body: (
       <p>
         Each merchant is an AI agent with its own NEAR account. Choose buy or sell, then offer with the quick buttons or type. When they swear a limit, <b>Call the bluff</b>{" "}
-        appears: catch a liar and the price collapses. <kbd>Esc</kbd> leaves.
+        appears: catch a liar and the price collapses; accuse an honest one and it rises, or they walk. <kbd>Esc</kbd> leaves.
       </p>
     ),
     when: () => open("bz-panel"),
@@ -54,7 +54,7 @@ const steps = (): TourStep[] => [
   {
     target: "#bz-cred",
     title: "Street cred",
-    body: <p>Every deal and delivery earns XP, kept onchain; catching a bluff earns more. Levels unlock express jobs and, at level 3, a stall of your own. Click it to see what's next.</p>,
+    body: <p>Every deal and delivery earns XP, kept onchain; catching a bluff earns extra. Levels unlock express jobs and, at level 3, a stall of your own. Click it to see what's next.</p>,
   },
   {
     target: "#bz-jobs-btn",
@@ -135,13 +135,13 @@ const cfg: GuideConfig = {
       body: (
         <ul>
           <li>
-            <strong>Offer</strong> with the quick buttons, or type in plain words.
+            <strong>Name a price</strong> with the quick buttons or by typing. A flaw or a cheaper stall backs it up; talk with no number never moves them.
           </li>
           <li>
-            <strong>Read the tells</strong>: a merchant fidgets when you're close to their limit.
+            <strong>Read the tells</strong>: a merchant who looks firm is close to their limit; one who fidgets needs the sale.
           </li>
           <li>
-            <strong>Call the bluff</strong> when they swear “not below 30”. Right, the price collapses. Wrong, it goes up.
+            <strong>Call the bluff</strong> when they swear “not below 30”. Right, the price collapses. Wrong, it goes up, or they walk.
           </li>
           <li>
             <strong>Take the deal</strong> and see their real limit revealed.
@@ -200,7 +200,7 @@ const cfg: GuideConfig = {
         Each merchant's <b>secret limit</b> is sealed on NEAR first; a rules engine, not the AI, decides prices.
       </>,
       <>
-        <b>Catch a bluff</b> and the price drops; accuse an honest merchant and it rises and becomes final.
+        <b>Catch a bluff</b> and the price drops; accuse an honest merchant and it rises and becomes final, or they walk away.
       </>,
       <>
         A few haggles per market day. Merchants remember lowballs and loyal customers.
@@ -215,7 +215,7 @@ const cfg: GuideConfig = {
         Broke (under 20 coins)? Auntie Wu pays 40 for dock work at Pier 34, once a day.
       </>,
       <>
-        During an <b>inspector raid</b>, carrying more than 5 of a good onto Canal Street without a licence gets it seized.
+        During an <b>inspector raid</b>, haggle on Canal Street without a licence and the inspectors seize anything above 5 of each good.
       </>,
     ],
   },
