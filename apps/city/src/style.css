@@ -619,8 +619,19 @@ button:disabled {
     height: 60vh;
     width: auto;
   }
+}
+/* Follow the city's own breakpoints: below 820px its brand drops under the toolbar and the minimap
+   shrinks; below 620px the minimap is gone. */
+@media (max-width: 820px) {
   #bz-hud {
-    top: 56px;
+    --bz-hud-top: 128px;
+    --bz-hud-reserve: 214px;
+    left: 12px;
+  }
+}
+@media (max-width: 620px) {
+  #bz-hud {
+    --bz-hud-reserve: 64px;
   }
 }
 
