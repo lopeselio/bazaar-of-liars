@@ -12,7 +12,7 @@ az containerapp update -g "$RG" -n "$APP" --image "$ACR.azurecr.io/bazaar-liars:
 URL="https://$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 # Wait until the new image answers /api/health (old replicas keep serving until then).
 for i in $(seq 1 40); do
-  if curl -fsS --max-time 10 "$URL/api/health" 2>/dev/null | grep -q "\"version\":\"$TAG\""; then echo "$URL/ is live on $TAG"; exit 0; fi
+  if curl -fsS --max-time 10 "$URL/api/health" 2>/dev/null | grep -qF "\"version\":\"$TAG\""; then echo "$URL/ is live on $TAG"; exit 0; fi
   sleep 6
 done
 echo "the new revision didn't report $TAG on /api/health within 4 minutes; check: az containerapp logs show -g $RG -n $APP" >&2
