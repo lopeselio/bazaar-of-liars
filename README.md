@@ -112,6 +112,8 @@ sequenceDiagram
 
 To run it yourself you need Node 22 or later, pnpm, and a NEAR AI Cloud key in `.env`. Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173.
 
+**New here?** On your first visit a short welcome opens: four cards (the pitch, how a haggle works, the market, where to start) with **Skip**, **Next**, progress dots and the arrow, Enter and Esc keys. On the last card, **Show me around** starts a walkthrough that spotlights the real controls in turn (a stall's tag, Buy, the asking price, the offer box, **Call the bluff**, your purse, the market day) and moves on by itself when you do the thing it asks. Click **? How to play** in the top bar (or press **?**) at any time for the controls, the key rules, **Replay the welcome** and **Start the walkthrough**. It's remembered in your browser; to see the welcome again, clear `bazaar.guide.web.welcome` from localStorage.
+
 1. Click **Tobin of the Lamps**, then **Buy the Brass Lamp**. The panel shows two steps: *Verifying the merchant's AI enclave (Intel TDX + NVIDIA)*, then *Sealing the merchant's secret on NEAR*. Then you see his asking price and a **🔒 Secret sealed on NEAR** link to the commitment transaction.
 2. Type `This lamp has a dent. I'll give you 18`, then a few higher offers. He answers in character and counters. If he barely moves, a 💡 line under his reply says so and suggests what to try (it's worked out from what you can see, never from his secret). Watch his hands: polishing means he's at ease, pushing his spectacles up means he's nervous.
 3. When he claims a limit ("not below 28"), a **Call the bluff** button appears. Press it. If he was lying, you see *Caught!* and the price drops toward his real floor. If he was telling the truth, he's offended and names a higher final price.
@@ -126,6 +128,8 @@ For a production build, run `pnpm build && pnpm start`. The server serves the ga
 ### Canal Street
 
 The same game, set on Canal Street in a walkable New York, where every trader is an AI agent with its own NEAR wallet. Run `pnpm build`, then `pnpm start`, and open http://localhost:8787/city/ (or `/city/` on the hosted demo). It needs a WebGPU browser (recent Chrome, Edge or Safari).
+
+The first time the city loads you see Canal Street's own welcome, then (with **Show me around**) a walkthrough: press **W** to walk, find a stall and press **F**, then your purse, street cred, **J** for jobs, trade routes, the wire and sign-in. While a welcome or help card is open, the game ignores your keys. **? How to play** in the HUD (or **?**) reopens it all with every key (F, J, G, T, M, 1–4) and the rules.
 
 1. After the city loads (about 15 seconds) you stand on Canal Street in Chinatown. Each stall's tag shows how many it has left and the merchant's purse.
 2. Bottom left, the **Canal St wire** lists what the agents are doing on their own: rival traders Ivy and Rex buying and flipping goods, merchants restocking from Auntie Wu at the docks and paying Little Lo to haul it. Each line links to its transaction.
