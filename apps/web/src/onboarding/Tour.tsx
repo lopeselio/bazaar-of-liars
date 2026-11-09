@@ -13,6 +13,8 @@ export interface TourStep {
   done?: () => boolean;
   /** Key codes (KeyboardEvent.code) that also count as doing it. */
   keys?: string[];
+  /** Only shown while this holds (say, the haggle panel is open); otherwise skipped at once. */
+  when?: () => boolean;
 }
 
 type Box = { x: number; y: number; w: number; h: number };
@@ -68,6 +70,10 @@ export function Tour({ theme, steps, onDone }: { theme: string; steps: TourStep[
     let key = "";
     let advanced = false;
     const since = performance.now();
+    if (step.when && !step.when()) {
+      move(at.dir);
+      return;
+    }
     const tick = () => {
       // Going back, let the player reread a step even if they've already done it.
       if (at.dir > 0 && !advanced && step.done?.()) {
@@ -148,6 +154,8 @@ export function Tour({ theme, steps, onDone }: { theme: string; steps: TourStep[
   }, []);
 
   if (!step) return null;
+  // Waiting for the target to show up: no card yet, so it doesn't flash and then vanish.
+  if (step.target && !box) return null;
   const lastStep = at.i === steps.length - 1;
   return createPortal(
     <div className={`ob ob-${theme} ob-tour`}>
