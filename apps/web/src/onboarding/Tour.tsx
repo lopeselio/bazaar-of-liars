@@ -75,7 +75,13 @@ export function Tour({ theme, steps, onDone }: { theme: string; steps: TourStep[
       move(at.dir);
       return;
     }
+    let frame = 0;
     const tick = () => {
+      // Measuring every third frame is plenty to follow a moving tag.
+      if (frame++ % 3) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       // Going back, let the player reread a step even if they've already done it.
       if (at.dir > 0 && !advanced && step.done?.()) {
         advanced = true;
