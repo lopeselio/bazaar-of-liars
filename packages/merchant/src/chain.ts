@@ -464,8 +464,8 @@ export async function readDeedCertificate(network: Network, contractId: string, 
 const YOCTO = 1e24;
 
 /** NEAR an account holds and, for a function-call key, what's left of its gas allowance. */
-export async function readAccountGas(network: Network, account: string): Promise<{ balance: number; allowance: number | null }> {
-  const acct = await rpc<{ amount: string }>(network, "query", { request_type: "view_account", finality: "final", account_id: account });
+export async function readAccountGas(network: Network, account: string): Promise<{ balance: number; allowance: number | null; storageBytes: number }> {
+  const acct = await rpc<{ amount: string; storage_usage: number }>(network, "query", { request_type: "view_account", finality: "final", account_id: account });
   const keys = await rpc<{ keys: { access_key: { permission: "FullAccess" | { FunctionCall: { allowance: string | null } } } }[] }>(network, "query", {
     request_type: "view_access_key_list",
     finality: "final",
@@ -476,7 +476,7 @@ export async function readAccountGas(network: Network, account: string): Promise
     .map((k) => k.access_key.permission)
     .filter((p): p is { FunctionCall: { allowance: string | null } } => typeof p === "object" && p.FunctionCall?.allowance != null)
     .map((p) => Number(p.FunctionCall.allowance) / YOCTO);
-  return { balance: Number(acct.amount) / YOCTO, allowance: allowances.length ? Math.min(...allowances) : null };
+  return { balance: Number(acct.amount) / YOCTO, allowance: allowances.length ? Math.min(...allowances) : null, storageBytes: acct.storage_usage };
 }
 
 /** Send NEAR from an account whose key we hold (the watchdog's funder). Returns the tx hash. */
