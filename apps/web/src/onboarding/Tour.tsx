@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { holdFocus, noMouseFocus } from "./focus";
 import { typingIn } from "./storage";
 
 export interface TourStep {
@@ -107,6 +108,18 @@ export function Tour({ theme, steps, onDone }: { theme: string; steps: TourStep[
     return () => cancelAnimationFrame(raf);
   }, [at]);
 
+  // When the tour closes, don't leave its Next button focused (Space would press it again).
+  useEffect(() => holdFocus(), []);
+
+  // Esc ends the tour (the game still sees the key, e.g. to close a stall).
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape") doneRef.current();
+    };
+    addEventListener("keydown", h);
+    return () => removeEventListener("keydown", h);
+  }, []);
+
   // Pressing the step's key (F, J, WASD…) counts as doing it. The game still gets the key.
   useEffect(() => {
     if (!step?.keys?.length) return;
@@ -164,6 +177,7 @@ export function Tour({ theme, steps, onDone }: { theme: string; steps: TourStep[
         ref={cardRef}
         className="ob-coach"
         role="dialog"
+        aria-modal="false"
         aria-label={`Walkthrough, step ${at.i + 1} of ${steps.length}`}
         style={card ? { left: card.x, top: card.y } : { visibility: "hidden" }}
       >
@@ -176,16 +190,16 @@ export function Tour({ theme, steps, onDone }: { theme: string; steps: TourStep[
         </div>
         {step.tryIt && <p className="ob-try">{step.tryIt}</p>}
         <div className="ob-actions">
-          <button type="button" className="ob-link" onClick={() => doneRef.current()}>
+          <button type="button" className="ob-link" onMouseDown={noMouseFocus} onClick={() => doneRef.current()}>
             Skip tour
           </button>
           <span className="ob-pair">
             {at.i > 0 && (
-              <button type="button" className="ob-btn" onClick={() => move(-1)}>
+              <button type="button" className="ob-btn" onMouseDown={noMouseFocus} onClick={() => move(-1)}>
                 Back
               </button>
             )}
-            <button type="button" className="ob-btn primary" onClick={() => move(1)}>
+            <button type="button" className="ob-btn primary" onMouseDown={noMouseFocus} onClick={() => move(1)}>
               {lastStep ? "Done" : "Next"}
             </button>
           </span>
