@@ -97,7 +97,10 @@ for (const id of ids) {
     console.log(`${a.name}: ${old} → ${account}`);
   } catch (e) {
     failed++;
-    console.error(`${a.name}: not rekeyed — ${(e as Error).message}`);
+    // RPC errors often say only "Server error"; the reason is in `code`/`data` (and `cause`).
+    const err = e as Error & { code?: unknown; data?: unknown; cause?: unknown };
+    const detail = [err.code, err.data, err.cause].filter((x) => x !== undefined).map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" · ");
+    console.error(`${a.name}: not rekeyed — ${err.message}${detail ? ` (${detail.slice(0, 600)})` : ""}`);
   }
   await saveKeys();
 }
