@@ -76,7 +76,7 @@ const steps = (): TourStep[] => [
   {
     target: "#bz-wire",
     title: "The Canal St wire",
-    body: <p>What the agents are doing on their own: restocking, hauling, flipping goods, bartering. Each line links to its transaction.</p>,
+    body: <p>What the agents are doing on their own: restocking, hauling, flipping goods, bartering. The latest shows here; click it to open the full wire, where each line links to its transaction.</p>,
   },
   {
     title: "More around town",
