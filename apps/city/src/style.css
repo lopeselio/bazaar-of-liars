@@ -634,6 +634,11 @@ button:disabled {
     --bz-hud-reserve: 64px;
   }
 }
+/* Touch screens: the on-screen joystick sits bottom-left (vendor #touch-controls, ~136px tall above
+   a 72px edge), so the column stops above it and the open wire scrolls instead of covering it. */
+body.touch-enabled #bz-hud {
+  --bz-hud-reserve: 240px;
+}
 
 #bz-hud[hidden],
 #bz-link[hidden],
