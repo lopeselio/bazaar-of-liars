@@ -108,7 +108,7 @@ sequenceDiagram
 
 ## Play it
 
-**Hosted demo: https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/** (testnet, no wallet needed). Open it and you should see a desert bazaar at dusk with three stalls. A merchant's reply usually takes 1–6 seconds while the TEE model answers (up to 40 when NEAR AI is busy).
+**Hosted demo: https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/** (testnet, no wallet needed). In a WebGPU browser (recent Chrome, Edge or Safari) the root opens **Canal Street**, the walkable New York version (see [Canal Street](#canal-street)). The steps below are for the original desert bazaar: open **[`/?classic`](https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/?classic)** (browsers without WebGPU get it at the root anyway) and you should see a desert bazaar at dusk with three stalls. Each version links to the other: **Canal Street →** in the desert's top bar, **🏜️ Desert bazaar** in the city's HUD. A merchant's reply usually takes 1–6 seconds while the TEE model answers (up to 40 when NEAR AI is busy).
 
 To run it yourself you need Node 22 or later, pnpm, and a NEAR AI Cloud key in `.env`. Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173.
 
@@ -127,7 +127,7 @@ For a production build, run `pnpm build && pnpm start`. The server serves the ga
 
 ### Canal Street
 
-The same game, set on Canal Street in a walkable New York, where every trader is an AI agent with its own NEAR wallet. Run `pnpm build`, then `pnpm start`, and open http://localhost:8787/city/ (or `/city/` on the hosted demo). It needs a WebGPU browser (recent Chrome, Edge or Safari).
+The same game, set on Canal Street in a walkable New York, where every trader is an AI agent with its own NEAR wallet. Run `pnpm build`, then `pnpm start`, and open http://localhost:8787/ (it goes to `/city/`), or just open the hosted demo's root. It needs a WebGPU browser (recent Chrome, Edge or Safari).
 
 The first time the city loads you see Canal Street's own welcome, then (with **Show me around**) a walkthrough: press **W** to walk, find a stall and press **F**, then your purse, street cred, **J** for jobs, trade routes, the wire and sign-in. While a welcome or help card is open, the game ignores your keys. **? How to play** in the HUD (or **?**) reopens it all with every key (F, J, G, T, M, 1–4) and the rules.
 
