@@ -6,6 +6,8 @@ export interface Help {
   /** [keys or gestures, what they do] */
   controls: [string[], string][];
   rules: ReactNode[];
+  /** The other way to play (desert ↔ city), shown under the rules. */
+  elsewhere?: { href: string; label: string; note: string };
 }
 
 /** The in-game help sheet: controls and the rules that matter, plus a way back into the guide. */
@@ -56,6 +58,11 @@ export function HelpSheet({ theme, help, onClose, onWelcome, onTour }: { theme: 
           </ul>
         </section>
       </div>
+      {help.elsewhere && (
+        <p className="ob-elsewhere">
+          <a href={help.elsewhere.href}>{help.elsewhere.label}</a> {help.elsewhere.note}
+        </p>
+      )}
       <div className="ob-actions">
         <button type="button" className="ob-btn" onClick={onWelcome}>
           Replay the welcome
