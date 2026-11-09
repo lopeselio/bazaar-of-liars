@@ -101,6 +101,13 @@ h2 {
   gap: 10px;
   align-items: center;
 }
+/* The "How to play" chip (./guide.tsx) sits in the bar as if it were written here. */
+.guide-host {
+  display: contents;
+}
+.guide-chip b {
+  color: var(--saffron);
+}
 .purse {
   display: flex;
   align-items: center;
@@ -854,7 +861,8 @@ details summary {
   }
   .brand p,
   #how,
-  .goods {
+  .goods,
+  .guide-word {
     display: none;
   }
   .panel {

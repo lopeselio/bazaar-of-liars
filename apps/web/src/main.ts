@@ -1,6 +1,7 @@
 import "./style.css";
 import { Bazaar, type StallLook } from "./scene";
 import { mountSelfCheck } from "./proof/mountSelfCheck";
+import { initGuide } from "./guide";
 import { api, type Check, type Day, type Ending, type MerchantInfo, type Opened, type PlayerView, type Side, type Tell, type TurnOut } from "./api";
 
 // ---------- looks (original designs, one per merchant) ----------
@@ -555,6 +556,7 @@ addEventListener("keydown", (e) => {
 // ---------- boot ----------
 
 async function boot() {
+  initGuide();
   try {
     merchants = (await api.merchants()).merchants;
   } catch {
@@ -579,7 +581,6 @@ async function boot() {
       if (p) el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
     }
   };
-  if (!store.get("bazaar.seenIntro")) $("intro").hidden = false;
   await refreshPurse();
   if (day && day.left <= 0) void sundown();
 }
