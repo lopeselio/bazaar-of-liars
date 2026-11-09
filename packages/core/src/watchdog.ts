@@ -61,6 +61,8 @@ export interface WatchdogReport {
 export const KEEP_UNTIL = Date.UTC(2026, 10, 26);
 /** Burn rates need this much history to be worth projecting. */
 export const MIN_RATE_WINDOW_MS = 6 * 3_600_000;
+/** …and are measured over at most this much (the baseline then moves forward). */
+export const RATE_WINDOW_MAX_MS = 3 * 86_400_000;
 /** Warn when a key is projected to run out before KEEP_UNTIL; alert inside this much notice. */
 export const RUNOUT_ALERT_MS = 2 * 86_400_000;
 
@@ -87,7 +89,8 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
   const checks: Check[] = [];
   const topUps: { account: string; amount: number }[] = [];
   const brokeSince: Record<string, number> = {};
-  const allowanceSeen: Record<string, AllowanceMark> = {};
+  // Keep baselines for agents not measured this run (null allowance, low-allowance branch, a missing read).
+  const allowanceSeen: Record<string, AllowanceMark> = { ...(i.allowanceSeen ?? {}) };
   const runsOut: Record<string, string> = {};
   const keepUntil = i.keepUntil ?? KEEP_UNTIL;
   let funds = i.funderBalance ?? 0;
@@ -109,12 +112,14 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
       // Project from the burn rate since the key was first measured: a busy agent can be far from the
       // fixed floor yet still run dry before judging ends.
       const seen = i.allowanceSeen?.[a.id];
-      const mark = seen && seen.account === a.account && seen.allowance >= a.allowance ? seen : { account: a.account, at: i.now, allowance: a.allowance };
-      allowanceSeen[a.id] = mark;
+      let mark = seen && seen.account === a.account && seen.allowance >= a.allowance ? seen : { account: a.account, at: i.now, allowance: a.allowance };
       const elapsed = i.now - mark.at;
       const burnt = mark.allowance - a.allowance;
-      if (elapsed >= MIN_RATE_WINDOW_MS && burnt > 0) {
-        const at = i.now + (a.allowance / burnt) * elapsed;
+      // Roll the window forward every few days so a burn rate that changes shows up within days.
+      if (elapsed > RATE_WINDOW_MAX_MS) mark = { account: a.account, at: i.now, allowance: a.allowance };
+      allowanceSeen[a.id] = mark;
+      const at = burnt > 1e-6 ? i.now + (a.allowance / burnt) * elapsed : Infinity;
+      if (elapsed >= MIN_RATE_WINDOW_MS && Number.isFinite(at) && at < 8.64e15) {
         runsOut[a.id] = new Date(at).toISOString().slice(0, 10);
         if (at < keepUntil) {
           checks.push({ level: at - i.now < RUNOUT_ALERT_MS ? "alert" : "warn", subject: a.id, text: `key allowance (${a.allowance.toFixed(3)} NEAR, ~${((burnt / elapsed) * 86_400_000).toFixed(3)}/day) runs out around ${runsOut[a.id]}, before judging ends: run rekey:agents ${a.id}` });

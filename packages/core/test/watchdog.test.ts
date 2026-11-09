@@ -95,5 +95,21 @@ describe("economy watchdog", () => {
       expect(r.allowanceSeen.vesey).toEqual({ account: "vesey-3.v3.x.testnet", at: now, allowance: 5 });
       expect(r.checks).toEqual([]);
     });
+    it("review: float-noise burn never crashes the run (no Invalid time value)", () => {
+      const seen = { farrukh: { account: "farrukh.v3.x.testnet", at: now - 7 * H, allowance: 0.5 + 1e-15 } };
+      expect(() => assessEconomy(base({ keepUntil, allowanceSeen: seen, agents: [agent({ allowance: 0.5 })] }))).not.toThrow();
+      const tiny = { farrukh: { account: "farrukh.v3.x.testnet", at: now - 7 * H, allowance: 0.5 + 1e-9 } };
+      expect(assessEconomy(base({ keepUntil, allowanceSeen: tiny, agents: [agent({ allowance: 0.5 })] })).runsOut.farrukh).toBeUndefined();
+    });
+    it("review: keeps baselines for agents not measured this run", () => {
+      const seen = { rex: { account: "rex.v3.x.testnet", at: now - D, allowance: 0.1 } };
+      const r = assessEconomy(base({ keepUntil, allowanceSeen: seen, agents: [agent({ allowance: null })] }));
+      expect(r.allowanceSeen.rex).toEqual(seen.rex);
+    });
+    it("review: the rate window rolls forward after a few days", () => {
+      const seen = { farrukh: { account: "farrukh.v3.x.testnet", at: now - 4 * D, allowance: 0.5 } };
+      const r = assessEconomy(base({ keepUntil, allowanceSeen: seen, agents: [agent({ allowance: 0.49 })] }));
+      expect(r.allowanceSeen.farrukh).toEqual({ account: "farrukh.v3.x.testnet", at: now, allowance: 0.49 });
+    });
   });
 });
