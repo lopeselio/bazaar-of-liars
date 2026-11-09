@@ -9,7 +9,9 @@
     <script>
       // Canal Street (/city/) is the main game. Send the bare root there when the browser can run it
       // (WebGPU); deep links (?…), /?classic and browsers without WebGPU keep the desert bazaar.
-      if ('%MODE%' === 'production' && location.pathname === '/' && !location.search && 'gpu' in navigator) location.replace('/city/' + location.hash);
+      // A browser can expose navigator.gpu yet have no usable adapter (headless, blocklisted GPU): ask for one.
+      if ('%MODE%' === 'production' && location.pathname === '/' && !location.search && navigator.gpu)
+        navigator.gpu.requestAdapter().then((a) => { if (a) location.replace('/city/' + location.hash); }, () => {});
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
