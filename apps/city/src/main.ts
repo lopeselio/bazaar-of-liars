@@ -260,10 +260,12 @@ function showWire(open: boolean) {
   $("bz-wire-toggle").setAttribute("aria-expanded", String(open));
 }
 showWire(store.get("bazaar.city.wire") === "open");
-$("bz-wire-toggle").addEventListener("click", () => {
+$("bz-wire-toggle").addEventListener("click", (e) => {
   const open = !$("bz-wire").classList.contains("open");
   showWire(open);
   store.set("bazaar.city.wire", open ? "open" : "closed");
+  // Don't keep focus: Space is "up" in the helicopter, and a focused button would toggle the wire.
+  (e.currentTarget as HTMLElement).blur();
 });
 function renderNews(news: NewsItem[]) {
   const top = news[0];
