@@ -152,6 +152,7 @@ const watchdogDeps = market && ledger
       store,
       network: ledger.network,
       serverId: process.env.SERVER_ACCOUNT_ID!,
+      contractId: ledger.contractId,
       funder: process.env.FUNDER_ACCOUNT_ID ? { account: process.env.FUNDER_ACCOUNT_ID, privateKey: process.env.FUNDER_PRIVATE_KEY || undefined } : null,
       agents: () => market.agents(0),
       news: () => market.news(25),
