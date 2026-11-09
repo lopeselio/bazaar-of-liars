@@ -18,6 +18,7 @@ import { initRumours } from "./rumours";
 import { initRoutes } from "./routes";
 import { initEvents } from "./events";
 import { currentPlayer, initLogin } from "./login";
+import { initGuide } from "./guide";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -235,6 +236,7 @@ async function refreshPurse(bump = false) {
 }
 $("bz-hud").hidden = false;
 initLogin({ hud: $("bz-hud"), guestId: GUEST, toast });
+initGuide($("bz-hud"));
 void refreshPurse();
 
 // ---------- the agent economy: purses, shelves and the street wire ----------
