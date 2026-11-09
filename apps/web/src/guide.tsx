@@ -165,6 +165,7 @@ const cfg: GuideConfig = {
   steps,
   help: {
     title: "The bazaar",
+    elsewhere: { href: "/city/", label: "🗽 Canal Street", note: "is the full game: the same merchants in a walkable New York, with delivery jobs, auctions, informants and a stall of your own (needs WebGPU)." },
     controls: [
       [["Click"], "a merchant's tag to walk up to the stall"],
       [["Type", "Enter"], "name a price (talk alone never moves it)"],
