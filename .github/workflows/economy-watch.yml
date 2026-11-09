@@ -1,0 +1,50 @@
+name: economy-watch
+# Every 3 hours: does the hosted demo's economy watchdog see anything that will stop the game during
+# judging (an agent key's gas allowance running out, agents or the server low on NEAR)? If so, open an
+# issue labelled `economy` (or comment on the open one) so the owner hears about it.
+on:
+  schedule:
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: economy-watch
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      URL: ${{ vars.DEMO_URL || 'https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io' }}
+    steps:
+      - name: Read the watchdog
+        id: read
+        run: |
+          curl -fsS --retry 3 --max-time 30 "$URL/api/health/economy" > report.json
+          # Alerts always count; warnings only when they're about gas or money (not, say, a broke trader).
+          jq -r '[.checks[] | select(.level == "alert" or (.text | test("allowance|NEAR|funder|server"; "i")))] | .[] | "- **\(.level)** \(.subject): \(.text)"' report.json > findings.md
+          cat report.json; echo; cat findings.md
+          echo "found=$( [ -s findings.md ] && echo 1 || echo 0 )" >> "$GITHUB_OUTPUT"
+      - name: Open or update the issue
+        if: steps.read.outputs.found == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create economy --color d93f0b --description 'The hosted economy needs attention' 2>/dev/null || true
+          {
+            echo "Economy watchdog on $(date -u '+%Y-%m-%d %H:%M UTC') ([run]($RUN_URL), [report]($URL/api/health/economy)):"
+            echo
+            cat findings.md
+            echo
+            echo 'Allowance running out: `pnpm --filter @bazaar/merchant rekey:agents <id>` (REKEY_ALLOWANCE to size it), then update the `agent-keys` secret and restart. Low NEAR: top up the funder or server account.'
+          } > body.md
+          issue=$(gh issue list --label economy --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$issue" ]; then gh issue comment "$issue" --body-file body.md
+          else gh issue create --title 'Economy watchdog: the hosted demo needs attention' --label economy --body-file body.md; fi
+      - name: Fail the run so it shows red
+        if: steps.read.outputs.found == '1'
+        run: exit 1
