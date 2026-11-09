@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { holdFocus } from "./focus";
 
 /**
  * A modal on <body> (in the city, anything inside the HUD sits under the WebGPU canvas). While it
@@ -24,7 +25,7 @@ export function Modal({
   keyRef.current = onKey;
 
   useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
+    const release = holdFocus();
     const first = ref.current?.querySelector<HTMLElement>("[data-autofocus]") ?? ref.current?.querySelector<HTMLElement>("button");
     first?.focus();
     const h = (e: KeyboardEvent) => {
@@ -35,7 +36,11 @@ export function Modal({
         const f = [...box.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input, [tabindex]:not([tabindex='-1'])")];
         if (!f.length) return;
         const i = f.indexOf(document.activeElement as HTMLElement);
-        if (e.shiftKey && i <= 0) {
+        if (i < 0) {
+          // Focus somehow outside the dialog: bring it back in.
+          e.preventDefault();
+          (e.shiftKey ? f[f.length - 1] : f[0]).focus();
+        } else if (e.shiftKey && i === 0) {
           e.preventDefault();
           f[f.length - 1].focus();
         } else if (!e.shiftKey && i === f.length - 1) {
@@ -49,7 +54,7 @@ export function Modal({
     addEventListener("keydown", h, true);
     return () => {
       removeEventListener("keydown", h, true);
-      if (before && document.contains(before)) before.focus();
+      release();
     };
   }, []);
 
