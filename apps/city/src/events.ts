@@ -40,12 +40,29 @@ export function initEvents(d: EventDeps) {
     render();
   }
 
+  /**
+   * On a narrow screen the banner (centred at the top) wraps onto several lines over the HUD
+   * column's player card. Push the column down by just the overlap; nothing moves on a wide screen.
+   */
+  function makeRoom() {
+    const hud = document.getElementById("bz-hud");
+    if (!hud) return;
+    const el = $("bz-event");
+    hud.style.removeProperty("--bz-event-push");
+    if (el.hidden || hud.hidden) return;
+    const b = el.getBoundingClientRect();
+    const h = hud.getBoundingClientRect();
+    const push = b.left < h.right && b.right > h.left ? Math.ceil(b.bottom + 8 - h.top) : 0;
+    if (push > 0) hud.style.setProperty("--bz-event-push", `${push}px`);
+  }
+  addEventListener("resize", makeRoom);
+
   function render() {
     const el = $("bz-event");
     const e = view?.event;
     const on = !!view?.active && !!e && Date.now() < e.end_ms;
     el.hidden = !on;
-    if (!on || !e || !view) return;
+    if (!on || !e || !view) return makeRoom();
     el.className = `bz-ev-${e.kind}`;
     $("bz-event-title").textContent = view.headline ?? "";
     let sub = `${clock(e.end_ms - Date.now())} left`;
@@ -57,6 +74,7 @@ export function initEvents(d: EventDeps) {
       else sub += d.hasLicence() ? " · your stall licence covers you" : " · you're within the limit";
     }
     $("bz-event-sub").textContent = sub;
+    makeRoom();
   }
 
   void refresh();
