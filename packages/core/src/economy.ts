@@ -57,12 +57,15 @@ export const CUSTOMER_INCOME_PER_DAY = 400;
 // ---------- customers shopping at the bazaar ----------
 
 /**
- * Chance per market tick (40 s hosted) that one customer walks into the bazaar to buy something:
- * about 20 tries a day across all five. Each try costs the customer a signed `authorize_spend`
- * from its key's fixed gas allowance (~0.003 NEAR), on top of ~0.035 NEAR a day of order posting,
- * so this is sized for a 1 NEAR allowance to last the judging window.
+ * Chance per market tick (40 s hosted, one tick per interval across replicas) that one customer
+ * walks into the bazaar to buy something: about 43 tries a day across all five. Customer income is
+ * the street's only source of new coins, and walk-ins are how it reaches merchants with no player
+ * around; at 0.01 (about 20 a day) the customers sat on their income while merchants went broke
+ * (12 Nov 2026). Each try costs the customer a signed `authorize_spend` (~0.003 NEAR of its key's
+ * allowance), about 0.026 NEAR a day each on top of ~0.035 for orders: the smallest customer allowance
+ * (0.8 NEAR, 12 Nov) lasts the 13 days to the end of judging, and the watchdog projects each key's run-out from its real burn rate.
  */
-export const WALK_IN_CHANCE = 0.01;
+export const WALK_IN_CHANCE = 0.02;
 /** A customer won't walk in while it still holds this many unused goods. */
 export const CUSTOMER_HOLD_MAX = 2;
 

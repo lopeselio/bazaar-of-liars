@@ -157,10 +157,11 @@ describe("trade loop balance", () => {
 });
 
 describe("customers shop at the bazaar", () => {
-  it("walk-ins fit a 1 NEAR key allowance for 17 days", () => {
+  it("walk-ins fit the smallest customer key allowance (0.8 NEAR on 12 Nov) through judging (13 days)", () => {
     const perCustomerPerDay = (WALK_IN_CHANCE * (86_400 / 40)) / 5;
     const nearPerDay = 0.035 + perCustomerPerDay * 0.003;
-    expect(nearPerDay * 17).toBeLessThan(1);
+    expect(nearPerDay * 13).toBeLessThan(0.8);
+    expect(WALK_IN_CHANCE * (86_400 / 40)).toBeGreaterThan(40); // enough to move customer income to merchants
   });
   const rug = GOODS.rug;
   const rich = { coins: 300, held: 0, capLeft: 500 };
