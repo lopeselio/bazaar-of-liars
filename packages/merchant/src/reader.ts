@@ -3,7 +3,7 @@
  * runs unchanged in Node and in a browser. (chain.ts, which also signs, re-exports all of this.)
  */
 import type { MerchantSecret } from "@bazaar/core";
-import { archivalRpcUrls, installRpcFailover, primaryRpc, type Network } from "@bazaar/verify";
+import { archivalRpcUrls, installRpcFailover, primaryRpc, rpcRefusal, type Network } from "@bazaar/verify";
 
 // A busy RPC (HTTP 429) falls over to the next public endpoint: see packages/verify/src/rpc.ts.
 installRpcFailover();
@@ -65,7 +65,9 @@ async function rpcAt<T>(url: string, method: string, params: unknown): Promise<T
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: "bazaar", method, params }),
   });
-  const j = (await res.json().catch(() => ({}))) as { result?: T; error?: { message?: string; cause?: { name?: string } } };
+  const j = (await res.json().catch(() => ({}))) as { result?: T; error?: { code?: number; message?: string; cause?: { name?: string } } };
+  const refusal = rpcRefusal(res.status, j);
+  if (refusal) throw Object.assign(new Error(`${method}: ${refusal}`), { cause: "RPC_REFUSED" });
   if (!j.result) throw Object.assign(new Error(`${method}: ${j.error?.cause?.name ?? j.error?.message ?? res.status}`), { cause: j.error?.cause?.name });
   return j.result;
 }

@@ -8,7 +8,7 @@
  * the contract said it, and any EVM contract can check the same thing with `ecrecover`.
  */
 import { computeAddress, decodeBase58, toBeHex, verifyMessage } from "ethers";
-import { failover, rpcUrls, type Failover, type Network } from "./rpc.js";
+import { failover, rpcRefusal, rpcUrls, type Failover, type Network } from "./rpc.js";
 
 export const DEED_KEY_PATH = "bazaar-deeds";
 
@@ -66,7 +66,9 @@ async function view<T>(network: string, account: string, method: string, args: o
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "call_function", finality: "final", account_id: account, method_name: method, args_base64: btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(args)))) } }),
   });
-  const j = (await r.json()) as { result?: { result: number[] }; error?: unknown };
+  const j = (await r.json().catch(() => ({}))) as { result?: { result: number[] }; error?: { code?: number; message?: string } };
+  const refusal = rpcRefusal(r.status, j);
+  if (refusal) throw new Error(`couldn't read ${account}.${method}: ${refusal}`);
   if (!j.result) throw new Error(`${account}.${method}: ${JSON.stringify(j.error ?? j).slice(0, 200)}`);
   return JSON.parse(new TextDecoder().decode(Uint8Array.from(j.result.result))) as T;
 }
