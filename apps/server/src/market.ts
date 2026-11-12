@@ -61,6 +61,7 @@ import {
   advanceFor,
   repaymentFor,
   owedOn,
+  tradingFloat,
   WALKED_WAIT_MS,
 } from "@bazaar/core";
 import { barterSide, intentsHoldings, readIntentsIdentity, readIntentsVerifier, readSalt, simulateIntents, withdrawBack } from "@bazaar/merchant";
@@ -363,7 +364,10 @@ export class Market {
       const buyer = MERCHANTS.find((m) => m.buysGoodId === goodId)!;
       const b = agents.find((a) => a.id === buyer.id)!;
       if ((await this.store.count(`buys:${buyer.id}`)) >= BUYS_PER_WINDOW || (await this.walkedRecently(traderId, buyer.id))) return;
-      const p = rollBuySecret(this.rng, buyer, GOODS[goodId], { coins: b.coins, stock: b.stock[goodId], costBasis: 0 }, await this.memoryOf(traderId, buyer.id));
+      // A merchant buys from a trader only out of what it can spare: the coins for its next lot stay
+      // put. (Farrukh spent an advance on four lamps on 12 Nov and couldn't restock his rugs.)
+      const spare = Math.max(0, b.coins - tradingFloat({ kind: "merchant", goodId: buyer.goodId }));
+      const p = rollBuySecret(this.rng, buyer, GOODS[goodId], { coins: spare, stock: b.stock[goodId], costBasis: 0 }, await this.memoryOf(traderId, buyer.id));
       if (!p) return;
       const r = await this.agentHaggle({ agentId: traderId, seller: buyer, secret: p.secret, escrow: p.escrow, bot: "seller", authorize: 1 });
       if (r.price !== null) await this.store.bump(`buys:${buyer.id}`, BUY_WINDOW_MS);
@@ -538,6 +542,7 @@ export class Market {
     const s = seller && agents.find((a) => a.id === seller.id);
     const c = CUSTOMERS.find((x) => x.id === customerId);
     if (!me || !seller || !s || !c || !this.signers[customerId]) return false;
+    if (await this.walkedRecently(customerId, seller.id)) return false;
     const held = Object.values(me.stock).reduce((a, b) => a + b, 0);
     const good = GOODS[goodId];
     const plan = customerShopping({ coins: me.coins, held, capLeft: me.dailyCap - me.spentToday }, good, s.stock[goodId] ?? 0, this.rng);
@@ -545,6 +550,7 @@ export class Market {
     const priced = rollSellSecret(this.rng, seller, good, { coins: s.coins, stock: s.stock[goodId], costBasis: s.costBasis[goodId] }, await this.store.count(`sales:${seller.id}`), await this.memoryOf(customerId, seller.id));
     const r = await this.agentHaggle({ agentId: customerId, seller, secret: priced.secret, bot: "splitter", authorize: plan.budget, budget: plan.budget });
     if (r.price !== null) await this.store.bump(`sales:${seller.id}`, DEMAND_MS);
+    else await this.walked(customerId, seller.id);
     await this.say({
       kind: "trade",
       text: r.price === null ? `${c.name} haggled with ${short(seller.id)} over a ${good.name} and walked` : `${c.name} ${why} and bought a ${good.name} from ${short(seller.id)} for ${r.price}`,
@@ -854,7 +860,9 @@ export class Market {
   async relieve(ids: string[]): Promise<{ id: string; amount: number; tx: string }[]> {
     const paid: { id: string; amount: number; tx: string }[] = [];
     if (!this.signers[WHOLESALER.id]) return paid;
-    for (const id of ids) {
+    // Stalls first: Wu's daily cap covers only a few advances, and a shut stall stops the street.
+    const stallsFirst = [...ids].sort((a, b) => Number(MERCHANTS.some((m) => m.id === b)) - Number(MERCHANTS.some((m) => m.id === a)));
+    for (const id of stallsFirst) {
       const agents = await this.agents(0);
       const wu = agents.find((a) => a.id === WHOLESALER.id);
       const me = agents.find((a) => a.id === id);
