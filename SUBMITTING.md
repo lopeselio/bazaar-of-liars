@@ -1,6 +1,6 @@
-# Submitting Bazaar of Liars
+# Bazaar of Liars: submission notes
 
-Everything for the NEAR HACKATHON submission that can be public. Rules: https://nearhackathon.com/HACKATHON.md (re-read before submitting). Deadline **2026-11-14 23:59 UTC**; judging from 2026-11-16; keep the hosted demo up to at least 2026-11-25.
+Bazaar of Liars is submitted as part of the **NEAR Arcade** (https://arcade.lopeselio.online, github.com/lopeselio/near-arcade), whose repo holds the submission itself. The author's other submission is **Signalfire** (github.com/lopeselio/signalfire). These are Bazaar's own notes: its tracks, evidence and judge path, for the arcade's write-up to draw on. Everything here can be public. Rules: https://nearhackathon.com/HACKATHON.md (re-read before submitting). Deadline **2026-11-14 23:59 UTC**; judging from 2026-11-16; keep the hosted demo up to at least 2026-11-25.
 
 Personal details (name, email, payout account) never go in this repo: the submission payload is built at submit time and not committed.
 
@@ -10,9 +10,9 @@ Personal details (name, email, payout account) never go in this repo: the submis
 |---|---|
 | Public repo with LICENSE (MIT) | ✓ github.com/lopeselio/bazaar-of-liars |
 | README with "do X, see Y" steps a judge can run, including a no-key path | ✓ (dry-run from a fresh clone on 2026-11-07) |
-| Hosted demo | ✓ https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/ |
+| Hosted demo | ✓ https://bazaar.lopeselio.online (Canal Street at /city/, the desert bazaar at /?classic) |
 | Libraries and templates listed (Q-005) | ✓ README, "Built with" |
-| Other project disclosed (Q-015) | ✓ this README names Realm Ledger; check that Realm Ledger's README names this one |
+| Arcade and other submission disclosed (Q-015) | ✓ the README's first lines: part of the NEAR Arcade; the author's other submission is Signalfire |
 | Demo video (90 s, see below) | to record |
 | X post with the video, @NEARProtocol and #NEARHackathon | to post (draft below) |
 | Mainnet NEAR account for the payout | the team creates it |
@@ -32,7 +32,7 @@ Chosen: **`games`** (primary), **`privacy`**, **`agents`**, **`nfts`**, **`swarm
 | NFTs That Do Something | A deed is the stall: transferring it moves the business, the seller's stock and till go home | NEP-171, Chain Signatures |
 | AI Swarms | Thirteen agents, each a NEAR sub-account with its own purse and capped key, coordinate through markets nobody scripts: merchants restock from the wholesaler and hire a runner, rival traders buy low and sell high, the wholesaler, merchants and traders bid against each other (and players) in sealed-bid cargo auctions, and customers post delivery bounties; alongside them, informants sell tips the contract checks, and merchants barter with the wholesaler through NEAR Intents (each signs its own token_diff; the Verifier settles both or neither). Prices and stock emerge from what they do | Multi-agent systems, sub-accounts, sealed bidding, intent-based settlement |
 
-## Description (the `idea` field, 1688 of 2000 characters)
+## Description (the `idea` field, 1715 of 2000 characters)
 
 ```
 Haggling games have a trust problem: when an AI merchant says "I can't go below 65", you can't tell a bluff from a rigged game. Bazaar of Liars is a trading game against AI merchants who bluff, where the chain proves every bluff was fair.
@@ -41,7 +41,7 @@ Before each haggle the server commits a hash of the merchant's secret (its real 
 
 On Canal Street (a walkable New York), every trader is an AI agent with its own NEAR sub-account and a function-call key that can only authorize spends within an onchain daily cap. Merchants restock from a wholesaler, pay runners, bid in sealed-bid cargo auctions, and informants sell tips the contract later checks against real stock (liars refund). Customers post delivery bounties; players carry goods across the city, run trade routes between price boards, earn onchain street cred, and buy stall licences that are NEP-171 deeds, tradable in a deed market and certifiable on Ethereum through NEAR Chain Signatures. Goods are NEP-245 multi tokens. Players sign in with NEAR Auth (Google or email, MPC-held key) or play as guests; the server relays every transaction, so players never see a wallet or pay gas.
 
-Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 168 TypeScript and 138 contract tests, and a README of do-X-see-Y steps.
+Testnet contract: v3.bazaar-liars.testnet. Hosted demo at bazaar.lopeselio.online, 185 TypeScript and 141 contract tests, and a README of do-X-see-Y steps.
 ```
 
 ## Evidence: NEAR features and a transaction for each
@@ -72,7 +72,7 @@ Testnet contract: v3.bazaar-liars.testnet. Hosted demo, 168 TypeScript and 138 c
 
 > Ever haggled with someone who swore "I can't go lower"? In Bazaar of Liars the AI merchants bluff, and NEAR proves every bluff was fair: the secret is committed onchain before you speak, every line is signed inside a TEE on NEAR AI Cloud, and the contract checks the reveal.
 >
-> Built at NEAR HACKATHON. Play: <hosted demo link> · Code: github.com/lopeselio/bazaar-of-liars
+> Built at NEAR HACKATHON. Play: https://bazaar.lopeselio.online · Code: github.com/lopeselio/bazaar-of-liars
 >
 > Can you catch a liar? @NEARProtocol #NEARHackathon @NearBuilders
 
