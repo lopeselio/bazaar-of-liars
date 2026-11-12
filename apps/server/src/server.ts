@@ -161,8 +161,16 @@ const watchdogDeps = market && ledger
       news: () => market.news(25),
       // Under the street's lock: Wu's key also signs restocks and bids, and one nonce at a time is safer.
       relieve: async (ids: string[]) => {
-        const token = await store.lock("market-tick", 5 * 60_000).catch(() => null);
-        if (!token) return [];
+        // A street round usually holds the lock for a few seconds: wait for it rather than skip.
+        let token: string | null = null;
+        for (let i = 0; i < 30 && !token; i++) {
+          token = await store.lock("market-tick", 5 * 60_000).catch(() => null);
+          if (!token) await new Promise((r) => setTimeout(r, 2000));
+        }
+        if (!token) {
+          console.warn("relief: the street's lock stayed busy for a minute; trying next round");
+          return [];
+        }
         try {
           return await market.relieve(ids);
         } finally {
