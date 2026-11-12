@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      URL: ${{ vars.DEMO_URL || 'https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io' }}
+      URL: ${{ vars.DEMO_URL || 'https://bazaar.lopeselio.online' }}
     steps:
       - name: Read the watchdog
         id: read
