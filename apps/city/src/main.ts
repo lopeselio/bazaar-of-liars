@@ -17,6 +17,7 @@ import { initAuctions } from "./auctions";
 import { initRumours } from "./rumours";
 import { initRoutes } from "./routes";
 import { initEvents } from "./events";
+import { initHudRoom } from "./hudroom";
 import { currentPlayer, initLogin } from "./login";
 import { initGuide } from "./guide";
 import { bindStation } from "./station";
@@ -395,6 +396,7 @@ const checkLicence = () =>
 void checkLicence();
 setInterval(checkLicence, 60_000);
 initEvents({ player: PLAYER, me: () => me, hasLicence: () => licensed, toast });
+initHudRoom();
 
 // ---------- player-owned stalls further along Canal Street ----------
 
