@@ -6,6 +6,7 @@
  * purse (she signs for it; the contract checks the player is broke and hasn't worked today).
  */
 import * as THREE from "three";
+import { bindStation } from "./station";
 import { api, type PlayerView } from "../../web/src/api";
 
 /** Mirrors packages/core wages.ts. */
@@ -33,7 +34,7 @@ export function initDocks(d: DocksDeps) {
   document.body.insertAdjacentHTML(
     "beforeend",
     `<div id="bz-broke" hidden><i id="bz-broke-arrow">➤</i><div><b>Broke? Auntie Wu needs hands at Pier 34</b><span id="bz-broke-sub"></span></div></div>
-     <div id="bz-dock-prompt" hidden><kbd>F</kbd><span>Unload crates for Auntie Wu (+${DOCK_WAGE} coins)</span></div>`,
+     <button id="bz-dock-prompt" type="button" hidden><kbd>F</kbd><span>Unload crates for Auntie Wu (+${DOCK_WAGE} coins)</span></button>`,
   );
   const y = d.cm.getGroundHeight(DOCK.x, DOCK.z, "person");
   const beam = new THREE.Mesh(
@@ -69,12 +70,10 @@ export function initDocks(d: DocksDeps) {
     }
   }
   let atDock = false;
-  addEventListener("keydown", (e) => {
-    if ((e.target as HTMLElement)?.tagName === "INPUT" || d.busy()) return;
-    if (e.code === "KeyF" && atDock) {
-      e.preventDefault();
-      void work();
-    }
+  bindStation($("bz-dock-prompt"), "KeyF", () => {
+    if (d.busy() || !atDock) return false;
+    void work();
+    return true;
   });
 
   const dir = new THREE.Vector3();

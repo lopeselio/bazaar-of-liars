@@ -8,6 +8,7 @@
  * the merchants and the rival traders bid too, from their own purses.
  */
 import * as THREE from "three";
+import { bindStation } from "./station";
 import { api, type AuctionLot, type AuctionsView, type PlayerView } from "../../web/src/api";
 
 /** Mirrors packages/core auctions.ts and wages.ts. */
@@ -108,7 +109,7 @@ export function initAuctions(d: AuctionDeps) {
   document.body.insertAdjacentHTML(
     "beforeend",
     `<div id="bz-ship" hidden><i id="bz-ship-arrow">➤</i><div><b id="bz-ship-title"></b><span id="bz-ship-sub"></span></div></div>
-     <div id="bz-pier-prompt" hidden><kbd>G</kbd><span id="bz-pier-text">Bid on the cargo</span></div>
+     <button id="bz-pier-prompt" type="button" hidden><kbd>G</kbd><span id="bz-pier-text">Bid on the cargo</span></button>
      <aside id="bz-auction" class="bz-card" hidden></aside>`,
   );
 
@@ -286,12 +287,13 @@ export function initAuctions(d: AuctionDeps) {
     if (on) render();
   }
 
+  bindStation($("bz-pier-prompt"), "KeyG", () => {
+    if (d.busy() || !(atPier || open)) return false;
+    toggle(!open);
+    return true;
+  });
   addEventListener("keydown", (e) => {
     if ((e.target as HTMLElement)?.tagName === "INPUT" || d.busy()) return;
-    if (e.code === "KeyG" && (atPier || open)) {
-      e.preventDefault();
-      toggle(!open);
-    }
     if (e.code === "Escape" && open) toggle(false);
   });
 

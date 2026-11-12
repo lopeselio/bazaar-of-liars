@@ -19,6 +19,7 @@ import { initRoutes } from "./routes";
 import { initEvents } from "./events";
 import { currentPlayer, initLogin } from "./login";
 import { initGuide } from "./guide";
+import { bindStation } from "./station";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -101,7 +102,7 @@ document.body.insertAdjacentHTML(
      </section>
    </div>
    <div id="bz-tags"></div>
-   <div id="bz-prompt" hidden><kbd>F</kbd><span id="bz-prompt-text"></span></div>
+   <button id="bz-prompt" type="button" hidden><kbd>F</kbd><span id="bz-prompt-text"></span></button>
    <aside id="bz-panel" hidden>
      <header><div><h2 id="bz-name"></h2><p id="bz-sub"></p></div><button id="bz-close" type="button" aria-label="Leave">✕</button></header>
      <div id="bz-agent"></div>
@@ -451,12 +452,12 @@ bridge.frame.add((dt, t) => {
   }
 });
 
+bindStation($("bz-prompt"), "KeyF", () => {
+  if (!near || current) return false;
+  openStall(near);
+  return true;
+});
 addEventListener("keydown", (e) => {
-  const typing = (e.target as HTMLElement)?.tagName === "INPUT";
-  if (e.code === "KeyF" && !typing && near && !current) {
-    e.preventDefault();
-    openStall(near);
-  }
   if (e.code === "Escape" && current && !current.busy) closeStall();
 });
 

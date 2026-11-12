@@ -7,6 +7,7 @@
  * comes out of the bounty. Glowing beacons mark every drop site; the active one leads the way.
  */
 import * as THREE from "three";
+import { bindStation } from "./station";
 import { api, type Delivered, type Job, type Order, type PlayerView, type TravelMode } from "../../web/src/api";
 
 export interface JobsDeps {
@@ -52,7 +53,7 @@ export function initJobs(d: JobsDeps) {
        <p class="bz-board-foot">Walk or cycle for free. A cab or helicopter is faster, and its fare comes out of the bounty.</p>
      </section>
      <div id="bz-track" hidden><i id="bz-arrow">➤</i><div><b id="bz-track-title"></b><span id="bz-track-sub"></span></div><time id="bz-track-time"></time></div>
-     <div id="bz-drop" hidden><kbd>F</kbd><span id="bz-drop-text"></span></div>
+     <button id="bz-drop" type="button" hidden><kbd>F</kbd><span id="bz-drop-text"></span></button>
      <div id="bz-site-tags"></div>
      <div id="bz-receipt" hidden></div>`,
   );
@@ -215,11 +216,13 @@ export function initJobs(d: JobsDeps) {
     const typing = (e.target as HTMLElement)?.tagName === "INPUT";
     if (typing || d.busy()) return;
     if (e.code === "KeyJ") toggleBoard();
-    if (e.code === "KeyF" && atDrop) {
-      e.preventDefault();
-      void deliver();
-    }
     if (e.code === "Escape" && !$("bz-board").hidden) toggleBoard(false);
+  });
+
+  bindStation($("bz-drop"), "KeyF", () => {
+    if (d.busy() || !atDrop) return false;
+    void deliver();
+    return true;
   });
 
   // ---------- per frame: beacons, tracker, drop prompt ----------

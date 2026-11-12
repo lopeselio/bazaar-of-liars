@@ -7,6 +7,7 @@
  * time, when the contract checks it against the merchant's real stock. A lie is refunded.
  */
 import * as THREE from "three";
+import { bindStation } from "./station";
 import { api, type InformantView, type PlayerView, type RumoursView, type TipView } from "../../web/src/api";
 import { buildStall, type StallLook } from "../../web/src/scene";
 
@@ -41,7 +42,7 @@ const record = (i: InformantView) => (i.sold ? `${i.truths} ✓ · ${i.lies} ✗
 export function initRumours(d: RumourDeps) {
   document.body.insertAdjacentHTML(
     "beforeend",
-    `<div id="bz-inf-prompt" hidden><kbd>F</kbd><span id="bz-inf-text"></span></div>
+    `<button id="bz-inf-prompt" type="button" hidden><kbd>F</kbd><span id="bz-inf-text"></span></button>
      <aside id="bz-rumour" class="bz-card" hidden></aside>`,
   );
   // Pending tips sit in the HUD, under the purse and street cred.
@@ -182,15 +183,17 @@ export function initRumours(d: RumourDeps) {
     $("bz-rumour").hidden = true;
   }
 
+  bindStation($("bz-inf-prompt"), "KeyF", () => {
+    if (d.busy() || !near || open) return false;
+    open = near;
+    $("bz-inf-prompt").hidden = true;
+    $("bz-rumour").hidden = false;
+    renderPanel(near);
+    return true;
+  });
   addEventListener("keydown", (e) => {
     if ((e.target as HTMLElement)?.tagName === "INPUT" || d.busy()) return;
-    if (e.code === "KeyF" && near && !open) {
-      e.preventDefault();
-      open = near;
-      $("bz-inf-prompt").hidden = true;
-      $("bz-rumour").hidden = false;
-      renderPanel(near);
-    } else if (e.code === "Escape" && open) close();
+    if (e.code === "Escape" && open) close();
   });
   $("bz-tips-chip").addEventListener("click", () => {
     // Show the most recent tip's informant.
