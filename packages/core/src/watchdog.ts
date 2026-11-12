@@ -6,6 +6,8 @@
  * and which balances to top up. Pure, so it's tested without a chain.
  */
 
+import { RELIEF_AFTER_MS } from "./relief.js";
+
 export type Level = "ok" | "warn" | "alert";
 
 export interface AgentGas {
@@ -69,6 +71,8 @@ export interface WatchdogReport {
   contractFree?: number;
   contractRunsOut?: string;
   contractSeen?: { at: number; storageBytes: number } | null;
+  /** Merchants and traders broke for RELIEF_AFTER_MS: the server asks Auntie Wu to advance them coins. */
+  relief: string[];
 }
 
 /** The demo must keep running through judging (2026-11-25). */
@@ -85,11 +89,12 @@ export const RUNOUT_ALERT_MS = 2 * 86_400_000;
  * for them and never fires for a quiet agent. */
 export const LOW_BALANCE = 0.05;
 export const TOP_UP_TO = 0.3;
-/** Below this much allowance (about 10 calls) an agent needs `rekey:agents`, which needs the owner
- * key, so the watchdog can only warn. Merchants began at 0.1 and burn ~0.001 a day, so it's well
- * below their starting allowance. */
-export const LOW_ALLOWANCE = 0.03;
-export const CRITICAL_ALLOWANCE = 0.01;
+/** Below this much allowance an agent needs `rekey:agents`, which needs the owner key, so the
+ * watchdog can only warn. A call reserves its gas at a pessimistic price before it runs, so a key
+ * stops working well before its allowance reaches zero: Tobin's key refused every call at 0.031
+ * NEAR (11 Nov 2026). Merchants began at 0.1 and burn ~0.001 a day. */
+export const LOW_ALLOWANCE = 0.06;
+export const CRITICAL_ALLOWANCE = 0.04;
 export const SERVER_LOW = 1;
 /** A merchant or trader below this many coins counts as broke. */
 export const BROKE_COINS = 30;
@@ -103,6 +108,7 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
   const checks: Check[] = [];
   const topUps: { account: string; amount: number }[] = [];
   const brokeSince: Record<string, number> = {};
+  const relief: string[] = [];
   // Keep baselines for agents not measured this run (null allowance, low-allowance branch, a missing read).
   const allowanceSeen: Record<string, AllowanceMark> = { ...(i.allowanceSeen ?? {}) };
   const runsOut: Record<string, string> = {};
@@ -143,6 +149,7 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
     if (TRADING.has(a.kind) && a.coins < BROKE_COINS) {
       const since = i.brokeSince[a.id] ?? i.now;
       brokeSince[a.id] = since;
+      if ((a.kind === "merchant" || a.kind === "trader") && i.now - since >= RELIEF_AFTER_MS) relief.push(a.id);
       if (i.now - since >= BROKE_TOO_LONG_MS) {
         checks.push({ level: "warn", subject: a.id, text: `broke (${a.coins} coins) for ${Math.round((i.now - since) / 3_600_000)} h` });
       }
@@ -180,5 +187,5 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
   }
 
   const level: Level = checks.some((c) => c.level === "alert") ? "alert" : checks.length ? "warn" : "ok";
-  return { at: i.now, level, checks, topUps, brokeSince, allowanceSeen, runsOut, contractFree, contractRunsOut, contractSeen };
+  return { at: i.now, level, checks, topUps, brokeSince, allowanceSeen, runsOut, contractFree, contractRunsOut, contractSeen, relief };
 }

@@ -39,6 +39,9 @@ describe("economy watchdog", () => {
     const r = assessEconomy(base({ agents: [agent({ allowance: 0.02 })] }));
     expect(r.checks[0].text).toContain("rekey:agents farrukh");
     expect(assessEconomy(base({ agents: [agent({ allowance: 0.005 })] })).level).toBe("alert");
+    // A key stops working before it reaches zero: Tobin's refused every call at 0.031.
+    expect(assessEconomy(base({ agents: [agent({ allowance: 0.031 })] })).level).toBe("alert");
+    expect(assessEconomy(base({ agents: [agent({ allowance: 0.05 })] })).checks[0].text).toContain("rekey:agents farrukh");
     // A merchant still near its original 0.1 NEAR allowance is fine.
     expect(assessEconomy(base({ agents: [agent({ allowance: 0.0987 })] })).level).toBe("ok");
     expect(assessEconomy(base({ agents: [agent({ allowance: null })] })).level).toBe("ok");
@@ -51,6 +54,9 @@ describe("economy watchdog", () => {
     expect(first.level).toBe("ok");
     const later = assessEconomy(base({ agents: [poor], brokeSince: first.brokeSince, now: now + BROKE_TOO_LONG_MS }));
     expect(later.checks.map((c) => c.subject)).toContain("farrukh");
+    expect(later.relief).toEqual(["farrukh"]); // broke past RELIEF_AFTER_MS: Wu is asked to step in
+    expect(first.relief).toEqual([]);
+    expect(assessEconomy(base({ agents: [agent({ kind: "wholesaler", coins: 5 })], brokeSince: { farrukh: now - BROKE_TOO_LONG_MS } })).relief).toEqual([]);
     // Recovered: forgotten.
     expect(assessEconomy(base({ brokeSince: first.brokeSince })).brokeSince).toEqual({});
   });
