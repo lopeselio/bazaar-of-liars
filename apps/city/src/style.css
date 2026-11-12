@@ -16,15 +16,15 @@
   --bz-hud-top: 82px;
   --bz-hud-reserve: 262px; /* street signs + minimap + the edge, measured bottom up */
   position: fixed;
-  /* --bz-event-push: set by events.ts while a street-event banner would cover the column. */
-  top: calc(var(--bz-hud-top) + var(--bz-event-push, 0px));
+  /* --bz-banner-push: set by hudroom.ts while a top banner would cover the column. */
+  top: calc(var(--bz-hud-top) + var(--bz-banner-push, 0px));
   left: 20px;
   z-index: 40;
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: min(280px, calc(100vw - 24px));
-  max-height: calc(100vh - var(--bz-hud-top) - var(--bz-event-push, 0px) - var(--bz-hud-reserve));
+  max-height: calc(100vh - var(--bz-hud-top) - var(--bz-banner-push, 0px) - var(--bz-hud-reserve));
   font: 14px/1.2 var(--bz-font);
   color: var(--bz-ink);
   pointer-events: none;
@@ -689,6 +689,21 @@ button:disabled {
    a 72px edge), so the column stops above it and the open wire scrolls instead of covering it. */
 body.touch-enabled #bz-hud {
   --bz-hud-reserve: 240px;
+  /* When the column is taller than the room it has, it scrolls (by touch) instead of spilling
+     over the joystick. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+body.touch-enabled #bz-hud::-webkit-scrollbar {
+  display: none;
+}
+/* A phone in landscape (about 390px tall): the joystick starts ~178px above the bottom edge. */
+@media (max-height: 500px) {
+  body.touch-enabled #bz-hud {
+    --bz-hud-reserve: 186px;
+  }
 }
 
 #bz-hud[hidden],
