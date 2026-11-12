@@ -852,6 +852,32 @@ details summary {
 }
 
 /* ---------- phones ---------- */
+/* A phone in portrait (390 px): the title keeps one line and the chips wrap under it, so the purse
+   is never clipped at the right edge. */
+@media (max-width: 480px) {
+  .hud {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .brand h1 {
+    font-size: 18px;
+    white-space: nowrap;
+  }
+  .hud-right {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .hud-right .chip {
+    font-size: 12px;
+    padding: 5px 10px;
+    white-space: nowrap;
+  }
+  .purse {
+    padding: 5px 10px 5px 8px;
+  }
+}
+
 @media (max-width: 760px) {
   .hud {
     padding: max(12px, env(safe-area-inset-top)) 16px 0;
