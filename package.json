@@ -16,7 +16,7 @@
     "dev": "pnpm --parallel --filter @bazaar/server --filter @bazaar/web --filter @bazaar/city dev",
     "build": "pnpm --filter @bazaar/web --filter @bazaar/city build",
     "start": "pnpm --filter @bazaar/server start",
-    "check:goods": "node --env-file-if-exists=.env scripts/check-goods.mjs",
+    "check:goods": "pnpm --filter @bazaar/verify check:goods",
     "typecheck": "pnpm -r exec tsc --noEmit -p ."
   }
 }

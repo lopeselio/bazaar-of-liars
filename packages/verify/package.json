@@ -7,7 +7,8 @@
   "scripts": {
     "test": "vitest run",
     "verify:model": "node --env-file-if-exists=../../.env --import tsx src/cli/verify-model.ts",
-    "verify:deed": "node --env-file-if-exists=../../.env --import tsx src/cli/verify-deed.ts"
+    "verify:deed": "node --env-file-if-exists=../../.env --import tsx --import ./src/rpc-flag.ts src/cli/verify-deed.ts",
+    "check:goods": "node --env-file-if-exists=../../.env --import tsx --import ./src/rpc-flag.ts src/cli/check-goods.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
