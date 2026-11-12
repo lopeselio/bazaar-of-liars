@@ -204,6 +204,12 @@
   width: 22px;
   background: var(--ob-accent);
 }
+/* Key hints mean nothing on a phone; the buttons say it all. */
+@media (hover: none) and (pointer: coarse) {
+  .ob-keys {
+    display: none;
+  }
+}
 .ob-keys {
   margin: 14px 0 0;
   text-align: center;
