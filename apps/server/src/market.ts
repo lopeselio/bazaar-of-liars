@@ -60,6 +60,8 @@ import {
   BUY_WINDOW_MS,
   advanceFor,
   repaymentFor,
+  owedOn,
+  WALKED_WAIT_MS,
 } from "@bazaar/core";
 import { barterSide, intentsHoldings, readIntentsIdentity, readIntentsVerifier, readSalt, simulateIntents, withdrawBack } from "@bazaar/merchant";
 import { explorerTx, readAgents, readDeedAsks, type DeedAsk, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
@@ -304,6 +306,14 @@ export class Market {
     return { price, closeUrl: explorerTx(this.ledger.network, closeTx), rounds: state.round };
   }
 
+  /** A buyer that just walked away from a seller doesn't come straight back. */
+  private async walkedRecently(buyerId: string, sellerId: string) {
+    return (await this.store.count(`walked:${buyerId}:${sellerId}`)) > 0;
+  }
+  private async walked(buyerId: string, sellerId: string) {
+    await this.store.bump(`walked:${buyerId}:${sellerId}`, WALKED_WAIT_MS);
+  }
+
   private async memoryOf(agentId: string, merchantId: string) {
     return readMemory(this.ledger.network, this.ledger.contractId, this.signers[agentId].account, merchantId);
   }
@@ -320,11 +330,13 @@ export class Market {
       }
       return;
     }
+    if (await this.walkedRecently(m.id, WHOLESALER.id)) return;
     const lotsToday = await this.store.count(`lots:${good.id}`);
     const { secret } = rollWholesaleSecret(this.rng, WHOLESALER, good, plan.qty, lotsToday);
     Object.assign(secret, memLevels(await this.memoryOf(m.id, WHOLESALER.id)));
     const r = await this.agentHaggle({ agentId: m.id, seller: WHOLESALER, secret, qty: plan.qty, bot: "sharp", authorize: plan.maxSpend, budget: plan.maxSpend });
     if (r.price === null) {
+      await this.walked(m.id, WHOLESALER.id);
       await this.say({ kind: "restock", text: `${short(m.id)} haggled with Auntie Wu over ${plan.qty} ${good.name} but walked away`, tx: r.closeUrl, agents: [m.id, WHOLESALER.id] });
       return;
     }
@@ -350,11 +362,12 @@ export class Market {
       const [goodId] = held;
       const buyer = MERCHANTS.find((m) => m.buysGoodId === goodId)!;
       const b = agents.find((a) => a.id === buyer.id)!;
-      if ((await this.store.count(`buys:${buyer.id}`)) >= BUYS_PER_WINDOW) return;
+      if ((await this.store.count(`buys:${buyer.id}`)) >= BUYS_PER_WINDOW || (await this.walkedRecently(traderId, buyer.id))) return;
       const p = rollBuySecret(this.rng, buyer, GOODS[goodId], { coins: b.coins, stock: b.stock[goodId], costBasis: 0 }, await this.memoryOf(traderId, buyer.id));
       if (!p) return;
       const r = await this.agentHaggle({ agentId: traderId, seller: buyer, secret: p.secret, escrow: p.escrow, bot: "seller", authorize: 1 });
       if (r.price !== null) await this.store.bump(`buys:${buyer.id}`, BUY_WINDOW_MS);
+      else await this.walked(traderId, buyer.id);
       await this.say({
         kind: "trade",
         text: r.price === null ? `${short(traderId)} couldn't get a price from ${short(buyer.id)} for a ${GOODS[goodId].name}` : `${short(traderId)} sold a ${GOODS[goodId].name} to ${short(buyer.id)} for ${r.price}`,
@@ -367,12 +380,14 @@ export class Market {
     const route = traderRoute(MERCHANTS, GOODS, stock, me.coins - me.spentToday > 0 ? Math.min(me.coins, me.dailyCap - me.spentToday) : 0, this.rng);
     if (!route) return;
     const seller = MERCHANTS.find((m) => m.id === route.buyFrom)!;
+    if (await this.walkedRecently(traderId, seller.id)) return;
     const s = agents.find((a) => a.id === seller.id)!;
     const good = GOODS[route.goodId];
     const priced = rollSellSecret(this.rng, seller, good, { coins: s.coins, stock: s.stock[good.id], costBasis: s.costBasis[good.id] }, await this.store.count(`sales:${seller.id}`), await this.memoryOf(traderId, seller.id));
     const budget = Math.min(me.coins, Math.round(good.baseValue * 1.25));
     const r = await this.agentHaggle({ agentId: traderId, seller, secret: priced.secret, bot: (def.bot ?? "splitter") as keyof typeof BOTS, authorize: budget, budget });
     if (r.price !== null) await this.store.bump(`sales:${seller.id}`, DEMAND_MS);
+    else await this.walked(traderId, seller.id);
     await this.say({
       kind: "trade",
       text: r.price === null ? `${short(traderId)} haggled with ${short(seller.id)} over a ${good.name} and walked` : `${short(traderId)} bought a ${good.name} from ${short(seller.id)} for ${r.price}, to flip to ${short(route.sellTo)}`,
@@ -844,7 +859,7 @@ export class Market {
       const wu = agents.find((a) => a.id === WHOLESALER.id);
       const me = agents.find((a) => a.id === id);
       if (!wu || !me) continue;
-      const owed = (await this.advances())[id]?.amount ?? 0;
+      const owed = owedOn((await this.advances())[id], Date.now());
       const m = MERCHANTS.find((x) => x.id === id);
       const d = advanceFor({ id, kind: me.kind, coins: me.coins, goodId: m?.goodId, owed }, { coins: wu.coins, spentToday: wu.spentToday, dailyCap: wu.dailyCap });
       if ("skip" in d) {
@@ -870,6 +885,7 @@ export class Market {
   private async repayAdvances() {
     const owed = await this.advances();
     for (const [id, loan] of Object.entries(owed)) {
+      if (!owedOn(loan, Date.now())) continue; // written off
       const me = (await this.agents(0)).find((a) => a.id === id);
       if (!me || !this.signers[id]) continue;
       const amount = repaymentFor({ id, kind: me.kind, coins: me.coins, goodId: MERCHANTS.find((x) => x.id === id)?.goodId, owed: loan.amount, spentToday: me.spentToday, dailyCap: me.dailyCap });
