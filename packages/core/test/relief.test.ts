@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { advanceFor, repaymentFor, tradingFloat, TRADER_ADVANCE, WU_RESERVE } from "../src/relief.js";
+import { advanceFor, LOAN_WRITE_OFF_MS, owedOn, repaymentFor, tradingFloat, TRADER_ADVANCE, WU_RESERVE } from "../src/relief.js";
 
 const wu = { coins: 979, spentToday: 0 };
 const farrukh = { id: "farrukh", kind: "merchant", goodId: "rug", coins: 8, owed: 0 };
@@ -29,5 +29,12 @@ describe("Auntie Wu's advances", () => {
     expect(repaymentFor({ ...b, coins: 170 + tradingFloat(b) })).toBe(170);
     expect(repaymentFor({ ...b, coins: 1000, spentToday: 300 })).toBeNull();
     expect(repaymentFor({ ...b, owed: 0, coins: 1000 })).toBeNull();
+  });
+
+  it("writes a loan off after a day, so a trader that lost it can be staked again", () => {
+    const loan = { amount: 61, at: 1000 };
+    expect(owedOn(loan, 1000 + LOAN_WRITE_OFF_MS - 1)).toBe(61);
+    expect(owedOn(loan, 1000 + LOAN_WRITE_OFF_MS)).toBe(0);
+    expect(owedOn(undefined, 5)).toBe(0);
   });
 });

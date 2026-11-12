@@ -60,6 +60,9 @@ describe("Canal Street economy", () => {
   it("restocks only when low, and never plans past its purse or daily cap", () => {
     expect(restockPlan(GOODS.lamp, { coins: 500, stock: 5, costBasis: 10 }, 0)).toBeNull();
     expect(restockPlan(GOODS.rug, { coins: 20, stock: 0, costBasis: 0 }, 0)).toBeNull();
+    // 71 coins can't meet Wu's floor for 4 saffron (67 and up, plus the runner): don't turn up.
+    expect(restockPlan(GOODS.saffron, { coins: 71, stock: 0, costBasis: 0 }, 0)).toBeNull();
+    expect(restockPlan(GOODS.saffron, { coins: 119, stock: 0, costBasis: 0 }, 0)).not.toBeNull();
     for (let i = 0; i < 1000; i++) {
       const h = { coins: Math.floor(rng() * 400), stock: Math.floor(rng() * 3), costBasis: 0 };
       const spent = Math.floor(rng() * 400);
