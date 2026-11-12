@@ -29,7 +29,7 @@ import {
 } from "@bazaar/verify";
 import type { SignedCall } from "./nearai.js";
 import { nearReader, type ChainReader, type ChainRecord } from "./reader.js";
-import { decisionLine, haggleLine, needLine, parseMove, present, quickMove, toPlayerMove, type Move } from "./prompts.js";
+import { decisionLine, haggleLine, needLine, parseMove, present, quickMove, RENDERINGS, toPlayerMove, type Move } from "./prompts.js";
 
 export interface TurnRecord {
   playerText: string;
@@ -137,7 +137,7 @@ export async function verifyBundle(b: ProofBundle, opts: BundleVerifyOptions = {
       add(`t${i}.sp.bound`, `${n}: the signed request was for this haggle, its committed need and this decision`, sys.includes(haggleLine(b.commitment)) && sys.includes(needLine(secret)) && sys.includes(decisionLine(decision)));
       add(`t${i}.sp.nofloor`, `${n}: the model was never told the floor`, !promptShowsFloor(sys, secret.floor));
       const offer = move.kind === "offer" ? move.price : undefined;
-      add(`t${i}.sp.display`, `${n}: shown text = signed text with only the engine's numbers filled in`, t.speech !== null && [false, true].some((legacy) => present(contentOf(t.speech!.responseBody), decision, offer, secret.side, legacy) === t.display));
+      add(`t${i}.sp.display`, `${n}: shown text = signed text with only the engine's numbers filled in`, t.speech !== null && RENDERINGS.some((r) => present(contentOf(t.speech!.responseBody), decision, offer, secret.side, r) === t.display));
     }
   });
 
