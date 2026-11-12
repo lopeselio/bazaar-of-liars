@@ -118,13 +118,15 @@ describe("parsing and presentation", () => {
 
   it("only the engine's numbers (and the player's offer) reach the player", () => {
     const d = { action: "counter" as const, price: 30, tell: "relaxed" as const, statedFloor: 25 };
-    expect(present("{OFFER}? My floor is 21. {PRICE}, no less than {CLAIM}.", d, 12)).toBe("12? My floor is …. 30, no less than 25.");
+    expect(present("{OFFER}? My floor is 21. {PRICE}, no less than {CLAIM}.", d, 12)).toBe("12? 30, no less than 25.");
+    expect(present("{OFFER}? My floor is 21. {PRICE}, no less than {CLAIM}.", d, 12, "sell", "v2")).toBe("12? My floor is …. 30, no less than 25.");
     expect(present("Deal for sixty-two, friend!", d)).toBe("Deal for …, friend! [30 coins] Not a coin below 25.");
     expect(present("Hmm, no.", d)).toBe("Hmm, no. [30 coins] Not a coin below 25.");
     // The player offered exactly the claimed limit: echoing their offer isn't stating the claim.
-    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25)).toBe("25? You wound me. 30. It is the lowest I could ever go. Not a coin below 25.");
-    // Bundles recorded before this rule rendered it without the claim; the verifier accepts both.
-    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25, "sell", true)).toBe("25? You wound me. 30. It is the lowest I could ever go.");
+    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25)).toBe("25? You wound me. 30. Not a coin below 25.");
+    // Earlier renderings, which the verifier still accepts for the bundles recorded with them.
+    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25, "sell", "v2")).toBe("25? You wound me. 30. It is the lowest I could ever go. Not a coin below 25.");
+    expect(present("{OFFER}? You wound me. {PRICE}. It is the lowest I could ever go.", d, 25, "sell", "legacy")).toBe("25? You wound me. 30. It is the lowest I could ever go.");
     // A claim the model wrote out itself isn't repeated.
     expect(present("{OFFER}? {PRICE}, and not below {CLAIM}.", d, 25)).toBe("25? 30, and not below 25.");
   });
@@ -389,6 +391,17 @@ describe("claim presentation", () => {
   it("always shows a claim the player could call", () => {
     expect(present("*sighs* {PRICE}.", d)).toBe("*sighs* 86. Not a coin below 57.");
     expect(present("*sighs* {PRICE}.", { ...d, price: 40, statedFloor: 74 }, undefined, "buy")).toBe("*sighs* 40. I can't pay more than 74.");
+  });
+  it("names one limit: a sentence calling the asking price a limit becomes the claim", () => {
+    const t = { action: "counter" as const, price: 38, tell: "nervous" as const, statedFloor: 29 };
+    // Seen live on 12 Nov: "38 is the lowest I could ever go. Not a coin below 29."
+    expect(present("{PRICE} is the lowest I could ever go.", t)).toBe("38. Not a coin below 29.");
+    expect(present("{PRICE} is the lowest I could ever go.", t, undefined, "sell", "v2")).toBe("38 is the lowest I could ever go. Not a coin below 29.");
+    expect(present("Fine, {PRICE}. That's my limit! Not below {CLAIM}.", t)).toBe("Fine, 38. Not below 29.");
+    expect(present("*grumbles* {PRICE}. Not a coin less, I swear it.", t)).toBe("*grumbles* 38. Not a coin below 29.");
+    expect(present("{PRICE} is the most I can do. All I have!", { ...t, price: 40, statedFloor: 74 }, undefined, "buy")).toBe("40. I can't pay more than 74.");
+    // No claim this turn: the price may well be called a limit.
+    expect(present("{PRICE} is the lowest I could ever go.", { ...t, statedFloor: undefined })).toBe("38 is the lowest I could ever go.");
   });
 });
 

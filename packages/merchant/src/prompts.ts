@@ -261,11 +261,27 @@ export function wordsToNumber(w: string): number {
  *  - if the price never appears, it's appended
  */
 /**
- * `legacy`: how bundles recorded before 2026-11-07 rendered a claim equal to the player's offer
- * (the echoed offer counted as stating the claim). The verifier accepts either rendering: both
- * fill in only the engine's numbers.
+ * How a turn's text was rendered. The verifier accepts any of them: all fill in only the engine's
+ * numbers, and a bundle records which text the player saw.
+ * - `legacy`: bundles recorded before 2026-11-07, where a claim equal to the player's offer counted
+ *   as stated (the echoed offer).
+ * - `v2`: until 2026-11-12. A claim the model didn't write was appended, even after a sentence where
+ *   the model called its asking price its limit ("38 is the lowest I could ever go. Not a coin
+ *   below 29.").
+ * - `current`: on a claim turn, a sentence calling anything other than the claim a limit is
+ *   rewritten, so the merchant names one limit: the claim.
  */
-export function present(modelText: string, decision: MerchantReply, offer?: number, side: Side = "sell", legacy = false): string {
+export type Rendering = "legacy" | "v2" | "current";
+export const RENDERINGS: readonly Rendering[] = ["legacy", "v2", "current"];
+
+/** Words that make a sentence a statement of the merchant's limit. */
+const LIMIT_WORDS: Record<Side, RegExp> = {
+  sell: /\b(?:lowest|limit|minimum|floor|no less|not a coin less|rock[- ]bottom|go no lower|can(?:no|'|’)t go (?:any )?lower|cannot go (?:any )?lower)\b/i,
+  buy: /\b(?:the most i|at most|limit|maximum|ceiling|no more than|not a coin more|top price|all i have|can(?:no|'|’)t pay (?:any )?more|cannot pay (?:any )?more)\b/i,
+};
+
+export function present(modelText: string, decision: MerchantReply, offer?: number, side: Side = "sell", rendering: Rendering = "current"): string {
+  const legacy = rendering === "legacy";
   let t = modelText.trim().replace(/^"|"$/g, "");
   const claim = claims(decision) ? decision.statedFloor : undefined;
   // On a walk-away no price survives: only the player's own offer may be echoed.
@@ -290,6 +306,26 @@ export function present(modelText: string, decision: MerchantReply, offer?: numb
   if (decision.action !== "walk" && !new RegExp(`(?<!\\d)(?<!\\d\\.)${decision.price}(?!\\d)(?!\\.\\d)`).test(t)) t += ` [${decision.price} coins]`;
   // The engine made a claim the player can call, so the player must see it.
   // A number equal to the claim that is only the player's offer echoed back doesn't count.
-  if (claim !== undefined && !hadClaim && ((!legacy && claim === offer) || !new RegExp(`(?<!\\d)${claim}(?!\\d)`).test(t))) t += side === "sell" ? ` Not a coin below ${claim}.` : ` I can't pay more than ${claim}.`;
+  const claimLine = side === "sell" ? `Not a coin below ${claim}.` : `I can't pay more than ${claim}.`;
+  const has = (n: number) => new RegExp(`(?<!\\d)(?<!\\d\\.)${n}(?!\\d)(?!\\.\\d)`);
+  let needClaim = claim !== undefined && !hadClaim && ((!legacy && claim === offer) || !has(claim).test(t));
+  if (rendering === "current" && claim !== undefined) {
+    // One limit per line: a sentence that calls something else (the asking price, say) a limit is
+    // rewritten. The first becomes the claim, if the claim isn't stated yet; the price it named stays.
+    t = (t.match(/[^.!?]+(?:[.!?]+|$)\s*/g) ?? [t])
+      .map((sentence) => {
+        if (!LIMIT_WORDS[side].test(sentence) || (has(claim).test(sentence) && claim !== offer) || /Not a coin below|I can't pay more than/.test(sentence)) return sentence;
+        const space = /\s$/.test(sentence) ? " " : "";
+        const price = decision.action !== "walk" && has(decision.price).test(sentence) ? `${decision.price}. ` : "";
+        if (needClaim) {
+          needClaim = false;
+          return `${price}${claimLine}${space}`;
+        }
+        return price ? `${price}${space}` : "";
+      })
+      .join("")
+      .trim();
+  }
+  if (needClaim) t += ` ${claimLine}`;
   return t;
 }
