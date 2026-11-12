@@ -11,7 +11,7 @@
   "scripts": {
     "test": "vitest run",
     "haggle:llm": "node --env-file-if-exists=../../.env --import tsx src/cli/haggle-llm.ts",
-    "verify:haggle": "node --env-file-if-exists=../../.env --import tsx src/cli/verify-haggle.ts",
+    "verify:haggle": "node --env-file-if-exists=../../.env --import tsx --import ../verify/src/rpc-flag.ts src/cli/verify-haggle.ts",
     "setup:agents": "node --env-file=../../.env --import tsx src/cli/setup-agents.ts",
     "rekey:agents": "node --env-file=../../.env --import tsx src/cli/rekey-agents.ts",
     "intents:barter": "node --env-file=../../.env --import tsx src/cli/intents-barter.ts"
