@@ -16,10 +16,11 @@ export interface GuideConfig {
   storageKey: string;
   /** Players who already know the game (e.g. saw the old intro) skip the first-run welcome. */
   seenBefore?: () => boolean;
-  slides: Slide[];
+  /** A function is called each time the welcome or help opens (e.g. to word it for touch or keys). */
+  slides: Slide[] | (() => Slide[]);
   /** Built when the walkthrough starts, so steps can read live game state. */
   steps: () => TourStep[];
-  help: Help;
+  help: Help | (() => Help);
   /** Class and content of the always-visible "How to play" button. */
   button: { className: string; content: ReactNode };
 }
@@ -72,7 +73,7 @@ export function Guide({ cfg }: { cfg: GuideConfig }) {
       {mode === "welcome" && (
         <Welcome
           theme={cfg.theme}
-          slides={cfg.slides}
+          slides={typeof cfg.slides === "function" ? cfg.slides() : cfg.slides}
           onSkip={() => {
             markSeen();
             setMode("none");
@@ -81,7 +82,7 @@ export function Guide({ cfg }: { cfg: GuideConfig }) {
         />
       )}
       {mode === "tour" && <Tour key={tourRun} theme={cfg.theme} steps={steps} onDone={endTour} />}
-      {mode === "help" && <HelpSheet theme={cfg.theme} help={cfg.help} onClose={() => setMode("none")} onWelcome={() => setMode("welcome")} onTour={startTour} />}
+      {mode === "help" && <HelpSheet theme={cfg.theme} help={typeof cfg.help === "function" ? cfg.help() : cfg.help} onClose={() => setMode("none")} onWelcome={() => setMode("welcome")} onTour={startTour} />}
     </>
   );
 }
