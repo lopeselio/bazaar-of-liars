@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { failover, routed, rpcUrls } from "../src/rpc.js";
+import { failover, routed, rpcRefusal, rpcUrls } from "../src/rpc.js";
 
 const ok = (body = "{}") => new Response(body, { status: 200 });
 const busy = () => new Response("Too Many Requests", { status: 429 });
@@ -21,9 +21,10 @@ function fake(script: Record<string, Array<() => Response>>) {
 describe("rpc failover", () => {
   it("lists your own endpoints first for NEAR_NETWORK only, normalised, without duplicates", () => {
     const env = { NEAR_RPC_URL: "https://mine.example/, https://rpc.testnet.fastnear.com", NEAR_NETWORK: "testnet" };
-    expect(rpcUrls("testnet", env)).toEqual(["https://mine.example", "https://rpc.testnet.fastnear.com", "https://near-testnet.drpc.org", "https://testnet-rpc.intea.rs"]);
+    expect(rpcUrls("testnet", env)).toEqual(["https://mine.example", "https://rpc.testnet.fastnear.com", "https://testnet-rpc.intea.rs", "https://near-testnet.drpc.org"]);
     expect(rpcUrls("mainnet", env)[0]).toBe("https://rpc.mainnet.fastnear.com");
-    expect(rpcUrls("testnet", {})[0]).toBe("https://rpc.testnet.fastnear.com");
+    expect(rpcUrls("testnet", {})).toEqual(["https://testnet-rpc.intea.rs", "https://near-testnet.drpc.org", "https://rpc.testnet.fastnear.com"]);
+    expect(rpcUrls("testnet", {})).not.toContain("https://rpc.testnet.near.org"); // deprecated
   });
 
   it("a 429 goes to the next endpoint with the same body, and the busy one cools down", async () => {
@@ -68,9 +69,31 @@ describe("rpc failover", () => {
     expect(calls.map((c) => c.url)).toEqual(["a", "b"]);
   });
 
-  it("when every endpoint refuses, the last refusal comes back", async () => {
-    expect((await failover(["a", "b"], fake({ a: [busy], b: [busy] }).f).fetch("a", read)).status).toBe(429);
-    await expect(failover(["x"], fake({}).f).fetch("x", read)).rejects.toThrow("fetch failed");
+  const noWait = async () => {};
+
+  it("when every endpoint refuses, the last refusal comes back after two more rounds", async () => {
+    const waits: number[] = [];
+    const { f, calls } = fake({ a: [busy, busy, busy], b: [busy, busy, busy] });
+    expect((await failover(["a", "b"], f, Date.now, async (ms) => void waits.push(ms)).fetch("a", read)).status).toBe(429);
+    expect(calls).toHaveLength(6);
+    expect(waits).toEqual([1000, 3000]);
+    await expect(failover(["x"], fake({}).f, Date.now, noWait).fetch("x", read)).rejects.toThrow("fetch failed");
+  });
+
+  it("a rate limit that clears while waiting is retried: reads and transactions (429 never reached the chain)", async () => {
+    for (const init of [read, send]) {
+      const { f, calls } = fake({ a: [busy, ok], b: [busy] });
+      expect((await failover(["a", "b"], f, Date.now, noWait).fetch("a", init)).status).toBe(200);
+      expect(calls.map((c) => c.url)).toEqual(["a", "b", "a"]);
+    }
+  });
+
+  it("names the fix for a refusal, and ignores ordinary answers", () => {
+    expect(rpcRefusal(429)).toMatch(/rate limiting.*--rpc <url>.*NEAR_RPC_URL/);
+    expect(rpcRefusal(200, { error: { code: -429, message: "THIS ENDPOINT IS DEPRECATED" } })).toMatch(/rate limiting/);
+    expect(rpcRefusal(503)).toMatch(/failing \(HTTP 503\)/);
+    expect(rpcRefusal(200, { error: { code: -32000, message: "UNKNOWN_ACCOUNT" } })).toBeNull();
+    expect(rpcRefusal(400)).toBeNull();
   });
 
   it("a caller's own abort doesn't cool the endpoint down", async () => {
