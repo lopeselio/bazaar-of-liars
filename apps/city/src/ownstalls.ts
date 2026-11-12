@@ -10,6 +10,7 @@
  * put the deed up for sale; any player without a stall can buy it, no street cred needed.
  */
 import * as THREE from "three";
+import { bindStation } from "./station";
 import { api, type DeedCertificateView, type OwnStall, type PlayerView, type StallsView } from "../../web/src/api";
 import { buildStall, type StallLook } from "../../web/src/scene";
 
@@ -47,7 +48,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 export function initOwnStalls(d: OwnStallsDeps) {
   document.body.insertAdjacentHTML(
     "beforeend",
-    `<div id="bz-own-prompt" hidden><kbd>F</kbd><span id="bz-own-prompt-text"></span></div>
+    `<button id="bz-own-prompt" type="button" hidden><kbd>F</kbd><span id="bz-own-prompt-text"></span></button>
      <aside id="bz-own" class="bz-card" hidden></aside>
      <div id="bz-away" hidden></div>`,
   );
@@ -289,12 +290,13 @@ export function initOwnStalls(d: OwnStallsDeps) {
 
   // ---------- walking up ----------
   let near: Slot | null = null;
+  bindStation($("bz-own-prompt"), "KeyF", () => {
+    if (!near || open || d.busy()) return false;
+    openPanel(near);
+    return true;
+  });
   addEventListener("keydown", (e) => {
     if ((e.target as HTMLElement)?.tagName === "INPUT") return;
-    if (e.code === "KeyF" && near && !open && !d.busy()) {
-      e.preventDefault();
-      openPanel(near);
-    }
     if (e.code === "Escape" && open) close();
   });
   const v = new THREE.Vector3();

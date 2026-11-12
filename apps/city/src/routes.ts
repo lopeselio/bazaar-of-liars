@@ -7,6 +7,7 @@
  * exactly what it signed for. A HUD chip shows the best spread right now and can guide you there.
  */
 import * as THREE from "three";
+import { bindStation } from "./station";
 import { api, type BoardView, type BoardsView, type PlayerView } from "../../web/src/api";
 
 export interface RouteDeps {
@@ -46,7 +47,7 @@ function buildSign(kind: "sells" | "buys") {
 export function initRoutes(d: RouteDeps) {
   document.body.insertAdjacentHTML(
     "beforeend",
-    `<div id="bz-board-prompt" hidden><kbd>T</kbd><span id="bz-board-text"></span></div>
+    `<button id="bz-board-prompt" type="button" hidden><kbd>T</kbd><span id="bz-board-text"></span></button>
      <aside id="bz-boardp" class="bz-card" hidden></aside>
      <div id="bz-guide" hidden><i id="bz-guide-arrow">➤</i><div><b id="bz-guide-title"></b><span id="bz-guide-sub"></span></div></div>`,
   );
@@ -175,15 +176,17 @@ export function initRoutes(d: RouteDeps) {
     $("bz-boardp").hidden = true;
   }
 
+  bindStation($("bz-board-prompt"), "KeyT", () => {
+    if (d.busy() || !near || open) return false;
+    open = near;
+    $("bz-board-prompt").hidden = true;
+    $("bz-boardp").hidden = false;
+    renderPanel(near);
+    return true;
+  });
   addEventListener("keydown", (e) => {
     if ((e.target as HTMLElement)?.tagName === "INPUT" || d.busy()) return;
-    if (e.code === "KeyT" && near && !open) {
-      e.preventDefault();
-      open = near;
-      $("bz-board-prompt").hidden = true;
-      $("bz-boardp").hidden = false;
-      renderPanel(near);
-    } else if (e.code === "Escape" && open) close();
+    if (e.code === "Escape" && open) close();
   });
   $("bz-route-chip").addEventListener("click", () => {
     guiding = !guiding;
