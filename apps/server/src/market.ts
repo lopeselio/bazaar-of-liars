@@ -72,6 +72,7 @@ const GOOD_VALUES = Object.fromEntries(Object.values(GOODS).map((g) => [g.id, g.
 const OPEN_ORDERS_TARGET = 5;
 /** Closed orders are pruned from contract storage after this long (their events stay onchain). */
 const PRUNE_AFTER_MS = 30 * 60_000;
+const utcDay = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 const memLevels = (m: PlayerMemory) => ({ grudge: Math.min(5, m.lowballs), loyalty: Math.min(5, m.deals) });
 
 export interface MarketAgent {
@@ -308,8 +309,9 @@ export class Market {
     const good = GOODS[m.goodId];
     const plan = restockPlan(good, { coins: me.coins, stock: me.stock[good.id], costBasis: me.costBasis[good.id] }, me.spentToday, me.dailyCap);
     if (!plan) {
-      if (me.stock[good.id] === 0 && me.coins < good.baseValue) {
-        await this.say({ kind: "closed", text: `${short(m.id)} is broke and has shuttered the stall. An investor could reopen it.`, agents: [m.id] });
+      // Once a day per merchant, whichever replica gets there first: the claim is a store key.
+      if (me.stock[good.id] === 0 && me.coins < good.baseValue && (await this.store.lock(`said-closed:${m.id}:${utcDay()}`, 26 * 3_600_000))) {
+        await this.say({ kind: "closed", text: `${short(m.id)} is broke and has shuttered the stall. An investor, or Auntie Wu, could reopen it.`, agents: [m.id] });
       }
       return;
     }
