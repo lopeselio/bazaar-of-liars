@@ -275,8 +275,8 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-/* On touch the city hides key glyphs, so the prompt says "Tap" instead, and sits above the joystick
-   and the travel-mode buttons. */
+/* On touch the city hides key glyphs, so the prompt says "Tap" instead. It sits just above the
+   travel-mode buttons, and on a narrow (portrait) screen above the joystick too. */
 body.touch-enabled .bz-tap {
   display: inline-block;
 }
@@ -284,12 +284,18 @@ body.touch-enabled :is(#bz-prompt, #bz-drop, #bz-own-prompt, #bz-dock-prompt, #b
   display: none;
 }
 body.touch-enabled :is(#bz-prompt, #bz-drop, #bz-own-prompt, #bz-dock-prompt, #bz-inf-prompt, #bz-board-prompt, #bz-pier-prompt) {
-  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 236px);
+  --bz-lift: 84px;
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + var(--bz-lift));
   padding: 12px 18px;
 }
 /* Pier 34 has Auntie Wu's board too: the cargo prompt stays a row above it, as on desktop. */
 body.touch-enabled #bz-pier-prompt {
-  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 292px);
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + var(--bz-lift) + 56px);
+}
+@media (max-width: 640px) {
+  body.touch-enabled :is(#bz-prompt, #bz-drop, #bz-own-prompt, #bz-dock-prompt, #bz-inf-prompt, #bz-board-prompt, #bz-pier-prompt) {
+    --bz-lift: 236px;
+  }
 }
 @keyframes bz-pop {
   from {
