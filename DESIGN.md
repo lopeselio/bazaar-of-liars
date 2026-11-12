@@ -247,6 +247,13 @@ A merchant that has used up the good it needs (Farrukh uses lamps, Zaria rugs, T
 - **Price.** `barterQuote` (packages/core/src/barter.ts) works like a market maker's quote. Wu credits 85% of the street value of what she receives, the merchant gives the fewest units that buy one of what it needs, and it keeps at least one on its shelf. Wu keeps a reserve of 20.
 - **Pace.** A merchant barters on about 1.2% of ticks, only when eligible. One barter costs the server about 0.004 NEAR of gas.
 
+## Playing Canal Street on a phone
+
+- **Every station works by tap.** Each walk-up prompt (a stall, a price board, Pier 34, an informant, the docks, a drop-off, a player stall) is a button. `apps/city/src/station.ts` binds its key (F, T or G) and a tap to the same function, so keyboard and touch can't drift apart. On touch the prompt shows **Tap** instead of the key and sits above the joystick.
+- **Movement is the city's own.** Slop New York's joystick, drag to look, pinch to zoom, Jump, and the Walk/Drive/Cycle/Fly buttons.
+- **The walkthrough and help speak touch.** On a coarse pointer they describe the joystick and tapping the prompt instead of key glyphs, which the city hides on touch screens.
+- **The root sends phones to the city too.** `/` redirects any browser with a working WebGPU adapter to `/city/`, phones included, because the whole loop (walk, haggle, offer, trade, bid, deliver) is playable by touch. Phones without WebGPU, and anyone who opens `/?classic`, get the desert bazaar.
+
 ## Fair-play protocol (the core NEAR feature)
 
 1. **Commit.** When a haggle opens, the server rolls the merchant's secret `{side, limit, need, seed, listPrice, grudge, loyalty}` and a salt. It posts `commitment = sha256("bazaar-v2|…|salt")` to the `bazaar` contract **before the player's first message**. The contract checks grudge and loyalty against its own memory, and escrows the player's good if the merchant is buying.
