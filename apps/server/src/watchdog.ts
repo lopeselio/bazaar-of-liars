@@ -1,7 +1,8 @@
 /**
  * The economy watchdog: every few minutes (wherever the agents act) it reads each agent's gas money
  * and key allowance, the server's and funder's NEAR, and recent street activity; asks the rules in
- * @bazaar/core what's wrong; tops up low agent balances from the funder; and keeps the report for
+ * @bazaar/core what's wrong; tops up low agent balances from the funder; has Auntie Wu advance
+ * coins to merchants and traders broke for hours (signed with her key); and keeps the report for
  * GET /api/health/economy. One replica runs it at a time.
  */
 import { assessEconomy, type WatchdogReport } from "@bazaar/core";
@@ -17,6 +18,8 @@ export interface WatchdogDeps {
   funder: { account: string; privateKey?: string } | null;
   agents: () => Promise<{ id: string; kind: string; account: string; coins: number }[]>;
   news: () => Promise<{ t: number; kind: string }[]>;
+  /** Auntie Wu advances coins to agents broke too long (the market signs it); returns what she paid. */
+  relieve?: (ids: string[]) => Promise<{ id: string; amount: number; tx: string }[]>;
   log?: (msg: string) => void;
 }
 
@@ -25,7 +28,7 @@ const REPORT_KEY = "watchdog:report";
 const SEEN_KEY = "watchdog:allowance";
 const CONTRACT_SEEN_KEY = "watchdog:contract";
 
-export async function lastReport(store: Store): Promise<(WatchdogReport & { toppedUp?: { account: string; amount: number; tx: string }[] }) | null> {
+export async function lastReport(store: Store): Promise<(WatchdogReport & { toppedUp?: { account: string; amount: number; tx: string }[]; relieved?: { id: string; amount: number; tx: string }[] }) | null> {
   return store.getJSON(REPORT_KEY);
 }
 
@@ -62,7 +65,18 @@ export async function runWatchdog(d: WatchdogDeps): Promise<WatchdogReport> {
       report.level = "alert";
     }
   }
+  // The watchdog acts on broke agents too, not just reports them.
+  let relieved: { id: string; amount: number; tx: string }[] = [];
+  if (d.relieve && report.relief.length) {
+    try {
+      relieved = await d.relieve(report.relief);
+      for (const r of relieved) log(`watchdog: Auntie Wu advanced ${r.id} ${r.amount} coins (${r.tx})`);
+    } catch (e) {
+      report.checks.push({ level: "warn", subject: "relief", text: `advance failed: ${(e as Error).message}` });
+      if (report.level === "ok") report.level = "warn";
+    }
+  }
   for (const c of report.checks) if (c.level !== "ok") log(`watchdog ${c.level}: ${c.subject}: ${c.text}`);
-  await d.store.putJSON(REPORT_KEY, { ...report, toppedUp }, 6 * 3_600_000);
+  await d.store.putJSON(REPORT_KEY, { ...report, toppedUp, relieved }, 6 * 3_600_000);
   return report;
 }

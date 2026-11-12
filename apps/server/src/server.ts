@@ -159,6 +159,16 @@ const watchdogDeps = market && ledger
       funder: process.env.FUNDER_ACCOUNT_ID ? { account: process.env.FUNDER_ACCOUNT_ID, privateKey: process.env.FUNDER_PRIVATE_KEY || undefined } : null,
       agents: () => market.agents(0),
       news: () => market.news(25),
+      // Under the street's lock: Wu's key also signs restocks and bids, and one nonce at a time is safer.
+      relieve: async (ids: string[]) => {
+        const token = await store.lock("market-tick", 5 * 60_000).catch(() => null);
+        if (!token) return [];
+        try {
+          return await market.relieve(ids);
+        } finally {
+          await store.unlock("market-tick", token);
+        }
+      },
     }
   : null;
 if (watchdogDeps && WATCHDOG_MS > 0) everyRound("watchdog", WATCHDOG_MS, 5 * 60_000, () => runWatchdog(watchdogDeps), 30_000);
