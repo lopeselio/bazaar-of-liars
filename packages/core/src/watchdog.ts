@@ -19,6 +19,8 @@ export interface AgentGas {
   balance: number;
   /** NEAR left in the key's gas allowance; null for an unlimited key or when unknown. */
   allowance: number | null;
+  /** A merchant down to its last unit that can't afford a lot: as stuck as a broke one. */
+  stuck?: boolean;
 }
 
 export interface WatchdogInput {
@@ -146,12 +148,12 @@ export function assessEconomy(i: WatchdogInput): WatchdogReport {
         }
       }
     }
-    if (TRADING.has(a.kind) && a.coins < BROKE_COINS) {
+    if (TRADING.has(a.kind) && (a.coins < BROKE_COINS || a.stuck)) {
       const since = i.brokeSince[a.id] ?? i.now;
       brokeSince[a.id] = since;
       if ((a.kind === "merchant" || a.kind === "trader") && i.now - since >= RELIEF_AFTER_MS) relief.push(a.id);
       if (i.now - since >= BROKE_TOO_LONG_MS) {
-        checks.push({ level: "warn", subject: a.id, text: `broke (${a.coins} coins) for ${Math.round((i.now - since) / 3_600_000)} h` });
+        checks.push({ level: "warn", subject: a.id, text: `${a.coins < BROKE_COINS ? "broke" : "can't afford a lot"} (${a.coins} coins) for ${Math.round((i.now - since) / 3_600_000)} h` });
       }
     }
   }

@@ -61,6 +61,14 @@ describe("economy watchdog", () => {
     expect(assessEconomy(base({ brokeSince: first.brokeSince })).brokeSince).toEqual({});
   });
 
+  it("treats a merchant that can't afford a lot like a broke one", () => {
+    const stuck = agent({ coins: 41, stuck: true });
+    const first = assessEconomy(base({ agents: [stuck] }));
+    const later = assessEconomy(base({ agents: [stuck], brokeSince: first.brokeSince, now: now + BROKE_TOO_LONG_MS }));
+    expect(later.relief).toEqual(["farrukh"]);
+    expect(later.checks.find((c) => c.subject === "farrukh")?.text).toContain("can't afford a lot");
+  });
+
   it("ignores customers' purses (they earn through income, not trade)", () => {
     expect(assessEconomy(base({ agents: [agent({ kind: "customer", coins: 0 })] })).brokeSince).toEqual({});
   });
