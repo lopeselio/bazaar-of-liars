@@ -247,6 +247,50 @@
   font: 700 15px var(--bz-font);
   box-shadow: 0 3px 0 #b07d22;
 }
+/* Every walk-up prompt is a button (station.ts): its key or a tap runs the same action. */
+.bz-station {
+  min-height: 48px;
+  /* left: 50% would cap a shrink-to-fit box at half the screen and wrap the label. */
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  cursor: pointer;
+  text-align: left;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: auto;
+}
+.bz-station:hover {
+  filter: brightness(1.15);
+}
+.bz-station:active {
+  filter: brightness(1.3);
+}
+.bz-tap {
+  display: none;
+  padding: 3px 9px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font: 700 12px var(--bz-font);
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* On touch the city hides key glyphs, so the prompt says "Tap" instead, and sits above the joystick
+   and the travel-mode buttons. */
+body.touch-enabled .bz-tap {
+  display: inline-block;
+}
+body.touch-enabled :is(#bz-prompt, #bz-drop, #bz-own-prompt, #bz-dock-prompt, #bz-inf-prompt, #bz-board-prompt, #bz-pier-prompt) kbd {
+  display: none;
+}
+body.touch-enabled :is(#bz-prompt, #bz-drop, #bz-own-prompt, #bz-dock-prompt, #bz-inf-prompt, #bz-board-prompt, #bz-pier-prompt) {
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 236px);
+  padding: 12px 18px;
+}
+/* Pier 34 has Auntie Wu's board too: the cargo prompt stays a row above it, as on desktop. */
+body.touch-enabled #bz-pier-prompt {
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 292px);
+}
 @keyframes bz-pop {
   from {
     opacity: 0;
