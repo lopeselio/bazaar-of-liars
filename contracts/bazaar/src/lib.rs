@@ -2443,9 +2443,39 @@ impl Bazaar {
             "haggle_closed",
             json!({ "haggle_id": haggle_id, "player": player, "merchant_id": h.merchant_id, "side": h.side, "good_id": h.good_id, "qty": h.qty, "status": h.status, "price": h.price, "limit": secret.floor, "need": secret.need }),
         );
+        // v3.15: an agent-to-agent haggle isn't kept in storage once it's settled. Nothing reads it
+        // back (proof bundles are for players), the event above carries the outcome and the
+        // revealed limit, and every haggle cost the contract ~320 bytes of storage forever.
+        if buyer_agent.is_some() {
+            self.haggles.remove(&haggle_id);
+            return;
+        }
         h.secret = Some(secret);
         h.salt = Some(salt);
         self.haggles.insert(haggle_id, h);
+    }
+
+    /// Server or owner, v3.15: drop settled agent-to-agent haggles from storage (the ones kept
+    /// before close_haggle stopped storing them). A player's haggle, or one still open, is never
+    /// touched: proof bundles read a player's haggle back with `get_haggle`. An agent is an account
+    /// the contract knows as an agent, or any sub-account of the contract (agents that have since
+    /// been moved to a new account by `rekey_agent`). Returns how many were dropped.
+    pub fn prune_haggles(&mut self, haggle_ids: Vec<String>) -> u32 {
+        let who = env::predecessor_account_id();
+        require!(who == self.server || who == self.owner, "only the server or the owner can prune haggles");
+        require!(haggle_ids.len() <= 200, "at most 200 haggles at a time");
+        let suffix = format!(".{}", env::current_account_id());
+        let mut pruned = 0u32;
+        for id in haggle_ids {
+            let Some(h) = self.haggles.get(&id) else { continue };
+            let agent = self.agent_of(&h.player).is_some() || h.player.as_str().ends_with(&suffix);
+            if h.status != Status::Open && agent {
+                self.haggles.remove(&id);
+                pruned += 1;
+            }
+        }
+        emit("haggles_pruned", json!({ "count": pruned }));
+        pruned
     }
 
     /// Anyone: expire a haggle the server never revealed. Counted against the server forever.
@@ -2865,6 +2895,49 @@ mod tests {
         let f = v.iter().find(|a| a.id == "farrukh").unwrap();
         assert_eq!(f.cost_basis, vec![3000]);
         assert_eq!(f.spent_today, 90, "only what was spent counts against the cap");
+    }
+
+    #[test]
+    fn a_settled_agent_haggle_leaves_no_storage_but_a_players_stays() {
+        let mut c = setup();
+        restock(&mut c, "w2", 100, 80, None);
+        assert!(c.get_haggle("w2".into()).is_none(), "a walk-away leaves nothing");
+        restock(&mut c, "w1", 100, 80, Some(90));
+        assert!(c.get_haggle("w1".into()).is_none(), "an agent's settled haggle is dropped");
+        assert_eq!(c.goods_of(farrukh(), "rug".into()), 7, "and it still settled");
+        buy_rug(&mut c, "p1");
+        assert!(c.get_haggle("p1".into()).is_some_and(|h| h.status == Status::Deal), "a player's haggle stays for its proof");
+    }
+
+    #[test]
+    fn prune_drops_only_settled_agent_haggles() {
+        let mut c = setup();
+        // An agent haggle stored the old way, an open one, and a player's.
+        ctx("farrukh.testnet", 100);
+        c.authorize_spend("w-open".into(), 100);
+        ctx("server.testnet", 100);
+        let s = wholesale_secret(80);
+        c.open_haggle("w-open".into(), farrukh(), Side::Sell, "wu".into(), "rug".into(), 0, 0, commitment_of(&s, SALT), Some(4), None);
+        let mut old = c.get_haggle("w-open".into()).unwrap();
+        old.status = Status::Deal;
+        c.haggles.insert("w-old".into(), old);
+        let mut rekeyed = c.get_haggle("w-old".into()).unwrap();
+        rekeyed.player = format!("rex.{}", env::current_account_id()).parse().unwrap();
+        c.haggles.insert("w-rekeyed".into(), rekeyed);
+        buy_rug(&mut c, "p1");
+        let n = c.prune_haggles(vec!["w-old".into(), "w-rekeyed".into(), "w-open".into(), "p1".into(), "nope".into()]);
+        assert_eq!(n, 2);
+        assert!(c.get_haggle("w-old".into()).is_none() && c.get_haggle("w-rekeyed".into()).is_none());
+        assert!(c.get_haggle("w-open".into()).is_some(), "an open haggle stays");
+        assert!(c.get_haggle("p1".into()).is_some(), "a player's haggle stays");
+    }
+
+    #[test]
+    #[should_panic(expected = "only the server or the owner")]
+    fn nobody_else_prunes() {
+        let mut c = setup();
+        ctx("player.testnet", 100);
+        c.prune_haggles(vec![]);
     }
 
     #[test]
