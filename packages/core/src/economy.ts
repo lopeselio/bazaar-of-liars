@@ -45,6 +45,11 @@ export const MAX_PURSE_SHARE = 0.6;
 export const runnerFee = (qty: number) => 3 + qty;
 /** Most a merchant will pay per unit at wholesale, as a share of the street value. */
 export const WHOLESALE_BID_MAX = 0.7;
+/** …and the least it's worth turning up at the docks with. */
+export const WHOLESALE_BID_MIN = 0.6;
+/** After a haggle between two agents ends in a walk-away, the buyer waits this long before trying
+ * the same seller again: nothing has changed in a minute, and each try costs gas and storage. */
+export const WALKED_WAIT_MS = 20 * 60_000;
 /** A merchant buys at most this many units from players and traders per window, so nobody can
  * drain its purse by selling to it again and again. */
 export const BUYS_PER_WINDOW = 3;
@@ -176,7 +181,10 @@ export function restockPlan(good: Good, h: Holdings, spentToday: number, cap = D
   if (h.stock > RESTOCK_AT) return null;
   const fee = runnerFee(LOT_SIZE);
   const budget = Math.min(Math.round(good.baseValue * WHOLESALE_BID_MAX * LOT_SIZE), h.coins - fee, cap - spentToday - fee);
-  if (budget < good.baseValue * 0.35 * LOT_SIZE) return null; // can't afford a lot: the stall runs dry
+  // Can't afford a lot: the stall runs dry. Wu's floor for a lot is 0.42–0.54 of street value (more
+  // late in the day), so a smaller budget only buys a walk-away, every round, each one a haggle
+  // stored onchain (Zaria, 12 Nov 2026: 64 coins against floors of 67 and up, for four hours).
+  if (budget < good.baseValue * WHOLESALE_BID_MIN * LOT_SIZE) return null;
   return { qty: LOT_SIZE, maxSpend: budget, runnerFee: fee };
 }
 
