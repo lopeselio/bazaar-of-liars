@@ -18,10 +18,10 @@ import { DOCK_WAGE } from "./wages.js";
 
 /** Broke for this long, the watchdog asks Wu to step in. */
 export const RELIEF_AFTER_MS = 30 * 60_000;
-/** An advance not repaid after this long is written off, so its borrower can be helped again:
+/** An advance not repaid after this long (8 hours) is written off, so its borrower can be helped again:
  * the rival traders lose money by design (a stall's price is retail), and would otherwise stay
  * broke for good after one loan. Wu's purse is refilled by every lot the merchants buy. */
-export const LOAN_WRITE_OFF_MS = 24 * 3_600_000;
+export const LOAN_WRITE_OFF_MS = 8 * 3_600_000;
 /** What a borrower still owes on a loan made at `at`. */
 export const owedOn = (loan: { amount: number; at: number } | undefined, now: number) => (loan && now - loan.at < LOAN_WRITE_OFF_MS ? loan.amount : 0);
 /** Wu keeps this much for dock wages and her own auction bids. */

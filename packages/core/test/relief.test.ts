@@ -31,7 +31,7 @@ describe("Auntie Wu's advances", () => {
     expect(repaymentFor({ ...b, owed: 0, coins: 1000 })).toBeNull();
   });
 
-  it("writes a loan off after a day, so a trader that lost it can be staked again", () => {
+  it("writes a loan off after 8 hours, so a trader that lost it can be staked again", () => {
     const loan = { amount: 61, at: 1000 };
     expect(owedOn(loan, 1000 + LOAN_WRITE_OFF_MS - 1)).toBe(61);
     expect(owedOn(loan, 1000 + LOAN_WRITE_OFF_MS)).toBe(0);
