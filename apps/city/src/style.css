@@ -2020,3 +2020,12 @@ button.bz-link { background: none; border: 0; padding: 0; color: inherit; text-d
 .bz-help:hover {
   border-color: var(--bz-gold);
 }
+
+/* The city hides every <kbd> on touch screens; the help sheet's touch controls (guide.tsx) use them
+   as labels for gestures and buttons, so they stay. The welcome's key hint goes. */
+body.touch-enabled .ob-controls kbd {
+  display: inline-block;
+}
+body.touch-enabled .ob-keys {
+  display: none;
+}

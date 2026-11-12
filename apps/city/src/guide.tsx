@@ -6,117 +6,175 @@ const open = (id: string) => {
   return !!el && !el.hidden;
 };
 const MOVE = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+/**
+ * A touch screen: the city shows its joystick and hides every key glyph (vendor css, body.touch-enabled),
+ * so the guide talks about taps and the joystick instead of keys.
+ */
+const touch = () => document.body.classList.contains("touch-enabled") || matchMedia("(any-pointer: coarse)").matches;
 
-const steps = (): TourStep[] => [
-  {
-    title: "Walk the city",
-    body: (
-      <p>
-        <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> or the arrow keys to move, drag to look around. <kbd>1</kbd> walk, <kbd>2</kbd> cab, <kbd>3</kbd> bike, <kbd>4</kbd>{" "}
-        helicopter.
-      </p>
-    ),
-    tryIt: "Press W to take a step.",
-    keys: MOVE,
-  },
-  {
-    target: ["#bz-prompt:not([hidden])", ".bz-tag", "#bz-go"],
-    title: "Find a stall",
-    body: (
-      <p>
-        The merchants' stalls line Canal Street. Walk up until <kbd>F</kbd> <b>Haggle with…</b> appears, then press <kbd>F</kbd>. Lost? <b>⇢ Canal St</b> takes you back.
-      </p>
-    ),
-    tryIt: "Walk to a stall and press F.",
-    done: () => open("bz-panel"),
-  },
-  {
-    target: "#bz-panel",
-    title: "Haggle",
-    body: (
-      <p>
-        Each merchant is an AI agent with its own NEAR account. Choose buy or sell, then offer with the quick buttons or type. When they swear a limit, <b>Call the bluff</b>{" "}
-        appears: catch a liar and the price collapses; accuse an honest one and it rises, or they walk. <kbd>Esc</kbd> leaves.
-      </p>
-    ),
-    when: () => open("bz-panel"),
-  },
-  {
-    target: ".bz-purse",
-    title: "Your purse",
-    body: <p>Coins and the goods you carry, read from the contract. Buy low at one stall or board, sell high at another.</p>,
-  },
-  {
-    target: "#bz-day",
-    title: "Haggles left today",
-    body: <p>A market day has a few haggles. When they're gone, a stall offers to start the next day.</p>,
-  },
-  {
-    target: "#bz-cred",
-    title: "Street cred",
-    body: <p>Every deal and delivery earns XP, kept onchain; catching a bluff earns extra. Levels unlock express jobs and, at level 3, a stall of your own. Click it to see what's next.</p>,
-  },
-  {
-    target: "#bz-jobs-btn",
-    title: "Delivery jobs",
-    body: <p>Customers across Manhattan lock a bounty onchain for goods from Canal Street. Take one, buy the good, and deliver it before the clock runs out.</p>,
-    tryIt: "Press J to open the board (J or Esc closes it).",
-    keys: ["KeyJ"],
-    done: () => open("bz-board"),
-  },
-  {
-    target: "#bz-route-chip",
-    title: "Trade routes",
-    body: (
-      <p>
-        Price boards around the city buy and sell at posted prices: press <kbd>T</kbd> at one. This chip shows the best spread right now; click it for directions.
-      </p>
-    ),
-  },
-  {
-    target: "#bz-wire",
-    title: "The Canal St wire",
-    body: <p>What the agents are doing on their own: restocking, hauling, flipping goods, bartering. The latest shows here; click it to open the full wire, where each line links to its transaction.</p>,
-  },
-  {
-    title: "More around town",
-    body: (
-      <ul>
-        <li>
-          <kbd>G</kbd> in the gold beam at <b>Pier 34</b>: bid on a cargo ship, sealed onchain.
-        </li>
-        <li>
-          <kbd>F</kbd> next to a hooded <b>informant</b>: buy a tip. Lies are refunded.
-        </li>
-        <li>
-          <kbd>F</kbd> at the docks when you're broke: a day's work for Auntie Wu.
-        </li>
-        <li>
-          Banners announce <b>street events</b>: festivals, shortages, inspector raids.
-        </li>
-      </ul>
-    ),
-  },
-  {
-    target: ["#bz-signin", "#bz-acct"],
-    title: "Own your progress",
-    body: (
-      <p>
-        You play as a guest. <b>🔑 Sign in</b> with a NEAR wallet, or Google or email through NEAR Auth, and your coins, goods and cred move to your own testnet account. Still no gas.
-      </p>
-    ),
-  },
-  {
-    target: ".ob-open",
-    title: "Help is always here",
-    body: <p>Every key, the rules, and this walkthrough again. Press ? at any time.</p>,
-  },
+const steps = (): TourStep[] => {
+  const t = touch();
+  return [
+    t
+      ? {
+          target: "#touch-stick",
+          title: "Walk the city",
+          body: (
+            <p>
+              Push the <b>joystick</b> to walk, drag anywhere else to look around, pinch to zoom. <b>Walk</b>, <b>Drive</b>, <b>Cycle</b> and <b>Fly</b> at the bottom switch how you
+              travel.
+            </p>
+          ),
+          tryIt: "Push the joystick to take a step.",
+          done: () => !!document.querySelector("#touch-stick.is-pressed"),
+        }
+      : {
+          title: "Walk the city",
+          body: (
+            <p>
+              <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> or the arrow keys to move, drag to look around. <kbd>1</kbd> walk, <kbd>2</kbd> cab, <kbd>3</kbd> bike, <kbd>4</kbd>{" "}
+              helicopter.
+            </p>
+          ),
+          tryIt: "Press W to take a step.",
+          keys: MOVE,
+        },
+    {
+      target: ["#bz-prompt:not([hidden])", ".bz-tag", "#bz-go"],
+      title: "Find a stall",
+      body: t ? (
+        <p>
+          The merchants' stalls line Canal Street. Walk up until the <b>Tap · Haggle with…</b> button appears, then tap it. Lost? <b>⇢ Canal St</b> takes you back.
+        </p>
+      ) : (
+        <p>
+          The merchants' stalls line Canal Street. Walk up until <kbd>F</kbd> <b>Haggle with…</b> appears, then press <kbd>F</kbd>. Lost? <b>⇢ Canal St</b> takes you back.
+        </p>
+      ),
+      tryIt: t ? "Walk to a stall and tap the prompt." : "Walk to a stall and press F.",
+      done: () => open("bz-panel"),
+    },
+    {
+      target: "#bz-panel",
+      title: "Haggle",
+      body: (
+        <p>
+          Each merchant is an AI agent with its own NEAR account. Choose buy or sell, then offer with the quick buttons or type. When they swear a limit, <b>Call the bluff</b>{" "}
+          appears: catch a liar and the price collapses; accuse an honest one and it rises, or they walk. {t ? <b>✕</b> : <kbd>Esc</kbd>} leaves.
+        </p>
+      ),
+      when: () => open("bz-panel"),
+    },
+    {
+      target: ".bz-purse",
+      title: "Your purse",
+      body: <p>Coins and the goods you carry, read from the contract. Buy low at one stall or board, sell high at another.</p>,
+    },
+    {
+      target: "#bz-day",
+      title: "Haggles left today",
+      body: <p>A market day has a few haggles. When they're gone, a stall offers to start the next day.</p>,
+    },
+    {
+      target: "#bz-cred",
+      title: "Street cred",
+      body: <p>Every deal and delivery earns XP, kept onchain; catching a bluff earns extra. Levels unlock express jobs and, at level 3, a stall of your own. {t ? "Tap" : "Click"} it to see what's next.</p>,
+    },
+    {
+      target: "#bz-jobs-btn",
+      title: "Delivery jobs",
+      body: <p>Customers across Manhattan lock a bounty onchain for goods from Canal Street. Take one, buy the good, and deliver it before the clock runs out.</p>,
+      tryIt: t ? "Tap Jobs to open the board (✕ closes it)." : "Press J to open the board (J or Esc closes it).",
+      keys: ["KeyJ"],
+      done: () => open("bz-board"),
+    },
+    {
+      target: "#bz-route-chip",
+      title: "Trade routes",
+      body: (
+        <p>
+          Price boards around the city buy and sell at posted prices: {t ? "tap the prompt" : <>press <kbd>T</kbd></>} at one. This chip shows the best spread right now;{" "}
+          {t ? "tap" : "click"} it for directions.
+        </p>
+      ),
+    },
+    {
+      target: "#bz-wire",
+      title: "The Canal St wire",
+      body: (
+        <p>
+          What the agents are doing on their own: restocking, hauling, flipping goods, bartering. The latest shows here; {t ? "tap" : "click"} it to open the full wire, where each line links
+          to its transaction.
+        </p>
+      ),
+    },
+    {
+      title: "More around town",
+      body: (
+        <ul>
+          <li>
+            {t ? "Tap the prompt" : <kbd>G</kbd>} in the gold beam at <b>Pier 34</b>: bid on a cargo ship, sealed onchain.
+          </li>
+          <li>
+            {t ? "Tap the prompt" : <kbd>F</kbd>} next to a hooded <b>informant</b>: buy a tip. Lies are refunded.
+          </li>
+          <li>
+            {t ? "Tap the prompt" : <kbd>F</kbd>} at the docks when you're broke: a day's work for Auntie Wu.
+          </li>
+          <li>
+            Banners announce <b>street events</b>: festivals, shortages, inspector raids.
+          </li>
+        </ul>
+      ),
+    },
+    {
+      target: ["#bz-signin", "#bz-acct"],
+      title: "Own your progress",
+      body: (
+        <p>
+          You play as a guest. <b>🔑 Sign in</b> with a NEAR wallet, or Google or email through NEAR Auth, and your coins, goods and cred move to your own testnet account. Still no gas.
+        </p>
+      ),
+    },
+    {
+      target: ".ob-open",
+      title: "Help is always here",
+      body: t ? <p>The controls, the rules, and this walkthrough again. Tap Help at any time.</p> : <p>Every key, the rules, and this walkthrough again. Press ? at any time.</p>,
+    },
+  ];
+};
+
+/** The help sheet's controls: keys on a keyboard, the city's on-screen controls on a touch screen. */
+const KEY_CONTROLS: [string[], string][] = [
+  [["W", "A", "S", "D"], "walk, drive or fly (arrows too)"],
+  [["Space"], "jump, brake or climb"],
+  [["Drag"], "look around"],
+  [["1", "2", "3", "4"], "walk, cab, bike, helicopter"],
+  [["F"], "haggle at a stall, deliver, work the docks, ask an informant"],
+  [["J"], "delivery jobs board"],
+  [["G"], "bid on the cargo at Pier 34"],
+  [["T"], "trade at a price board"],
+  [["M"], "map"],
+  [["Esc"], "close a panel or leave a stall"],
+  [["?"], "open this sheet"],
+];
+const TOUCH_CONTROLS: [string[], string][] = [
+  [["Joystick"], "walk, drive or fly"],
+  [["Jump"], "jump (climb in the helicopter; Descend goes down)"],
+  [["Drag"], "look around"],
+  [["Pinch"], "zoom"],
+  [["Walk", "Drive", "Cycle", "Fly"], "how you travel"],
+  [["Tap the prompt"], "haggle at a stall, trade at a price board, bid at Pier 34, deliver, work the docks, ask an informant"],
+  [["Jobs"], "delivery jobs board"],
+  [["Map"], "the map button at the top"],
+  [["✕"], "close a panel or leave a stall"],
+  [["Help"], "open this sheet"],
 ];
 
 const cfg: GuideConfig = {
   theme: "city",
   storageKey: "bazaar.guide.city",
-  slides: [
+  slides: () => [
     {
       art: "🏮",
       eyebrow: "Bazaar of Liars · Canal Street",
@@ -172,30 +230,25 @@ const cfg: GuideConfig = {
       eyebrow: "Where to start",
       title: "Walk to Farrukh's stall",
       body: (
-        <p>
-          Use <strong>WASD</strong> to walk up to a stall on Canal Street and press <strong>F</strong> to haggle, or press <strong>J</strong> for a delivery job. Want a quick tour of the
-          screen first?
-        </p>
+        touch() ? (
+          <p>
+            Use the <strong>joystick</strong> to walk up to a stall on Canal Street and tap <strong>Haggle</strong>, or tap <strong>Jobs</strong> for a delivery job. Want a quick tour
+            of the screen first?
+          </p>
+        ) : (
+          <p>
+            Use <strong>WASD</strong> to walk up to a stall on Canal Street and press <strong>F</strong> to haggle, or press <strong>J</strong> for a delivery job. Want a quick tour of
+            the screen first?
+          </p>
+        )
       ),
     },
   ],
   steps,
-  help: {
+  help: () => ({
     title: "Canal Street",
     elsewhere: { href: "/?classic", label: "🏜️ The desert bazaar", note: "is the original, simpler version: three stalls, no walking, and it runs in any browser." },
-    controls: [
-      [["W", "A", "S", "D"], "walk, drive or fly (arrows too)"],
-      [["Space"], "jump, brake or climb"],
-      [["Drag"], "look around"],
-      [["1", "2", "3", "4"], "walk, cab, bike, helicopter"],
-      [["F"], "haggle at a stall, deliver, work the docks, ask an informant"],
-      [["J"], "delivery jobs board"],
-      [["G"], "bid on the cargo at Pier 34"],
-      [["T"], "trade at a price board"],
-      [["M"], "map"],
-      [["Esc"], "close a panel or leave a stall"],
-      [["?"], "open this sheet"],
-    ],
+    controls: touch() ? TOUCH_CONTROLS : KEY_CONTROLS,
     rules: [
       <>
         Each merchant's <b>secret limit</b> is sealed on NEAR first; a rules engine, not the AI, decides prices.
@@ -219,7 +272,7 @@ const cfg: GuideConfig = {
         During an <b>inspector raid</b>, haggle on Canal Street without a licence and the inspectors seize anything above 5 of each good.
       </>,
     ],
-  },
+  }),
   button: {
     className: "bz-card bz-help",
     content: (
