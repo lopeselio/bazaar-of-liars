@@ -117,32 +117,35 @@ console.log(market ? `agent economy: on (v3)${Number(process.env.MARKET_TICK_MS 
 // Only one deployment should run the agents against a contract: the hosted demo sets
 // MARKET_TICK_MS=40000. Locally the agents stay still unless you set it (reads still work).
 const MARKET_TICK_MS = Number(process.env.MARKET_TICK_MS ?? 0);
-if (market && MARKET_TICK_MS > 0)
-  setInterval(async () => {
-    // One replica at a time runs the agents.
-    const token = await store.lock("market-tick", 5 * 60_000).catch(() => null);
+/**
+ * Run `f` every `ms` (and once `firstAfterMs` after start) on whichever replica claims the round
+ * first. The claim is a store key that expires after three quarters of the interval and is never
+ * released, so 2–5 replicas each firing their own timer still run it about once per interval, not
+ * once per replica. The name's own lock is held while it runs, so a slow round never overlaps the
+ * next.
+ */
+function everyRound(name: string, ms: number, maxRunMs: number, f: () => Promise<unknown>, firstAfterMs?: number) {
+  const round = async () => {
+    const claim = await store.lock(`${name}:round`, Math.max(1000, Math.round(ms * 0.75))).catch(() => null);
+    if (!claim) return;
+    const token = await store.lock(name, maxRunMs).catch(() => null);
     if (!token) return;
     try {
-      await market.tick();
+      await f();
+    } catch (e) {
+      console.error(`${name}:`, (e as Error).message);
     } finally {
-      await store.unlock("market-tick", token);
+      await store.unlock(name, token);
     }
-  }, MARKET_TICK_MS).unref();
+  };
+  if (firstAfterMs !== undefined) setTimeout(round, firstAfterMs).unref();
+  setInterval(round, ms).unref();
+}
+if (market && MARKET_TICK_MS > 0) everyRound("market-tick", MARKET_TICK_MS, 5 * 60_000, () => market.tick());
 // The harbour runs on a shorter beat than the street: bid and reveal windows are minutes long.
 // On by default wherever the agents act; HARBOUR_TICK_MS overrides (0 turns it off).
 const HARBOUR_TICK_MS = Number(process.env.HARBOUR_TICK_MS ?? (MARKET_TICK_MS > 0 ? 10_000 : 0));
-if (market && HARBOUR_TICK_MS > 0)
-  setInterval(async () => {
-    const token = await store.lock("harbour-tick", 60_000).catch(() => null);
-    if (!token) return;
-    try {
-      await market.harbour();
-    } catch (e) {
-      console.error("harbour:", (e as Error).message);
-    } finally {
-      await store.unlock("harbour-tick", token);
-    }
-  }, HARBOUR_TICK_MS).unref();
+if (market && HARBOUR_TICK_MS > 0) everyRound("harbour-tick", HARBOUR_TICK_MS, 60_000, () => market.harbour());
 
 // Economy watchdog: on wherever the agents act; WATCHDOG_MS overrides (0 turns it off). It tops up
 // agents' gas money from FUNDER_ACCOUNT_ID (key FUNDER_PRIVATE_KEY, or the local keychain).
@@ -158,21 +161,7 @@ const watchdogDeps = market && ledger
       news: () => market.news(25),
     }
   : null;
-if (watchdogDeps && WATCHDOG_MS > 0) {
-  const watch = async () => {
-    const token = await store.lock("watchdog", 5 * 60_000).catch(() => null);
-    if (!token) return;
-    try {
-      await runWatchdog(watchdogDeps);
-    } catch (e) {
-      console.error("watchdog:", (e as Error).message);
-    } finally {
-      await store.unlock("watchdog", token);
-    }
-  };
-  setTimeout(watch, 30_000).unref();
-  setInterval(watch, WATCHDOG_MS).unref();
-}
+if (watchdogDeps && WATCHDOG_MS > 0) everyRound("watchdog", WATCHDOG_MS, 5 * 60_000, () => runWatchdog(watchdogDeps), 30_000);
 
 const restore = (rec: LiveRecord) => HaggleSession.restore(rec.snap, llm, attestor, ledger ?? undefined);
 
