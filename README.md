@@ -27,7 +27,7 @@ Players never see a wallet or pay gas.
 **Judging without a NEAR AI key?** Everything below runs with no key and no `.env`:
 - the hosted demo (link under [Play it](#play-it)): every haggle there is attested, committed and settled live, and its **Download proof** bundle checks with `pnpm verify:haggle <file>`;
 - `pnpm install && pnpm test` (all TypeScript tests), `pnpm test:contract` (needs Rust), `pnpm haggle` and `pnpm sim` (offline);
-- `pnpm verify:haggle examples/sample-haggle.json`, `pnpm verify:deed corner-1` and `pnpm check:goods` (read testnet, no key).
+- `pnpm verify:haggle examples/hosted-haggle.json` (a haggle played on the hosted demo on 12 Nov 2026), `pnpm verify:deed corner-1` and `pnpm check:goods` (read testnet, no key).
 
 Running the game server yourself (`pnpm dev`, `pnpm start`, Canal Street locally, sign-in) needs a NEAR AI Cloud key in `.env`; without one it stops with *Set NEARAI_API_KEY*.
 
@@ -73,7 +73,7 @@ flowchart TB
 | Container App secrets | NEAR AI key, `bazaar-server.testnet` key, the agents' keys (`AGENT_KEYS`), Redis URL, the session secret (`SESSION_SECRET`) | Never in the image or the repo |
 | NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
 | NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods as NEP-245 multi tokens, merchant memory, top traders, and the agents' purses, stock and spending caps |
-| Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab`, each a sub-account of `v3.bazaar-liars.testnet`. A busy agent moves to a fresh account when its key's gas allowance runs low (`rekey_agent`): today `rex-2`, `vesey-3`, `teahouse-3`, `deli-2`, `hotel-2` and `dowager-2`. The contract's `agents` view, and `/api/market`, always list the current ones | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
+| Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab`, each a sub-account of `v3.bazaar-liars.testnet`. A busy agent moves to a fresh account when its key's gas allowance runs low (`rekey_agent`): today `tobin-2`, `rex-2`, `vesey-3`, `teahouse-3`, `deli-2`, `hotel-2` and `dowager-2`. The contract's `agents` view, and `/api/market`, always list the current ones | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
 | Verifier | `pnpm verify:haggle` or `/verify.html` in a browser, anyone, no API key | Replays the bundle and checks it against the chain |
 
 Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
@@ -176,7 +176,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ## Try the pieces
 
-1. Run `pnpm install`, then `pnpm test`. You should see 185 tests pass across four packages (core 97, merchant 42, verify 28, server 18), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
+1. Run `pnpm install`, then `pnpm test`. You should see 186 tests pass across four packages (core 98, merchant 42, verify 28, server 18), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer below its price (about half the opening ask is a good start), claim a competitor's price (`20 saw 25`), call a claimed minimum (`liar`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor (lower is better). `sharp` (calls bluffs unless the merchant looks firm) should beat both `caller` (calls every claim) and `splitter` (never calls) against every merchant. Below it, a **trade loop** table buys each good at Auntie Wu's board and sells it to the merchant who wants it: taking the merchant's opening bid makes only a few percent, while haggling it up (`sellReader`) makes about +16–26%.
 4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
@@ -185,7 +185,20 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    - **NVIDIA GPUs:** NVIDIA's NRAS verdict and each GPU's report, with every JWT verified against NVIDIA's JWKS.
 
    You should see `✓ VERIFIED — trusted signers: 0x…`. Attestation is free and needs no credits. Use `--offline` to skip the Intel and NVIDIA network calls, or `--json out.json` to save the full bundle.
-5. **No API key needed:** run `pnpm verify:haggle examples/sample-haggle.json`. This replays a real haggle with Old Farrukh, settled on testnet, where he claimed "not below 65", got called, was caught bluffing, and dropped to 54 (his real floor was 47). It checks 50 things, including:
+5. **No API key needed: a haggle from the hosted demo.** `examples/hosted-haggle.json` is the **Download proof** bundle of a haggle played on https://bazaar.lopeselio.online on 12 Nov 2026. A guest bought a Silk Rug from Old Farrukh for 81; his secret floor was 54, and he bluffed "68 is my absolute limit". It's haggle `cd3e287a-e2ea-4697-8288-b204a6d42089` on `v3.bazaar-liars.testnet`, with [commit](https://testnet.nearblocks.io/txns/GLvk6pKmQDaDWmGWj86kzXA9JjHZgHHqvMCRSD7KvKVd) and [reveal and settle](https://testnet.nearblocks.io/txns/CRWWkq68xsHw6eqbPXKaJKZkHWyAJMXfNQfLKbE5Enbn). Run `pnpm verify:haggle examples/hosted-haggle.json`, and the last lines should read:
+
+   ```
+     ✓ Commitment is onchain in v3.bazaar-liars.testnet, for this merchant, good, side and the merchant's onchain memory of you
+     ✓ Commitment was posted by the game server to the contract
+     ✓ That transaction is this haggle's open_haggle, with this commitment, and it succeeded
+     ✓ Commitment was onchain before the merchant's first signed reply  (block 2026-11-12T13:28:42.019Z vs reply 2026-11-12T13:28:43.000Z)
+     ✓ Contract settled the deal at 81 after checking the reveal and floor  (onchain status: deal)
+     ✓ The secret revealed onchain is the one in this bundle
+
+   ✓ FAIR PLAY VERIFIED — all 50 checks passed
+   ```
+
+   Any haggle you play on the hosted demo gives you the same kind of file. Older bundles also verify: run `pnpm verify:haggle examples/sample-haggle.json`. This replays a real haggle with Old Farrukh, settled on testnet, where he claimed "not below 65", got called, was caught bluffing, and dropped to 54 (his real floor was 47). It checks 50 things, including:
    - the revealed secret matches the commitment;
    - the commitment is in the contract it was played on (`v2.bazaar-liars.testnet`, the version live on 5 Nov; today's haggles use `v3`), and its block came **before** the merchant's first TEE-signed reply;
    - the transaction the bundle names is this haggle's own successful `open_haggle` call with this commitment (not some other transaction to the contract);
