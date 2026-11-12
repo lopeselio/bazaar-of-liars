@@ -1,6 +1,10 @@
 # Bazaar of Liars
 
 A trading game against AI merchants who bluff. Read their tells, call their lies, buy low and sell high, and the chain proves every bluff was fair.
+Part of the NEAR Arcade submission for NEAR HACKATHON (https://arcade.lopeselio.online, github.com/lopeselio/near-arcade); the author's other submission is Signalfire (github.com/lopeselio/signalfire).
+
+**Play it: https://bazaar.lopeselio.online** (Canal Street at [`/city/`](https://bazaar.lopeselio.online/city/), the desert bazaar at [`/?classic`](https://bazaar.lopeselio.online/?classic)). Testnet, no wallet needed.
+
 Built at NEAR HACKATHON (1–14 Nov 2026). Tracks: Games With Real Economies, Privacy & Private AI, Agent Economy, NFTs That Do Something, AI Swarms.
 
 ## What it is
@@ -69,7 +73,7 @@ flowchart TB
 | Container App secrets | NEAR AI key, `bazaar-server.testnet` key, the agents' keys (`AGENT_KEYS`), Redis URL, the session secret (`SESSION_SECRET`) | Never in the image or the repo |
 | NEAR AI Cloud | Qwen in an Intel TDX + NVIDIA TEE | Attestation, plus a signed reply for every read and every merchant line |
 | NEAR testnet | [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) | Commitments, reveals, coins, goods as NEP-245 multi tokens, merchant memory, top traders, and the agents' purses, stock and spending caps |
-| Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab` (`.v3.bazaar-liars.testnet`) | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
+| Agent accounts | `farrukh`, `zaria`, `tobin`, `wu`, `ivy`, `rex`, `lo`, the customers `vesey`, `teahouse`, `deli`, `hotel`, `dowager`, and `cab`, each a sub-account of `v3.bazaar-liars.testnet`. A busy agent moves to a fresh account when its key's gas allowance runs low (`rekey_agent`): today `rex-2`, `vesey-3`, `teahouse-3`, `deli-2`, `hotel-2` and `dowager-2`. The contract's `agents` view, and `/api/market`, always list the current ones | Each agent's own wallet. Its only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) on the contract, nothing else |
 | Verifier | `pnpm verify:haggle` or `/verify.html` in a browser, anyone, no API key | Replays the bundle and checks it against the chain |
 
 Locally (`pnpm dev`) the same server keeps state in its own memory instead of Redis.
@@ -108,7 +112,7 @@ sequenceDiagram
 
 ## Play it
 
-**Hosted demo: https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/** (testnet, no wallet needed). In a WebGPU browser (recent Chrome, Edge or Safari) the root opens **Canal Street**, the walkable New York version (see [Canal Street](#canal-street)). The steps below are for the original desert bazaar: open **[`/?classic`](https://bazaar-liars.delightfulwave-c85acb1b.northeurope.azurecontainerapps.io/?classic)** (browsers without WebGPU get it at the root anyway) and you should see a desert bazaar at dusk with three stalls. Each version links to the other: **Canal Street →** in the desert's top bar, and a link at the bottom of each **How to play** sheet. A merchant's reply usually takes 1–6 seconds while the TEE model answers (up to 40 when NEAR AI is busy).
+**Hosted demo: https://bazaar.lopeselio.online/** (testnet, no wallet needed). In a WebGPU browser (recent Chrome, Edge or Safari) the root opens **Canal Street**, the walkable New York version (see [Canal Street](#canal-street)). The steps below are for the original desert bazaar: open **[`/?classic`](https://bazaar.lopeselio.online/?classic)** (browsers without WebGPU get it at the root anyway) and you should see a desert bazaar at dusk with three stalls. Each version links to the other: **Canal Street →** in the desert's top bar, and a link at the bottom of each **How to play** sheet. A merchant's reply usually takes 1–6 seconds while the TEE model answers (up to 40 when NEAR AI is busy).
 
 To run it yourself you need Node 22 or later, pnpm, and a NEAR AI Cloud key in `.env`. Run `pnpm install`, then `pnpm dev`, and open http://localhost:5173.
 
@@ -172,7 +176,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 
 ## Try the pieces
 
-1. Run `pnpm install`, then `pnpm test`. You should see 168 tests pass across four packages (core 83, merchant 41, verify 26, server 18), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
+1. Run `pnpm install`, then `pnpm test`. You should see 185 tests pass across four packages (core 97, merchant 42, verify 28, server 18), including 3,000-haggle fuzz tests showing a merchant never sells below its secret floor and never pays above its secret ceiling, with bluffs being called.
 2. Run `pnpm haggle`. A merchant prints a **commitment hash**, then an opening price. Type an offer below its price (about half the opening ask is a good start), claim a competitor's price (`20 saw 25`), call a claimed minimum (`liar`), or `take`. When the haggle ends, the secret floor and need are revealed and checked against the commitment, and you see `✓ fair play verified`.
 3. Run `pnpm sim`. You should see a table of scripted bot strategies against each merchant: deal rate, walk-away rate, and how much each one overpaid above the hidden floor (lower is better). `sharp` (calls bluffs unless the merchant looks firm) should beat both `caller` (calls every claim) and `splitter` (never calls) against every merchant. Below it, a **trade loop** table buys each good at Auntie Wu's board and sells it to the merchant who wants it: taking the merchant's opening bid makes only a few percent, while haggling it up (`sellReader`) makes about +16–26%.
 4. Copy `.env.example` to `.env` and set `NEARAI_API_KEY` (from cloud.near.ai). Then run `pnpm verify:model`. It fetches a TEE attestation for the merchant model with a fresh random nonce and prints a **Verified panel** with these checks:
@@ -194,7 +198,7 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
    You should see `✓ FAIR PLAY VERIFIED`. The onchain checks read testnet RPC, so they need a network but no key; a transaction regular nodes have pruned is read from an archival node. Add `--no-chain` to skip them. The reads go to Intea, then dRPC, then FastNEAR (public testnet RPCs); when all of them answer HTTP 429 the verifier waits and goes round again twice, then stops with a plain error. Add `--rpc <url>` (or set `NEAR_RPC_URL`) to put an endpoint of your own first; the same flag works for `verify:deed` and `check:goods`. Edit any number in the file (the `floor`, say) and run it again to see the checks fail.
 6. **Needs credits:** run `pnpm haggle:llm` (or `pnpm haggle:llm -- zaria`) and haggle in plain English, e.g. `I'll give you 30, the stall by the well sells it for 40`. Type `take` to accept or `leave` to walk away. Replies take about 0.5–2 s. With `BAZAAR_CONTRACT_ID` and `SERVER_ACCOUNT_ID` set in `.env` (plus that account's key in `~/.near-credentials/testnet/`, or `SERVER_PRIVATE_KEY`), you also see a nearblocks link for the commitment before the first message, and one for the reveal at the end. At the end you see the real floor and need, `✓ Fair play verified`, and a proof bundle written to `haggles/`.
 
-7. **Needs Rust:** run `pnpm test:contract`. You should see 138 contract tests pass, including:
+7. **Needs Rust:** run `pnpm test:contract`. You should see 141 contract tests pass, including:
    - the contract's commitment hash matches the TypeScript one byte for byte (shared vectors in both test suites);
    - a sale below the committed floor, or a purchase above the committed ceiling, is rejected;
    - the server can't invent a grudge: memory in a commitment must match the contract's own record;
@@ -243,9 +247,9 @@ Dockerfile       one image: game + API on port 8080
 
 The game server can see a merchant's secret during a haggle. The design guarantees that the secret can't *change* and that the deal *respects* it. It doesn't guarantee the secret stays hidden from the server's operator. See DESIGN.md, "What it doesn't prove".
 
-## Our other hackathon project
+## The NEAR Arcade, and the author's other submission
 
-Following the hackathon's rule for people with two entries (Q-015), this project is independent of, and discloses, our other submission: [Realm Ledger](https://github.com/lopeselio/realm-ledger), a turn-based conquest game where rival realms are AI agents with sealed orders on NEAR. The two share no code.
+Bazaar of Liars is part of the NEAR Arcade submission for NEAR HACKATHON ([arcade.lopeselio.online](https://arcade.lopeselio.online), [github.com/lopeselio/near-arcade](https://github.com/lopeselio/near-arcade)). The author's other submission is Signalfire ([github.com/lopeselio/signalfire](https://github.com/lopeselio/signalfire)), disclosed under the hackathon's rule for people with two entries (Q-015).
 
 ## License
 
