@@ -829,7 +829,10 @@ export class Market {
       try {
         await f();
       } catch (e) {
-        console.error(`market ${name}:`, (e as Error).message);
+        // near-kit puts the useful part (NotEnoughAllowance, a panic) in `data`, not the message.
+        const x = e as Error & { code?: string; data?: unknown; panic?: string };
+        const detail = x.panic ?? (x.data !== undefined ? JSON.stringify(x.data).slice(0, 300) : "");
+        console.error(`market ${name}:`, x.message, x.code ?? "", detail);
       }
     };
     for (const m of MERCHANTS) await step(`restock ${m.id}`, () => this.restock(m));
