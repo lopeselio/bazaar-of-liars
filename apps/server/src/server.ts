@@ -45,7 +45,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { randomInt } from "node:crypto";
 import { lastReport, runWatchdog } from "./watchdog.js";
 import { BETTER_AUTH_PATH, betterAuthFromEnv, betterAuthHandler, migrateBetterAuth, sessionNearAccount } from "./betterAuth.js";
-import { haggleHint, AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
+import { haggleHint, AGENTS, RAID_LIMIT, askMultiplier, bidMultiplier, eventActive, eventHeadline, raidSeizes, BOARDS, BOARD_REACH, askPrice, bestRoute, bidPrice, boardById, type PricedBoard, INFORMANTS, INFORMANT_REACH, TIP_HORIZON_MS, informantById, makeClaim, newSalt as freshSalt, plainClaim, tipCommitment, mulberry32, BID_WINDOW_MS, BROKE_BELOW, PIER_REACH, REVEAL_WINDOW_MS, SHIP_GAP_MS, CANAL_ORIGIN, DOCK, DOCK_REACH, DOCK_WAGE, GOODS, LICENCE_LEVEL, LICENCE_PRICE, MAX_STALL_PRICE, DEED_TAX_PCT, MAX_DEED_PRICE, sellerTake, suggestedAsk, MERCHANTS, RESTOCK_AT, restockPlan, STALL_SLOTS, XP, canTake, credView, fare as fareFor, impliedMode, routeMetres, type CredView, type Side, type TravelMode } from "@bazaar/core";
 import { storeFromEnv, type DayRecord, type LiveRecord } from "./store.js";
 import { AuthError, authFromEnv, derivedPublicKey, implicitAccount, isAccountPlayer, issueSession, sessionAccount, verifyIdToken } from "./auth.js";
 import { Market } from "./market.js";
@@ -157,7 +157,15 @@ const watchdogDeps = market && ledger
       serverId: process.env.SERVER_ACCOUNT_ID!,
       contractId: ledger.contractId,
       funder: process.env.FUNDER_ACCOUNT_ID ? { account: process.env.FUNDER_ACCOUNT_ID, privateKey: process.env.FUNDER_PRIVATE_KEY || undefined } : null,
-      agents: () => market.agents(0),
+      // A merchant down to its last unit that can't afford a lot is stuck, broke or not.
+      agents: async () =>
+        (await market.agents(0)).map((a) => {
+          const m = MERCHANTS.find((x) => x.id === a.id);
+          if (!m) return a;
+          const g = GOODS[m.goodId];
+          const h = { coins: a.coins, stock: a.stock[g.id] ?? 0, costBasis: a.costBasis[g.id] ?? 0 };
+          return { ...a, stuck: h.stock <= RESTOCK_AT && !restockPlan(g, h, 0, a.dailyCap) };
+        }),
       news: () => market.news(25),
       // Under the street's lock: Wu's key also signs restocks and bids, and one nonce at a time is safer.
       relieve: async (ids: string[]) => {
