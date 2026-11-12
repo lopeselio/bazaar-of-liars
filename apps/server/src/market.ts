@@ -58,6 +58,8 @@ import {
   type Reason,
   BUYS_PER_WINDOW,
   BUY_WINDOW_MS,
+  advanceFor,
+  repaymentFor,
 } from "@bazaar/core";
 import { barterSide, intentsHoldings, readIntentsIdentity, readIntentsVerifier, readSalt, simulateIntents, withdrawBack } from "@bazaar/merchant";
 import { explorerTx, readAgents, readDeedAsks, type DeedAsk, readAuctions, readEvent, readTip, readMemory, readOrders, readStalls, type AgentSigner, type AgentView, type Ledger, type OnchainAuction, type OnchainOrder, type OnchainStall } from "@bazaar/merchant";
@@ -72,6 +74,9 @@ const GOOD_VALUES = Object.fromEntries(Object.values(GOODS).map((g) => [g.id, g.
 const OPEN_ORDERS_TARGET = 5;
 /** Closed orders are pruned from contract storage after this long (their events stay onchain). */
 const PRUNE_AFTER_MS = 30 * 60_000;
+/** What each agent owes Auntie Wu from an advance (the pay_agent memos onchain are the record). */
+const ADVANCES_KEY = "advances";
+type Advances = Record<string, { amount: number; at: number; tx: string }>;
 const utcDay = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 const memLevels = (m: PlayerMemory) => ({ grudge: Math.min(5, m.lowballs), loyalty: Math.min(5, m.deals) });
 
@@ -823,6 +828,61 @@ export class Market {
     if (e) await this.say({ kind: "event", text: eventHeadline(e, (g) => GOODS[g]?.name ?? g), tx: explorerTx(this.ledger.network, tx), agents: [] });
   }
 
+  async advances(): Promise<Advances> {
+    return (await this.store.getJSON<Advances>(ADVANCES_KEY)) ?? {};
+  }
+
+  /**
+   * The watchdog's relief: Auntie Wu advances coins to agents that have been broke too long,
+   * signing pay_agent with her own key (her onchain daily cap applies). Returns what she paid.
+   */
+  async relieve(ids: string[]): Promise<{ id: string; amount: number; tx: string }[]> {
+    const paid: { id: string; amount: number; tx: string }[] = [];
+    if (!this.signers[WHOLESALER.id]) return paid;
+    for (const id of ids) {
+      const agents = await this.agents(0);
+      const wu = agents.find((a) => a.id === WHOLESALER.id);
+      const me = agents.find((a) => a.id === id);
+      if (!wu || !me) continue;
+      const owed = (await this.advances())[id]?.amount ?? 0;
+      const m = MERCHANTS.find((x) => x.id === id);
+      const d = advanceFor({ id, kind: me.kind, coins: me.coins, goodId: m?.goodId, owed }, { coins: wu.coins, spentToday: wu.spentToday, dailyCap: wu.dailyCap });
+      if ("skip" in d) {
+        console.log(`relief ${id}: ${d.skip}`);
+        continue;
+      }
+      const tx = await this.signers[WHOLESALER.id].payAgent(id, d.amount, m ? `advance against ${short(id)}'s next lot` : `advance to ${short(id)}`);
+      this.invalidate();
+      const url = explorerTx(this.ledger.network, tx);
+      await this.store.putJSON(ADVANCES_KEY, { ...(await this.advances()), [id]: { amount: d.amount, at: Date.now(), tx: url } }, 30 * 86_400_000);
+      await this.say({
+        kind: "invest",
+        text: m ? `Auntie Wu advanced ${short(id)} ${d.amount} coins against the next lot of ${GOODS[m.goodId].name}` : `Auntie Wu staked ${short(id)} ${d.amount} coins to get trading again`,
+        tx: url,
+        agents: [WHOLESALER.id, id],
+      });
+      paid.push({ id, amount: d.amount, tx: url });
+    }
+    return paid;
+  }
+
+  /** Agents back on their feet repay Auntie Wu's advance in full, each signing its own payment. */
+  private async repayAdvances() {
+    const owed = await this.advances();
+    for (const [id, loan] of Object.entries(owed)) {
+      const me = (await this.agents(0)).find((a) => a.id === id);
+      if (!me || !this.signers[id]) continue;
+      const amount = repaymentFor({ id, kind: me.kind, coins: me.coins, goodId: MERCHANTS.find((x) => x.id === id)?.goodId, owed: loan.amount, spentToday: me.spentToday, dailyCap: me.dailyCap });
+      if (amount === null) continue;
+      const tx = await this.signers[id].payAgent(WHOLESALER.id, amount, `repay Auntie Wu's advance`);
+      this.invalidate();
+      const rest = { ...(await this.advances()) };
+      delete rest[id];
+      await this.store.putJSON(ADVANCES_KEY, rest, 30 * 86_400_000);
+      await this.say({ kind: "invest", text: `${short(id)} paid Auntie Wu back the ${amount} coins she advanced`, tx: explorerTx(this.ledger.network, tx), agents: [id, WHOLESALER.id] });
+    }
+  }
+
   /** One round of the agents acting on their own. Errors are logged, never thrown. */
   async tick() {
     const step = async (name: string, f: () => Promise<void>) => {
@@ -836,6 +896,7 @@ export class Market {
       }
     };
     for (const m of MERCHANTS) await step(`restock ${m.id}`, () => this.restock(m));
+    await step("repay", () => this.repayAdvances());
     await step("consume", () => this.consume());
     await step("customers", () => this.customers());
     await step("barter", () => this.barter());
