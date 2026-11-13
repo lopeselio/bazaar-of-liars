@@ -229,6 +229,68 @@ The hosted demo runs on Azure Container Apps (resource group `bazaar-liars`, 2�
 8. **No key needed:** run `pnpm check:goods`. It reads every goods balance straight from the contract's storage, page by page at one block, and checks that, for each NEP-245 token (rug, saffron, lamp), the balances add up to `mt_supply`. You should see three ✓ lines.
 9. **No key needed:** run `pnpm verify:deed corner-1` (see step 16 of Canal Street).
 
+## Built on NEAR
+
+What each NEAR technology does in Bazaar of Liars, and where to look. Each GIF is a short loop (12 seconds or less).
+
+| Technology | What Bazaar of Liars uses it for | Where to look |
+|---|---|---|
+| NEAR smart contracts (Rust, near-sdk 5.29) | the game contract: each merchant's secret committed before it speaks and revealed at settle, coins, merchant memory, top traders, public expiry of unrevealed haggles | [`contracts/bazaar`](contracts/bazaar/src/lib.rs), [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet) |
+| NEAR AI Cloud | a TEE-hosted model reads your moves and voices every merchant line, signed; the server checks its attestation before each haggle | [`packages/merchant/src/nearai.ts`](packages/merchant/src/nearai.ts), [`packages/verify`](packages/verify/src/attestation.ts) |
+| NEAR accounts and function-call keys | every trader on Canal Street is an AI agent with its own sub-account, whose only key can call `authorize_spend` and `pay_agent` (customers also `post_order`) | [`setup-agents.ts`](packages/merchant/src/cli/setup-agents.ts), [`market.ts`](apps/server/src/market.ts), [`farrukh.v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/farrukh.v3.bazaar-liars.testnet) |
+| NEP-245 multi tokens, NEP-171 NFTs | goods (`rug`, `saffron`, `lamp`) are NEP-245 tokens of the game contract; stall licences are NEP-171 deeds players sell to each other | `mt_*`, `nft_*`, `buy_deed` in [`lib.rs`](contracts/bazaar/src/lib.rs), [`check-goods.ts`](packages/verify/src/cli/check-goods.ts) |
+| Chain Signatures | NEAR's MPC network signs deed certificates with an Ethereum key only the bazaar contract can use | `certify_deed` in [`lib.rs`](contracts/bazaar/src/lib.rs), [`deeds.ts`](packages/verify/src/deeds.ts), `v1.signer-prod.testnet` |
+| NEAR Intents | merchants barter goods with Auntie Wu through our testnet deployment of the NEAR Intents Verifier | [`intents.ts`](packages/merchant/src/intents.ts), [`barter.ts`](packages/core/src/barter.ts), [`bazaar-intents.testnet`](https://testnet.nearblocks.io/address/bazaar-intents.testnet) |
+| NEP-413 sign-in, NEAR Auth | sign in with a NEAR wallet (Better Auth + better-near-auth), or locally with Google or email through NEAR Auth | [`betterAuth.ts`](apps/server/src/betterAuth.ts), [`auth.ts`](apps/server/src/auth.ts), [`apps/city/src/account`](apps/city/src/account/wallet.ts) |
+
+### NEAR smart contracts: the fair-play contract
+
+<img src="media/stack/contract.gif" alt="Diagram: the game server posts a merchant's secret commitment to v3.bazaar-liars.testnet with open_haggle before the first reply; close_haggle settles only if the revealed secret matches the commitment and the price respects the limit; if the server never reveals, anyone can call expire_haggle and the haggle is counted in stats().unrevealed." width="100%">
+
+One Rust contract, [`v3.bazaar-liars.testnet`](https://testnet.nearblocks.io/address/v3.bazaar-liars.testnet), runs the haggles. `open_haggle` stores `sha256("bazaar-v2|…|salt")` of the merchant's secret before its first reply, after checking the merchant's memory of you against its own record ([`secrets.ts`](packages/core/src/secrets.ts) makes the same hash). `close_haggle` reveals the secret, checks it against the commitment and the price against the limit, then moves coins and goods; if the server never reveals, anyone can call `expire_haggle` after about an hour.
+
+### NEAR AI Cloud: merchants that speak but never decide
+
+<img src="media/stack/near-ai.gif" alt="Diagram: the game server attests NEAR AI Cloud's TEE-hosted Qwen model with a fresh nonce before a haggle; the rules engine in packages/core decides each move and the model only voices it, returning a signed reply; the proof bundle is checked by pnpm verify:haggle or /verify.html with no API key." width="100%">
+
+Before a haggle starts, the server fetches the model's attestation with a fresh nonce and checks the Intel TDX quote, NVIDIA's verdict and the signing key ([`packages/verify`](packages/verify/src/attestation.ts)). Each turn makes two signed completions on NEAR AI Cloud ([`nearai.ts`](packages/merchant/src/nearai.ts)): one reads your move, one voices the decision of the rules engine ([`rules.ts`](packages/core/src/rules.ts)), whose request holds no numbers. `pnpm verify:haggle` and [`/verify.html`](apps/web/verify.html) replay the bundle and check every signature with no API key.
+
+### Agent accounts: traders with their own keys
+
+<img src="media/stack/agents.gif" alt="Diagram: farrukh, a sub-account of v3.bazaar-liars.testnet, holds only a function-call key for authorize_spend and pay_agent; the contract spends an agent's coins only after it signs authorize_spend, within its daily cap and never below cost; agents pay each other with pay_agent, rekey_agent moves a busy agent to a fresh account, and the Canal St wire links each action's transaction." width="100%">
+
+Merchants, Auntie Wu, the rival traders Ivy and Rex, the runner and the customers are sub-accounts of the contract, created by [`setup-agents.ts`](packages/merchant/src/cli/setup-agents.ts) with one function-call key each and no full-access key. The contract enforces their policy: the server can't spend an agent's coins until the agent signs `authorize_spend(haggle_id, max)`, daily caps hold, and a merchant never sells below cost. The street runs itself in [`market.ts`](apps/server/src/market.ts): restocks, hiring Little Lo with `pay_agent`, and Auntie Wu's advances to broke stalls.
+
+### NEP-245 goods and NEP-171 deeds
+
+<img src="media/stack/tokens.gif" alt="Diagram: rug, saffron and lamp are NEP-245 tokens of v3.bazaar-liars.testnet, held in the contract's own account while in escrow; buy_licence mints a NEP-171 deed corner-1 to corner-4 that wallets and nearblocks show; a seller lists the deed and a buyer pays exactly the asking price with buy_deed." width="100%">
+
+The game contract is a NEP-245 multi-token contract: every trade, escrow and delivery is an `mt_transfer` event, and `pnpm check:goods` checks from raw storage that balances add up to `mt_supply` ([`check-goods.ts`](packages/verify/src/cli/check-goods.ts)). A stall licence is a NEP-171 deed with NEP-177 metadata drawn by the contract; `list_deed` and `buy_deed` sell it at exactly the asking price, with 5% burned ([`lib.rs`](contracts/bazaar/src/lib.rs)).
+
+### Chain Signatures: deeds certified on Ethereum
+
+<img src="media/stack/chain-signatures.gif" alt="Diagram: a deed owner calls certify_deed on v3.bazaar-liars.testnet, which hashes an ownership statement as an EIP-191 message and asks v1.signer-prod.testnet to sign it with the key for path bazaar-deeds; the signature is stored as a deed certificate; ecrecover on any EVM chain returns the bazaar's address 0x4bbc…c3a9, and pnpm verify:deed checks it." width="100%">
+
+`certify_deed` asks NEAR's MPC signer `v1.signer-prod.testnet` to sign "Bazaar of Liars deed corner-1 … is owned by … as of NEAR block …" with a secp256k1 key derived for the contract and the path `bazaar-deeds`; the callback turns the answer into a 65-byte Ethereum signature. Any EVM chain's `ecrecover` gives the bazaar's address, and `pnpm verify:deed corner-1` checks it with chain reads only ([`deeds.ts`](packages/verify/src/deeds.ts)).
+
+### NEAR Intents: agents barter
+
+<img src="media/stack/intents.gif" alt="Diagram: Zaria and Auntie Wu's goods are deposited into the bazaar-intents.testnet Verifier with intents_deposit; each agent signs a NEP-413 intent with token_diff and mt_withdraw using its own key; one execute_intents settles both or neither, and the goods return to the game as NEP-245 tokens." width="100%">
+
+NEAR has no testnet `intents.near`, so the bazaar runs the open-source [near/intents](https://github.com/near/intents) Verifier at [`bazaar-intents.testnet`](https://testnet.nearblocks.io/address/bazaar-intents.testnet). `intents_deposit` moves an agent's goods in for its own identity, each agent signs `token_diff` and `mt_withdraw` with its own key, and the server simulates, then relays one `execute_intents` ([`intents.ts`](packages/merchant/src/intents.ts)); the price comes from `barterQuote` in [`barter.ts`](packages/core/src/barter.ts).
+
+### Sign in with NEAR: NEP-413 and NEAR Auth
+
+<img src="media/stack/wallet.gif" alt="Diagram: a NEAR wallet signs a NEP-413 message that better-near-auth checks to start a 24-hour session; NEAR Auth's Google or email login maps to the implicit account of the key NEAR's MPC contract derives for it; merge_player moves a guest's progress into the account once." width="100%">
+
+The hosted demo signs players in with Better Auth and better-near-auth ([`betterAuth.ts`](apps/server/src/betterAuth.ts)): the wallet signs "Sign in to <host>", and the server checks the signature, the nonce and a full-access key onchain. With NEAR Auth (localhost only for now), the server checks the ID token and asks NEAR's MPC contract for the key it controls ([`auth.ts`](apps/server/src/auth.ts)). Either way the game server signs and pays for every game transaction.
+
+### The rest of the stack
+
+<img src="media/stack/stack.gif" alt="Diagram: the three.js desert bazaar and the Canal Street city talk to the Node server over /api, which reads and writes NEAR testnet over public RPC; packages/core and packages/verify are shared; the server runs on Azure Container Apps with Managed Redis and Postgres." width="100%">
+
+The desert bazaar ([`apps/web`](apps/web/src/scene.ts)) and Canal Street ([`apps/city`](apps/city/src/main.ts), built on mrdoob's Slop New York) are three.js. A Node 22 server ([`apps/server`](apps/server/src/server.ts)) runs haggles, agents and the watchdog with near-kit, failing over across public RPCs ([`rpc.ts`](packages/verify/src/rpc.ts)). One image ([`Dockerfile`](Dockerfile)) runs on Azure Container Apps with Managed Redis and Postgres.
+
 ## Built with
 
 Listed per the hackathon's rule Q-005.
