@@ -332,5 +332,8 @@ export function initOwnStalls(d: OwnStallsDeps) {
   const w = window as unknown as { __bazaarCity?: Record<string, unknown> };
   if (w.__bazaarCity) w.__bazaarCity.goToSlot = goToSlot;
 
-  return { refresh, goToSlot };
+  /** The licence slots and who holds them, for "Where to?". */
+  const licences = () => slots.map((s) => ({ id: s.slot, kind: s.kind, x: s.front.x, z: s.front.z }));
+
+  return { refresh, goToSlot, licences };
 }
