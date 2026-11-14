@@ -1,3 +1,4 @@
+import { loadSession } from "../../web/src/api";
 /** Canal Street's onboarding: first-run welcome, walkthrough and help sheet (shared code in apps/web/src/onboarding). */
 import { mountGuide, type GuideConfig, type TourStep } from "../../web/src/onboarding/Guide";
 
@@ -225,6 +226,29 @@ const cfg: GuideConfig = {
         </ul>
       ),
     },
+    ...(loadSession()
+      ? []
+      : [
+          {
+            art: "🔑",
+            eyebrow: "Optional · free",
+            title: "Sign in with NEAR to own your progress",
+            body: (
+              <>
+                <p>
+                  You can play as a guest. Sign in with a <strong>NEAR wallet</strong> (HOT, Meteor, MyNearWallet…) and your coins, goods and street cred live in{" "}
+                  <strong>your own NEAR account</strong>. It's one signed message, not a transaction: the game pays every fee.
+                </p>
+                <p>
+                  <button type="button" className="bz-guide-signin" onClick={() => dispatchEvent(new Event("bz:signin"))}>
+                    🔑 Sign in with NEAR
+                  </button>{" "}
+                  <span className="bz-dim">or later, from the 🔑 button at the top-left.</span>
+                </p>
+              </>
+            ),
+          },
+        ]),
     {
       art: "🧭",
       eyebrow: "Where to start",
@@ -237,8 +261,8 @@ const cfg: GuideConfig = {
           </p>
         ) : (
           <p>
-            Use <strong>WASD</strong> to walk up to a stall on Canal Street and press <strong>F</strong> to haggle, or press <strong>J</strong> for a delivery job. Want a quick tour of
-            the screen first?
+            Use <strong>WASD</strong> to walk up to a stall on Canal Street and press <strong>F</strong> to haggle, or press <strong>J</strong> for a delivery job. Somewhere else in
+            the city? Press <strong>→ Canal St</strong> on your card at the top-left to go straight there. Want a quick tour of the screen first?
           </p>
         )
       ),
