@@ -34,10 +34,7 @@ export async function signInWithWallet(): Promise<{ account: string; player: Pla
   let account: string | null = null;
   for (let i = 0; i < 5 && !account; i++) {
     if (i) await new Promise((r) => setTimeout(r, 400 * i));
-    account = await fetch("/api/auth/whoami", { credentials: "same-origin" })
-      .then((r) => (r.ok ? (r.json() as Promise<{ account?: string | null }>) : null))
-      .then((j) => j?.account ?? null)
-      .catch(() => null);
+    account = (await whoami()) ?? null;
     account ??= await sessionAccount().catch(() => null);
   }
   if (!account) throw new Error("Your wallet signed, but the game couldn't confirm the session. Close this and press Sign in again.");
@@ -46,13 +43,31 @@ export async function signInWithWallet(): Promise<{ account: string; player: Pla
   return { account, player: await api.player(account) };
 }
 
-/** A remembered wallet session that the server no longer has (expired, signed out elsewhere). */
-export async function walletSessionGone(account: string): Promise<boolean> {
+/** Who the game server says this browser is signed in as (wallet cookie), or undefined if it can't tell. */
+async function whoami(): Promise<string | null | undefined> {
   try {
-    return (await sessionAccount()) !== account;
+    const r = await fetch("/api/auth/whoami", { credentials: "same-origin" });
+    if (!r.ok) return undefined;
+    return ((await r.json()) as { account?: string | null }).account ?? null;
   } catch {
-    return false; // can't tell: keep playing
+    return undefined;
   }
+}
+
+/**
+ * A remembered wallet session that the server no longer has (expired, signed out elsewhere). Asks the
+ * game server (the same lookup every game request uses), a couple of times; only a definite "signed in as
+ * nobody / someone else" counts, so a slow or failed check never signs the player out.
+ */
+export async function walletSessionGone(account: string): Promise<boolean> {
+  for (let i = 0; i < 3; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 700 * i));
+    const who = await whoami();
+    if (who === account) return false;
+    if (who === undefined) continue;
+    if (i === 2) return true;
+  }
+  return false; // can't tell: keep playing
 }
 
 export async function signOutOfWallet() {
