@@ -307,9 +307,12 @@ export function initQuests(d: QuestDeps) {
     $("bz-quest").hidden = true;
   };
 
+  const start = performance.now();
   d.frame.add((_dt, now) => {
     if (now - last < 0.15) return;
     last = now;
+    // Let the loading screen fade and the welcome mount before the first objective (or toast).
+    if (performance.now() - start < 2000) return;
     // The welcome, help sheet and walkthrough come first.
     if (document.querySelector(".ob-backdrop, .ob-tour")) return hide();
 
