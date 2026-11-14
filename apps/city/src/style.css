@@ -1991,7 +1991,7 @@ body.touch-enabled #bz-hud::-webkit-scrollbar {
 .bz-sheet {
   position: fixed;
   inset: 0;
-  z-index: 96; /* above the welcome (90), so its Sign in button can open this sheet */
+  z-index: 80; /* the welcome closes before this opens; the wallet picker must sit above it */
   display: grid;
   place-items: center;
   background: rgba(10, 6, 4, 0.6);

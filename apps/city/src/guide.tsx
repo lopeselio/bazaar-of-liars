@@ -240,7 +240,11 @@ const cfg: GuideConfig = {
                   <strong>your own NEAR account</strong>. It's one signed message, not a transaction: the game pays every fee.
                 </p>
                 <p>
-                  <button type="button" className="bz-guide-signin" onClick={() => dispatchEvent(new Event("bz:signin"))}>
+                  <button type="button" className="bz-guide-signin" onClick={() => {
+                    // close the welcome first: the wallet picker must not open underneath it
+                    dispatchEvent(new Event("ob:close"));
+                    setTimeout(() => dispatchEvent(new Event("bz:signin")), 0);
+                  }}>
                     🔑 Sign in with NEAR
                   </button>{" "}
                   <span className="bz-dim">or later, from the 🔑 button at the top-left.</span>
