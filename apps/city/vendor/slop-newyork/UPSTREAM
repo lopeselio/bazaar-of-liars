@@ -1,1 +1,1 @@
-mrdoob/slop-newyork@536a907 (2026-11-06), MIT. Patched: js/main.js (window.__slop bridge), index.html (loads ../bazaar/).
+mrdoob/slop-newyork@536a907 (2026-11-06), MIT. Patched: js/main.js (window.__slop bridge, incl. mapSystem for the minimap waypoint), index.html (loads ../bazaar/).

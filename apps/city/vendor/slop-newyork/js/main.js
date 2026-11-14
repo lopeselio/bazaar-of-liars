@@ -694,7 +694,7 @@ async function initApp() {
 
   // [bazaar] Bridge for the Bazaar of Liars game layer (apps/city/src): scene, player and a per-frame hook.
   const bazaarBridge = (window.__slop = {
-    THREE, scene, renderer, cameraSystem, controllerManager, selectMode, frame: new Set(), ready: false
+    THREE, scene, renderer, cameraSystem, controllerManager, selectMode, mapSystem, frame: new Set(), ready: false // [bazaar] mapSystem: its waypoint marks the game's objective
   });
 
   renderer.setAnimationLoop((now) => {
