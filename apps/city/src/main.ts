@@ -21,6 +21,9 @@ import { initHudRoom } from "./hudroom";
 import { currentPlayer, initLogin } from "./login";
 import { initGuide } from "./guide";
 import { bindStation } from "./station";
+import { initWaypoint, type Target } from "./waypoint";
+import { initQuests } from "./quests";
+import { initWhereTo, type PlaceGroup } from "./whereto";
 import { signal } from "./signals";
 
 interface Bridge {
@@ -35,6 +38,8 @@ interface Bridge {
     resetInput(): void;
   };
   selectMode(mode: string): void;
+  /** The city's map; its waypoint is the pin and route on the minimap ([bazaar] patch in js/main.js). */
+  mapSystem?: { waypoint: { x: number; z: number; name: string } | null };
   frame: Set<(dt: number, elapsed: number) => void>;
   ready: boolean;
 }
@@ -214,7 +219,9 @@ function goToStall(i: number) {
   cm.teleportActiveTo(x, z, Math.atan2(toStall.x, toStall.z));
 }
 (window as unknown as { __bazaarCity: unknown }).__bazaarCity = { stalls, goToStall, goToCanal };
-if (!store.get("bazaar.city.arrived")) {
+/** Never been to the city in this browser: start on Canal Street (and with the starter quests). */
+const firstVisit = !store.get("bazaar.city.arrived");
+if (firstVisit) {
   goToCanal();
   store.set("bazaar.city.arrived", "1");
 }
@@ -310,7 +317,7 @@ setInterval(refreshMarket, 8000);
 
 // ---------- delivery jobs across Manhattan ----------
 
-initJobs({
+const jobs = initJobs({
   scene: bridge.scene,
   camera: () => bridge.cameraSystem.camera,
   player: PLAYER,
@@ -357,7 +364,7 @@ initAuctions({
 
 // ---------- the rumour network: informants around the city ----------
 
-initRumours({
+const rumours = initRumours({
   scene: bridge.scene,
   camera: () => bridge.cameraSystem.camera,
   player: PLAYER,
@@ -402,7 +409,7 @@ initHudRoom();
 // ---------- player-owned stalls further along Canal Street ----------
 
 const allGoods = () => merchants.flatMap((m) => [m.good, m.buys]);
-initOwnStalls({
+const ownStalls = initOwnStalls({
   scene: bridge.scene,
   camera: () => bridge.cameraSystem.camera,
   player: PLAYER,
@@ -418,6 +425,64 @@ initOwnStalls({
   goodName: (id) => allGoods().find((g) => g.id === id)?.name ?? id,
   goodValue: (id) => allGoods().find((g) => g.id === id)?.baseValue ?? 20,
   busy: () => !!current,
+});
+
+// ---------- wayfinding: the starter quests, "Where to?" and the waypoint they share ----------
+
+/** Metres from the player to the stretch of Canal Street where the stalls stand. */
+function canalDistance() {
+  const p = cm.getActiveEntity().position;
+  const ax = CANAL.b.x - CANAL.a.x;
+  const az = CANAL.b.z - CANAL.a.z;
+  const k = Math.max(0, Math.min(1, ((p.x - CANAL.a.x) * ax + (p.z - CANAL.a.z) * az) / (ax * ax + az * az)));
+  return Math.hypot(p.x - (CANAL.a.x + ax * k), p.z - (CANAL.a.z + az * k));
+}
+const PIER: Target = { id: "pier", name: "Pier 34 · Auntie Wu", x: -744, z: 3926 }; // packages/core wages.ts
+const stallTarget = (s: CityStall): Target => ({ id: `stall-${s.info.id}`, name: `${shortName(s.info.name)}'s stall`, x: s.front.x, z: s.front.z });
+const canalTarget = (): Target => {
+  const s = stalls[1] ?? stalls[0];
+  return s ? { ...stallTarget(s), id: "canal", name: "Canal Street stalls" } : { id: "canal", name: "Canal Street stalls", x: (CANAL.a.x + CANAL.b.x) / 2, z: (CANAL.a.z + CANAL.b.z) / 2 };
+};
+const informantTarget = (id: string): Target | null => {
+  const i = rumours.informants().find((x) => x.id === id);
+  return i ? { id: `inf-${i.id}`, name: i.name, x: i.x, z: i.z } : null;
+};
+const way = initWaypoint({ scene: bridge.scene, camera: () => bridge.cameraSystem.camera, cm, frame: bridge.frame, map: bridge.mapSystem });
+const quests = initQuests({
+  way,
+  camera: () => bridge.cameraSystem.camera,
+  cm,
+  frame: bridge.frame,
+  burst,
+  onCanal: () => canalDistance() < 40,
+  canalDistance,
+  canal: canalTarget,
+  farrukh: () => {
+    const s = stalls.find((x) => x.info.id === "farrukh");
+    return s ? stallTarget(s) : null;
+  },
+  informant: informantTarget,
+  pier: PIER,
+  goToCanal,
+  hasJob: jobs.hasJob,
+  signedIn: PLAYER !== GUEST,
+  firstVisit,
+});
+const LICENCE_NOTE = { free: "for licence at street cred level 3", mine: "your stall", theirs: "another player's stall" };
+initWhereTo({
+  cm,
+  busy: () => !!current,
+  guide: quests.guide,
+  groups: (): PlaceGroup[] => [
+    {
+      title: "Canal Street stalls",
+      places: stalls.map((s) => ({ ...stallTarget(s), name: s.info.name, icon: GOOD_ICON[s.info.good.id] ?? "🏮", note: `sells ${s.info.good.name}, buys ${s.info.buys.name}` })),
+    },
+    { title: "The docks", places: [{ ...PIER, icon: "⚓", note: "wholesale board, dock work, cargo ship auctions" }] },
+    { title: "Informants", places: rumours.informants().map((i) => ({ id: `inf-${i.id}`, name: i.name, x: i.x, z: i.z, icon: "🕵️", note: i.where || "sells tips" })) },
+    { title: "Stall licences", places: ownStalls.licences().map((l, n) => ({ id: `lic-${l.id}`, name: `Stall ${n + 1}, Canal Street`, x: l.x, z: l.z, icon: "🏪", note: LICENCE_NOTE[l.kind] })) },
+    { title: "Job drop sites", places: jobs.sites().map((j) => ({ id: `site-${j.id}`, name: j.name, x: j.x, z: j.z, icon: "📦", note: `${j.jobs} job${j.jobs === 1 ? "" : "s"} posted` })) },
+  ],
 });
 
 // ---------- per frame: tags, proximity, merchant body language ----------
