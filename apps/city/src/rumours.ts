@@ -8,6 +8,7 @@
  */
 import * as THREE from "three";
 import { bindStation } from "./station";
+import { signal } from "./signals";
 import { api, type InformantView, type PlayerView, type RumoursView, type TipView } from "../../web/src/api";
 import { buildStall, type StallLook } from "../../web/src/scene";
 
@@ -163,6 +164,7 @@ export function initRumours(d: RumourDeps) {
       const r = await api.buyTip(i.id, d.player, p.x, p.z);
       fresh = `<blockquote class="bz-whisper">“${esc(r.tip.text)}”</blockquote><p class="bz-note">${esc(r.tip.plain)} Checked onchain in ${clock(r.tip.checkMs - Date.now())}. <a href="${r.txUrl}" target="_blank" rel="noopener">sealed tx</a></p>`;
       $("bz-rum-new").innerHTML = fresh;
+      signal("tip", i.id);
       await d.refreshPurse(true);
       view = await api.rumours(d.player).catch(() => view);
       renderChip();

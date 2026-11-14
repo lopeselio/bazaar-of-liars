@@ -21,6 +21,7 @@ import { initHudRoom } from "./hudroom";
 import { currentPlayer, initLogin } from "./login";
 import { initGuide } from "./guide";
 import { bindStation } from "./station";
+import { signal } from "./signals";
 
 interface Bridge {
   scene: THREE.Scene;
@@ -663,6 +664,7 @@ async function send(text: string) {
     s.stall.merchant.talkUntil = performance.now() + Math.min(4000, 600 + r.text.length * 35);
   }
   if (r.tell) s.stall.merchant.tell = r.tell as Tell;
+  if (r.call) signal("bluff");
   if (r.call === "caught") say("sys", "🎯 <b>Caught!</b> The price collapses.", "good");
   if (r.call === "honest") say("sys", "😤 They were telling the truth. That stung.", "bad");
   if (r.action === "final") say("sys", "That's their final price.");
@@ -691,7 +693,10 @@ function finish(end: Ending) {
   $("bz-quick").innerHTML = "";
   const s = current.s;
   const deal = end.status === "deal";
-  if (deal) burst(end.dealPrice ?? 10);
+  if (deal) {
+    burst(end.dealPrice ?? 10);
+    signal("haggled");
+  }
   const passed = end.checks.filter((c) => c.ok).length;
   const buying = end.side === "sell";
   const lies = end.claims.filter((c) => !c.truth).length;

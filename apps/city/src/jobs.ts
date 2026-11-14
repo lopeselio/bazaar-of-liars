@@ -8,6 +8,7 @@
  */
 import * as THREE from "three";
 import { bindStation } from "./station";
+import { signal } from "./signals";
 import { api, type Delivered, type Job, type Order, type PlayerView, type TravelMode } from "../../web/src/api";
 
 export interface JobsDeps {
@@ -140,6 +141,7 @@ export function initJobs(d: JobsDeps) {
     try {
       const r = await api.takeOrder(id, d.player, p.x, p.z);
       job = r.job;
+      signal("job-taken");
       d.toast(`Job taken: ${r.order.goodName} to ${r.order.customerName}, ${r.order.siteName}.`);
       $("bz-board").hidden = true;
       renderBoard();
@@ -186,6 +188,7 @@ export function initJobs(d: JobsDeps) {
       const r = await api.deliver(o.id, d.player, p.x, p.z, mode);
       job = null;
       showReceipt(o, r);
+      signal("delivered");
       d.burst(r.net);
       await Promise.all([d.refreshPurse(true), refresh()]);
     } catch (e) {

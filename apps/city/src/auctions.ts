@@ -9,6 +9,7 @@
  */
 import * as THREE from "three";
 import { bindStation } from "./station";
+import { signal } from "./signals";
 import { api, type AuctionLot, type AuctionsView, type PlayerView } from "../../web/src/api";
 
 /** Mirrors packages/core auctions.ts and wages.ts. */
@@ -259,6 +260,7 @@ export function initAuctions(d: AuctionDeps) {
       const p = d.cm.getActiveEntity().position;
       const r = await api.bid(l.id, d.player, commitment, depositFor(amount, l.reserve, coins), p.x, p.z);
       view = r.auctions ?? view;
+      signal("bid");
       d.toast("Bid sealed onchain. Nobody, not even the game server, can see it until bidding closes.");
       await d.refreshPurse(true);
     } catch (e) {
