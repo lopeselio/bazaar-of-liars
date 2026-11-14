@@ -17,6 +17,13 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
   const [step, setStep] = useState<Step>({ kind: "closed" });
   const [nearAuth, setNearAuth] = useState<{ ok: boolean; origins: string[] } | null>(null);
 
+  // The welcome and the walkthrough can open the sign-in sheet.
+  useEffect(() => {
+    const open = () => setStep((s) => (s.kind === "closed" ? { kind: "choose" } : s));
+    addEventListener("bz:signin", open);
+    return () => removeEventListener("bz:signin", open);
+  }, []);
+
   useEffect(() => {
     if (step.kind === "choose" && !nearAuth) nearAuthAllowed().then(setNearAuth, () => setNearAuth({ ok: false, origins: [] }));
   }, [step.kind, nearAuth]);
@@ -81,7 +88,7 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
   return (
     <>
       <button id="bz-signin" className="bz-card" type="button" title="Your coins, goods and street cred live in your own NEAR account" onClick={() => setStep({ kind: "choose" })}>
-        🔑 Sign in
+        🔑 Sign in with NEAR
       </button>
       {/* On <body>: inside the HUD's stacking context the sheet would sit under the 3D canvas. */}
       {step.kind !== "closed" && createPortal(
@@ -128,7 +135,7 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
                     onClick={() => void run("NEAR Auth", signInWithNearAuth)}
                   >
                     <strong>Google or email (NEAR Auth)</strong>
-                    <small>{nearAuth && !nearAuth.ok ? `Not on this site yet: run locally on :3000` : "Key held by NEAR's MPC network, no seed phrase"}</small>
+                    <small>{nearAuth && !nearAuth.ok ? "Coming to this site soon. Use a NEAR wallet for now." : "Key held by NEAR's MPC network, no seed phrase"}</small>
                   </button>
                 </div>
                 {step.kind === "busy" && <p className="bz-note">Waiting for {step.what}…</p>}
