@@ -45,6 +45,16 @@ export function Guide({ cfg }: { cfg: GuideConfig }) {
     setMode("none");
   };
 
+  // A game can close the welcome or help (e.g. before opening its own sign-in sheet and a wallet picker).
+  useEffect(() => {
+    const close = () => setMode((m) => {
+      if (m === "welcome") markSeen();
+      return m === "tour" ? m : "none";
+    });
+    addEventListener("ob:close", close);
+    return () => removeEventListener("ob:close", close);
+  }, []);
+
   // "?" opens the help sheet from anywhere (an open modal takes its own keys first).
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
