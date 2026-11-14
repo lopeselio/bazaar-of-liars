@@ -1672,15 +1672,15 @@ body.touch-enabled #bz-hud::-webkit-scrollbar {
   font: 14px/1.4 var(--bz-font);
   animation: bz-slide 0.25s ease;
 }
-#bz-auction,
-#bz-rumour,
+#bz-auction header,
+#bz-rumour header,
 #bz-boardp header {
   display: flex;
   justify-content: space-between;
   gap: 8px;
 }
-#bz-auction,
-#bz-rumour,
+#bz-auction h2,
+#bz-rumour h2,
 #bz-boardp h2 {
   margin: 0;
   font-size: 20px;
@@ -1699,8 +1699,8 @@ body.touch-enabled #bz-hud::-webkit-scrollbar {
   font-size: 13px;
   color: var(--bz-dim);
 }
-#bz-auction,
-#bz-rumour,
+#bz-auction h4,
+#bz-rumour h4,
 #bz-boardp h4 {
   margin: 4px 0 0;
   font-size: 12px;
@@ -1708,7 +1708,7 @@ body.touch-enabled #bz-hud::-webkit-scrollbar {
   letter-spacing: 0.1em;
   color: var(--bz-dim);
 }
-#bz-auction,
+#bz-auction > button,
 #bz-rumour > button {
   padding: 10px 12px;
   border-radius: 10px;
