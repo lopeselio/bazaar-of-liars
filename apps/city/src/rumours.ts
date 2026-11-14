@@ -238,4 +238,12 @@ export function initRumours(d: RumourDeps) {
       if (i) $("bz-inf-text").textContent = `Talk to ${i.name} (tips ${i.price})`;
     }
   });
+
+  /** Where each informant stands, for the starter quests and "Where to?". */
+  const informants = () =>
+    figures.map((f) => {
+      const i = view?.informants.find((x) => x.id === f.id);
+      return { id: f.id, name: i?.name ?? f.id, where: i?.where ?? "", x: f.pos.x, z: f.pos.z };
+    });
+  return { informants };
 }

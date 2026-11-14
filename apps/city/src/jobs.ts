@@ -286,5 +286,16 @@ export function initJobs(d: JobsDeps) {
       for (const el of $("bz-orders").querySelectorAll<HTMLElement>("time[data-deadline]")) el.textContent = clock(Number(el.dataset.deadline) - now());
   });
 
-  return { refresh };
+  /** Every drop site with a job posted, for "Where to?". */
+  const sites = () => {
+    const seen = new Map<string, { id: string; name: string; x: number; z: number; jobs: number }>();
+    for (const o of orders) {
+      const s = seen.get(o.site);
+      if (s) s.jobs++;
+      else seen.set(o.site, { id: o.site, name: o.siteName, x: o.x, z: o.z, jobs: 1 });
+    }
+    return [...seen.values()];
+  };
+
+  return { refresh, sites, hasJob: () => !!active() };
 }
