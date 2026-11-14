@@ -8,6 +8,7 @@
  */
 import * as THREE from "three";
 import { bindStation } from "./station";
+import { signal } from "./signals";
 import { api, type BoardView, type BoardsView, type PlayerView } from "../../web/src/api";
 
 export interface RouteDeps {
@@ -155,6 +156,7 @@ export function initRoutes(d: RouteDeps) {
       const p = d.cm.getActiveEntity().position;
       const r = await api.boardTrade(b.id, d.player, goodId, p.x, p.z, b.prices[goodId] ?? 0);
       if (r.boards) view = r.boards;
+      signal("route-trade");
       d.toast(b.kind === "sells" ? `Bought ${d.goodName(goodId)} for ${r.price}. Settled onchain.` : `Sold ${d.goodName(goodId)} to ${b.name} for ${r.price}. Settled onchain.`);
       if (b.kind === "buys") d.burst(Math.max(3, Math.round(r.price / 10)));
       await d.refreshPurse(true);
@@ -192,6 +194,7 @@ export function initRoutes(d: RouteDeps) {
     guiding = !guiding;
     renderChip();
     if (guiding) {
+      signal("route-guide");
       const t = target();
       if (t) d.toast(t.has ? `Take your ${d.goodName(t.r.goodId)} to ${t.b.name} (${t.b.district}): they pay ${t.r.sell}.` : `Buy ${d.goodName(t.r.goodId)} at ${t.b.name} for ${t.r.buy}, then sell it uptown for ${t.r.sell}.`);
     }
