@@ -8,6 +8,8 @@ export interface Help {
   rules: ReactNode[];
   /** The other way to play (desert ↔ city), shown under the rules. */
   elsewhere?: { href: string; label: string; note: string };
+  /** Extra buttons next to the guide's own (e.g. the city's starter quests); each closes the sheet first. */
+  actions?: { label: string; run: () => void }[];
 }
 
 /** The in-game help sheet: controls and the rules that matter, plus a way back into the guide. */
@@ -64,6 +66,19 @@ export function HelpSheet({ theme, help, onClose, onWelcome, onTour }: { theme: 
         </p>
       )}
       <div className="ob-actions">
+        {help.actions?.map((a) => (
+          <button
+            key={a.label}
+            type="button"
+            className="ob-btn"
+            onClick={() => {
+              onClose();
+              a.run();
+            }}
+          >
+            {a.label}
+          </button>
+        ))}
         <button type="button" className="ob-btn" onClick={onWelcome}>
           Replay the welcome
         </button>

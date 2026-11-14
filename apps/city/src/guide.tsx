@@ -1,6 +1,7 @@
 import { loadSession } from "../../web/src/api";
 /** Canal Street's onboarding: first-run welcome, walkthrough and help sheet (shared code in apps/web/src/onboarding). */
 import { mountGuide, type GuideConfig, type TourStep } from "../../web/src/onboarding/Guide";
+import { questStatus } from "./quests";
 
 const open = (id: string) => {
   const el = document.getElementById(id);
@@ -277,6 +278,14 @@ const cfg: GuideConfig = {
     title: "Canal Street",
     elsewhere: { href: "/?classic", label: "🏜️ The desert bazaar", note: "is the original, simpler version: three stalls, no walking, and it runs in any browser." },
     controls: touch() ? TOUCH_CONTROLS : KEY_CONTROLS,
+    actions: [
+      questStatus() === "done"
+        ? { label: "🏮 Starter quests again", run: () => dispatchEvent(new CustomEvent("bz:quests", { detail: "restart" })) }
+        : questStatus() === "on"
+          ? { label: "🏮 Starter quests: what's next?", run: () => dispatchEvent(new CustomEvent("bz:quests", { detail: "resume" })) }
+          : { label: "🏮 Resume starter quests", run: () => dispatchEvent(new CustomEvent("bz:quests", { detail: "resume" })) },
+      { label: "🧭 Where to?", run: () => dispatchEvent(new Event("bz:whereto")) },
+    ],
     rules: [
       <>
         Each merchant's <b>secret limit</b> is sealed on NEAR first; a rules engine, not the AI, decides prices.
