@@ -34,7 +34,13 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
       void walletSessionGone(session.account).then((gone) => {
         if (gone) {
           saveSession(null);
-          location.reload();
+          // Never reload in a loop: at most once a minute for this reason, otherwise just say so.
+          let last = 0;
+          try { last = Number(sessionStorage.getItem("bz.sessionGoneReload") ?? 0); } catch { /* storage blocked */ }
+          if (Date.now() - last > 60_000) {
+            try { sessionStorage.setItem("bz.sessionGoneReload", String(Date.now())); } catch { /* fine */ }
+            location.reload();
+          } else toast("Your wallet session ended; you're playing as a guest. Press Sign in with NEAR to sign in again.");
         }
       });
   }, [session]);
