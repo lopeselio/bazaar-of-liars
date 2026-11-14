@@ -78,7 +78,8 @@ export function initWaypoint(d: WaypointDeps) {
     } else mat.opacity = 0.3;
 
     // Out of the way while a panel has the player's attention.
-    if (document.body.classList.contains("bz-talking") || document.querySelector(".ob-backdrop")) {
+    // ...and once you're there, where the place's own tag and prompt take over.
+    if (m < 6 || document.body.classList.contains("bz-talking") || document.querySelector(".ob-backdrop")) {
       el.hidden = true;
       return;
     }
@@ -99,10 +100,11 @@ export function initWaypoint(d: WaypointDeps) {
       return;
     }
     // Off screen (or behind you): push the point out along its direction until it meets the edge.
-    // At the edge it's only the arrow and the distance (css), about 80 × 40 px; keep it clear of the edge.
+    // At the edge it's only the arrow and the distance (css), about 80 × 24 px. It keeps to the
+    // middle band of the screen, clear of the banners at the top and the minimap and mode bar below.
     if (behind && Math.abs(x) < 0.05 && Math.abs(y) < 0.05) y = -1;
     const hx = W / 2 - 56;
-    const hy = H / 2 - 40;
+    const hy = Math.max(40, H / 2 - 170);
     const sx = (x * W) / 2;
     const sy = (-y * H) / 2;
     const k = 1 / Math.max(Math.abs(sx) / hx, Math.abs(sy) / hy, 1e-6);
