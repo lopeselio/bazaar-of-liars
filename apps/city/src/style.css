@@ -2065,7 +2065,7 @@ body.touch-enabled .ob-keys {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 31;
+  z-index: 41; /* over the HUD column and the city's street signs */
   display: flex;
   flex-direction: column-reverse;
   align-items: center;
@@ -2102,9 +2102,11 @@ body.touch-enabled .ob-keys {
   width: 22px;
   height: 22px;
   font-style: normal;
-  font-size: 18px;
+  border-radius: 50%;
+  background: var(--bz-bg);
+  border: 1px solid #fff1c4;
+  font-size: 13px;
   color: #fff1c4;
-  text-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
 }
 /* At the edge: just the arrow and the distance, side by side. */
 #bz-way.edge {
@@ -2231,7 +2233,17 @@ body.touch-enabled .ob-keys {
   animation: bz-pop 0.3s ease;
 }
 /* ---------- Where to? (./whereto.ts): the job board's look ---------- */
-#bz-where-btn {
+/* The button row is full with sign in, help and jobs: Where to? takes a row of its own under it. */
+.bz-actions {
+  flex-wrap: wrap;
+}
+/* A zero basis, so a long account name is cut short instead of wrapping help and jobs. */
+.bz-actions #bz-signin,
+.bz-actions #bz-acct {
+  flex-basis: 0;
+}
+.bz-actions #bz-where-btn {
+  flex: 1 0 100%;
   pointer-events: auto;
   cursor: pointer;
   color: var(--bz-ink);
