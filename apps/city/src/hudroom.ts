@@ -1,11 +1,11 @@
 /**
  * Room for the HUD column. The street's banners (job tracker, street event, broke, cargo ship,
- * walkthrough) are centred at the top and stack on a wide screen. On a narrow one they land on
+ * route guide, starter quest objective) are centred at the top and stack on a wide screen. On a narrow one they land on
  * the HUD column's player card. Twice a second this checks each visible banner against the
  * column: if there's room to the right of the column, the banner moves there; otherwise the
  * column moves down by the overlap (`--bz-banner-push`). Nothing moves when nothing overlaps.
  */
-const BANNERS = ["bz-track", "bz-event", "bz-broke", "bz-ship", "bz-guide"];
+const BANNERS = ["bz-track", "bz-event", "bz-broke", "bz-ship", "bz-guide", "bz-quest"];
 
 export function initHudRoom() {
   const fit = () => {
