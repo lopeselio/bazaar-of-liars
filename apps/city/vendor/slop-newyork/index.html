@@ -75,6 +75,19 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..800&amp;family=Overpass:wght@600;700&amp;display=swap" />
   <link rel="stylesheet" href="./css/style.css?v=20261022-repo-link" />
+  <!-- Google Analytics 4. Only on the live site, so local runs are not counted. -->
+  <script>
+    if (location.hostname.endsWith('lopeselio.online')) {
+      const s = document.createElement('script');
+      s.async = true;
+      s.src = 'https://www.googletagmanager.com/gtag/js?id=G-QWMVG3SMBC';
+      document.head.append(s);
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = function () { dataLayer.push(arguments); };
+      gtag('js', new Date());
+      gtag('config', 'G-QWMVG3SMBC');
+    }
+  </script>
 </head>
 <body>
   <!-- Icon sprite (24 × 24 stroke icons, drawn in currentColor) -->

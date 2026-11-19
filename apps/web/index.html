@@ -17,6 +17,19 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- Google Analytics 4. Only on the live site, so local runs are not counted. -->
+    <script>
+      if (location.hostname.endsWith('lopeselio.online')) {
+        const s = document.createElement('script');
+        s.async = true;
+        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-QWMVG3SMBC';
+        document.head.append(s);
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = function () { dataLayer.push(arguments); };
+        gtag('js', new Date());
+        gtag('config', 'G-QWMVG3SMBC');
+      }
+    </script>
   </head>
   <body>
     <canvas id="scene" aria-label="A desert bazaar at dusk with three merchant stalls"></canvas>
