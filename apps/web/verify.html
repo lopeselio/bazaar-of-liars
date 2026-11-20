@@ -8,18 +8,50 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <!-- Google Analytics 4. Only on the live site, so local runs are not counted. -->
+    <!-- Google Analytics 4: only on the live site, and only after the visitor allows it. The answer is kept
+         for six months in a cookie shared by every *.lopeselio.online site, so each visitor is asked once. -->
     <script>
-      if (location.hostname.endsWith('lopeselio.online')) {
-        const s = document.createElement('script');
-        s.async = true;
-        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-QWMVG3SMBC';
-        document.head.append(s);
-        window.dataLayer = window.dataLayer || [];
-        window.gtag = function () { dataLayer.push(arguments); };
-        gtag('js', new Date());
-        gtag('config', 'G-QWMVG3SMBC');
-      }
+      (function () {
+        if (!location.hostname.endsWith('lopeselio.online')) return;
+        var id = 'G-QWMVG3SMBC';
+        var load = function () {
+          var s = document.createElement('script');
+          s.async = true;
+          s.src = 'https://www.googletagmanager.com/gtag/js?id=' + id;
+          document.head.append(s);
+          window.dataLayer = window.dataLayer || [];
+          window.gtag = function () { dataLayer.push(arguments); };
+          gtag('js', new Date());
+          gtag('config', id);
+        };
+        var answer = (document.cookie.match(/(?:^|; )analytics_consent=(yes|no)/) || [])[1];
+        if (answer === 'yes') return load();
+        if (answer === 'no') return;
+        var ask = function () {
+          var bar = document.createElement('div');
+          bar.setAttribute('role', 'region');
+          bar.setAttribute('aria-label', 'Analytics cookies');
+          bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483647;max-width:520px;margin:0 auto;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#15131c;color:#f2f0f7;border:1px solid #3a3550;border-radius:10px;font:14px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45)';
+          var text = document.createElement('span');
+          text.textContent = 'Allow Google Analytics cookies, so we can count visits?';
+          text.style.cssText = 'flex:1 1 220px';
+          bar.append(text);
+          [['Allow', 'yes'], ['No thanks', 'no']].forEach(function (b) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = b[0];
+            btn.style.cssText = 'padding:6px 14px;border-radius:7px;border:1px solid #6b6490;background:#2a2540;color:inherit;font:inherit;cursor:pointer';
+            btn.onclick = function () {
+              document.cookie = 'analytics_consent=' + b[1] + '; domain=.lopeselio.online; path=/; max-age=15552000; SameSite=Lax; Secure';
+              bar.remove();
+              if (b[1] === 'yes') load();
+            };
+            bar.append(btn);
+          });
+          document.body.append(bar);
+        };
+        if (document.body) ask(); else addEventListener('DOMContentLoaded', ask);
+      })();
     </script>
   </head>
   <body class="vpage">
