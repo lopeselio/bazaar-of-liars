@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, loadSession, saveSession, type PlayerView } from "../../../web/src/api";
 import { nearAuthAllowed, signInWithNearAuth, signOutOfNearAuth } from "./nearAuth";
-import { signInWithWallet, signOutOfWallet, walletSessionGone } from "./wallet";
+import { dismissed, signInWithWallet, signOutOfWallet, walletSessionGone } from "./wallet";
 
 const shortAcct = (a: string) => (a.length > 24 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
@@ -65,10 +65,11 @@ export function Account({ guestId, toast }: { guestId: string; toast: (m: string
     try {
       await signedIn(await p);
     } catch (e) {
+      setStep({ kind: "choose" });
+      if (dismissed(e)) return;
       const msg = (e as Error).message || String(e);
       console.error("sign-in failed:", e);
       toast(`Sign-in didn't finish: ${msg}`);
-      setStep({ kind: "choose" });
     }
   }
 

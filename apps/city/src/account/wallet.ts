@@ -22,6 +22,9 @@ async function sessionAccount(): Promise<string | null> {
   return r.data?.user?.nearAccount?.accountId ?? null;
 }
 
+/** True for the error NEAR Connect throws when its wallet picker is closed without choosing a wallet. */
+export const dismissed = (e: unknown): boolean => (e as Error)?.message === "User rejected";
+
 /** Open the wallet picker, sign, and start playing as that account. */
 export async function signInWithWallet(): Promise<{ account: string; player: PlayerView }> {
   await new Promise<void>((resolve, reject) => {
